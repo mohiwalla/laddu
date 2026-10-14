@@ -1,0 +1,14 @@
+{
+  "name": "root",
+  "private": true,
+  "packageManager": "bun@1.4.2",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "turbo": "^2.11.8"
+  }
+}

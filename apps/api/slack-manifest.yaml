@@ -1,0 +1,169 @@
+# Create the Slack app from this: https://api.slack.com/apps → Create New App → From a manifest.
+#
+# Requests every scope a regular (non-Enterprise) workspace can grant, bot and user, so features
+# never wait on a reinstall. Left out on purpose because they can't be installed here:
+#   admin, admin.*, auditlogs:read, search:read.enterprise   Enterprise org / org owner only
+#   datastore:*, hosting:*, triggers:*, tokens.basic          Slack-hosted (Deno) apps only
+#   managed_apps:install                                      Slack partners only
+#   apps.requests:write (user)                                rejected by apps.manifest.validate
+#   openid, email, profile                                    Sign in with Slack; can't mix with other scopes
+#   bot, client, identify                                     legacy classic-app scopes
+#   connections:write, authorizations:read, app_configurations:*   app-level/config tokens, not OAuth
+# incoming-webhook adds a channel picker to the install screen; pick any channel.
+display_information:
+  name: Codex Bot
+  description: Personal assistant backed by Codex.
+features:
+  app_home:
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: codex
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - assistant:write
+      - bookmarks:read
+      - bookmarks:write
+      - calls:read
+      - calls:write
+      - canvases:read
+      - canvases:write
+      - channels:history
+      - channels:join
+      - channels:manage
+      - channels:read
+      - channels:write.invites
+      - channels:write.topic
+      - chat:write
+      - chat:write.customize
+      - chat:write.public
+      - code_channels:manage
+      - commands
+      - conversations.connect:manage
+      - conversations.connect:read
+      - conversations.connect:write
+      - dnd:read
+      - emoji:read
+      - files:read
+      - files:write
+      - groups:history
+      - groups:read
+      - groups:write
+      - groups:write.invites
+      - groups:write.topic
+      - im:history
+      - im:read
+      - im:write
+      - im:write.topic
+      - incoming-webhook
+      - links.embed:write
+      - links:read
+      - links:write
+      - lists:read
+      - lists:write
+      - mcp:connect
+      - metadata.message:read
+      - mpim:history
+      - mpim:read
+      - mpim:write.topic
+      - pins:read
+      - pins:write
+      - reactions:read
+      - reactions:write
+      - reminders:read
+      - reminders:write
+      - remote_files:read
+      - remote_files:share
+      - remote_files:write
+      - search:read.files
+      - search:read.public
+      - search:read.users
+      - team.billing:read
+      - team.preferences:read
+      - team:read
+      - usergroups:read
+      - usergroups:write
+      - users.profile:read
+      - users:read
+      - users:read.email
+      - users:write
+      - workflows.templates:read
+      - workflows.templates:write
+    user:
+      - bookmarks:read
+      - bookmarks:write
+      - calls:read
+      - calls:write
+      - canvases:read
+      - canvases:write
+      - channels:history
+      - channels:read
+      - channels:write
+      - channels:write.invites
+      - channels:write.topic
+      - chat:write
+      - dnd:read
+      - dnd:write
+      - emoji:read
+      - files:read
+      - files:write
+      - groups:history
+      - groups:read
+      - groups:write
+      - groups:write.invites
+      - groups:write.topic
+      - im:history
+      - im:read
+      - im:write
+      - im:write.topic
+      - links.embed:write
+      - links:read
+      - links:write
+      - lists:read
+      - lists:write
+      - mpim:history
+      - mpim:read
+      - mpim:write
+      - mpim:write.topic
+      - pins:read
+      - pins:write
+      - reactions:read
+      - reactions:write
+      - reminders:read
+      - reminders:write
+      - remote_files:read
+      - remote_files:share
+      - search:read
+      - search:read.files
+      - search:read.im
+      - search:read.mpim
+      - search:read.private
+      - search:read.public
+      - search:read.users
+      - stars:read
+      - stars:write
+      - team.billing:read
+      - team.preferences:read
+      - team:read
+      - usergroups:read
+      - usergroups:write
+      - users.profile:read
+      - users.profile:write
+      - users:read
+      - users:read.email
+      - users:write
+      - workflows.templates:read
+      - workflows.templates:write
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.im
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false
