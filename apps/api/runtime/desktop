@@ -1,0 +1,530 @@
+#!/usr/bin/env python3
+"""
+dot's own computer: an XFCE desktop on a virtual display (KasmVNC), started when first needed.
+Codex drives it through `desktop mcp`, an MCP server registered in its config; people watch it
+(and later take over) in the browser through KasmVNC's web viewer, which the bot proxies.
+
+  desktop link ["<why>"]  privately send the person links to watch your computer or take control
+                          (e.g. so they can sign in to a site themselves)
+  desktop start     start the desktop if it isn't running
+  desktop stop      stop it (apps close; files and the browser profile stay)
+  desktop status    running or not, and how long since the last action
+  desktop mcp       MCP server on stdin/stdout (used by Codex)
+
+Control borrows from computer-use-linux (agent-sh, MIT): one call returns a screenshot together
+with the on-screen controls from the accessibility tree (AT-SPI), so clicks can target a named
+button instead of guessing pixels; input goes through the X server (xdotool) like a real mouse
+and keyboard, so browser UI, autofill, extensions and native dialogs work like any other window.
+"""
+import base64
+import json
+import os
+import secrets
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+DISPLAY = ":1"
+WIDTH, HEIGHT = 1280, 800
+VIEWER_PORT = 6901
+STATE = Path.home() / ".desktop"
+ENV_FILE = STATE / "env.json"
+VIEWER_FILE = STATE / "viewer.json"
+ACTIVITY = STATE / "last-action"
+LOG = STATE / "log"
+
+# Controls worth listing; everything else is read from the screenshot.
+INTERACTIVE = {
+    "button", "push button", "toggle button", "switch", "check box", "radio button", "link", "entry",
+    "password text", "combo box", "menu item", "check menu item", "radio menu item",
+    "page tab", "list item", "slider", "spin button", "menu", "icon", "tree item",
+    "table cell", "text", "terminal", "heading",
+}
+TREE_BUDGET_S = 3.0
+TREE_MAX_NODES = 4000
+TREE_MAX_ELEMENTS = 150
+
+
+def run(*cmd, env=None, check=True, capture=True):
+    return subprocess.run(
+        cmd, env=env, check=check, stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.PIPE if capture else None,
+    )
+
+
+def x_running():
+    return Path(f"/tmp/.X11-unix/X{DISPLAY[1:]}").exists() and run(
+        "xdpyinfo", "-display", DISPLAY, check=False
+    ).returncode == 0
+
+
+def session_env():
+    env = dict(os.environ)
+    if ENV_FILE.exists():
+        env.update(json.loads(ENV_FILE.read_text()))
+    env["DISPLAY"] = DISPLAY
+    return env
+
+
+def spawn(cmd, env, log):
+    return subprocess.Popen(
+        cmd, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
+    )
+
+
+def start():
+    if x_running() and ENV_FILE.exists():
+        return False
+    STATE.mkdir(mode=0o700, exist_ok=True)
+    log = open(LOG, "ab")
+
+    # Two viewer logins, enforced by the VNC server itself: "watch" can only look, "drive" can
+    # also use the mouse and keyboard. The bot reads them from viewer.json to proxy the web viewer.
+    if not VIEWER_FILE.exists():
+        logins = {"watch": secrets.token_urlsafe(18), "drive": secrets.token_urlsafe(18)}
+        VIEWER_FILE.write_text(json.dumps({**logins, "port": VIEWER_PORT}))
+        VIEWER_FILE.chmod(0o600)
+    logins = json.loads(VIEWER_FILE.read_text())
+    passwd = Path.home() / ".kasmpasswd"
+    passwd.unlink(missing_ok=True)
+    for user, rights in (("watch", "-r"), ("drive", "-rw")):
+        secret = logins[user]
+        subprocess.run(
+            ["kasmvncpasswd", "-u", user, rights, str(passwd)],
+            input=f"{secret}\n{secret}\n".encode(), check=True, capture_output=True,
+        )
+
+    if not x_running():
+        Path(f"/tmp/.X11-unix/X{DISPLAY[1:]}").unlink(missing_ok=True)
+        Path(f"/tmp/.X{DISPLAY[1:]}-lock").unlink(missing_ok=True)
+        spawn([
+            "Xvnc", DISPLAY, "-geometry", f"{WIDTH}x{HEIGHT}", "-depth", "24",
+            "-websocketPort", str(VIEWER_PORT), "-interface", "0.0.0.0",
+            "-httpd", "/usr/share/kasmvnc/www", "-sslOnly", "0", "-SecurityTypes", "None",
+            "-rfbport", "-1", "-KasmPasswordFile", str(passwd), "-AlwaysShared",
+            # Fixed size, so coordinates in screenshots stay valid; viewers scale it.
+            "-AcceptSetDesktopSize", "0", "-FrameRate", "24",
+        ], os.environ, log)
+        for _ in range(50):
+            if x_running():
+                break
+            time.sleep(0.1)
+        else:
+            sys.exit(f"error: the display didn't start (see {LOG})")
+
+    # One session bus for the desktop and its apps; the accessibility bus hangs off it.
+    out = run("dbus-launch", "--sh-syntax", env={**os.environ, "DISPLAY": DISPLAY}).stdout.decode()
+    bus = {}
+    for line in out.splitlines():
+        if "=" in line:
+            key, _, value = line.rstrip(";").partition("=")
+            bus[key] = value.strip("'")
+    env = {
+        "DBUS_SESSION_BUS_ADDRESS": bus["DBUS_SESSION_BUS_ADDRESS"],
+        "ACCESSIBILITY_ENABLED": "1",  # Chromium exposes pages to AT-SPI
+        "GTK_MODULES": "gail:atk-bridge",
+        "NO_AT_BRIDGE": "0",
+    }
+    ENV_FILE.write_text(json.dumps(env))
+    full = session_env()
+    spawn(["xfce4-session"], full, log)
+    run("xset", "s", "off", "-dpms", env=full, check=False)
+    # No bell: the web viewer plays every one as a sound (apps ring it on typos, empty searches…).
+    run("xset", "b", "off", env=full, check=False)
+    for _ in range(50):  # until the window manager is up
+        if run("wmctrl", "-m", env=full, check=False).returncode == 0:
+            break
+        time.sleep(0.2)
+    touch()
+    return True
+
+
+def stop():
+    run("pkill", "-u", str(os.getuid()), "-f", "xfce4-session|xfwm4|xfce4-panel|xfdesktop|chromium|Thunar|dbus-daemon|at-spi", check=False)
+    run("pkill", "-u", str(os.getuid()), "-x", "Xvnc", check=False)
+    ENV_FILE.unlink(missing_ok=True)
+
+
+def touch():
+    ACTIVITY.write_text(str(int(time.time())))
+
+
+def status():
+    if not x_running():
+        return "stopped"
+    idle = int(time.time()) - int(ACTIVITY.read_text() or 0) if ACTIVITY.exists() else -1
+    return f"running, idle {idle}s"
+
+
+# ---- observing ----------------------------------------------------------------------------
+
+def screenshot():
+    return run("import", "-window", "root", "png:-", env=session_env()).stdout
+
+
+def active_window():
+    env = session_env()
+    try:
+        wid = run("xdotool", "getactivewindow", env=env).stdout.decode().strip()
+        name = run("xdotool", "getwindowname", wid, env=env).stdout.decode().strip()
+        return name
+    except subprocess.CalledProcessError:
+        return ""
+
+
+def accessible_elements(all_windows=False):
+    """On-screen controls of the active window (or every window), with their centre points."""
+    os.environ.update(session_env())
+    try:
+        import pyatspi
+    except ImportError:
+        return [], "accessibility tree unavailable"
+    deadline = time.monotonic() + TREE_BUDGET_S
+    visited = 0
+    found = []
+
+    def walk(node, depth):
+        nonlocal visited
+        if visited >= TREE_MAX_NODES or time.monotonic() > deadline or len(found) >= TREE_MAX_ELEMENTS:
+            return
+        visited += 1
+        try:
+            states = node.getState()
+            if depth > 1 and not states.contains(pyatspi.STATE_SHOWING):
+                return  # hidden subtree (other tabs, closed menus, scrolled-off content)
+            role = node.getRoleName()
+            name = (node.name or "").strip()
+            # Footnote links ("[12]") are noise on most pages.
+            footnote = role == "link" and name.startswith("[") and name.endswith("]")
+            if role in INTERACTIVE and not footnote and (name or role in ("entry", "password text", "text")):
+                box = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+                if box.width > 0 and box.height > 0 and 0 <= box.x < WIDTH and 0 <= box.y < HEIGHT:
+                    if role == "text" and not states.contains(pyatspi.STATE_EDITABLE):
+                        pass  # plain text: the screenshot covers it
+                    else:
+                        extra = []
+                        if states.contains(pyatspi.STATE_FOCUSED):
+                            extra.append("focused")
+                        if states.contains(pyatspi.STATE_CHECKED):
+                            extra.append("checked")
+                        if not states.contains(pyatspi.STATE_ENABLED):
+                            extra.append("disabled")
+                        found.append({
+                            "role": role, "name": name[:80],
+                            "x": box.x + box.width // 2, "y": box.y + box.height // 2,
+                            "state": extra,
+                        })
+            for child in node:
+                walk(child, depth + 1)
+        except Exception:
+            return  # nodes vanish while we read them; skip
+
+    desktop = pyatspi.Registry.getDesktop(0)
+    for app in desktop:
+        if app is None:
+            continue
+        try:
+            for frame in app:
+                if frame is None:
+                    continue
+                if all_windows or frame.getState().contains(pyatspi.STATE_ACTIVE):
+                    walk(frame, 0)
+        except Exception:
+            continue
+    note = "" if len(found) < TREE_MAX_ELEMENTS and time.monotonic() <= deadline else " (list cut short)"
+    return found, note
+
+
+ELEMENTS = []  # from the last observe, so actions can say element=N
+
+
+def observe(all_windows=False):
+    global ELEMENTS
+    ELEMENTS, note = accessible_elements(all_windows)
+    lines = [f"Screen {WIDTH}x{HEIGHT}. Active window: {active_window() or '(none)'}."]
+    if ELEMENTS:
+        lines.append(f"Controls{note} — [n] role \"name\" (x,y):")
+        for i, e in enumerate(ELEMENTS, 1):
+            state = f" [{', '.join(e['state'])}]" if e["state"] else ""
+            lines.append(f"[{i}] {e['role']} \"{e['name']}\" ({e['x']},{e['y']}){state}")
+    else:
+        lines.append(f"No controls listed{note}; use the screenshot's coordinates.")
+    return "\n".join(lines)
+
+
+# ---- acting -------------------------------------------------------------------------------
+
+def xdo(*args):
+    run("xdotool", *[str(a) for a in args], env=session_env())
+
+
+def point(args):
+    if args.get("element") is not None:
+        n = int(args["element"])
+        if not 1 <= n <= len(ELEMENTS):
+            raise ValueError(f"no element {n} in the last observe; call observe again")
+        return ELEMENTS[n - 1]["x"], ELEMENTS[n - 1]["y"]
+    if args.get("x") is None or args.get("y") is None:
+        raise ValueError("give element (from observe) or x and y")
+    x, y = int(args["x"]), int(args["y"])
+    if not (0 <= x < WIDTH and 0 <= y < HEIGHT):
+        raise ValueError(f"({x},{y}) is off the {WIDTH}x{HEIGHT} screen")
+    return x, y
+
+
+BUTTONS = {"left": 1, "middle": 2, "right": 3}
+
+
+def click(args):
+    x, y = point(args)
+    button = BUTTONS[args.get("button", "left")]
+    xdo("mousemove", "--sync", x, y)
+    xdo("click", "--repeat", int(args.get("clicks", 1)), "--delay", 80, button)
+    return f"clicked ({x},{y})"
+
+
+def type_text(args):
+    text = args["text"]
+    xdo("type", "--delay", 12, "--", text)
+    if args.get("enter"):
+        xdo("key", "Return")
+    return f"typed {len(text)} characters"
+
+
+def key(args):
+    keys = args["keys"].split()
+    xdo("key", "--delay", 60, *keys)
+    return f"pressed {' '.join(keys)}"
+
+
+def scroll(args):
+    x, y = point(args) if args.get("element") is not None or args.get("x") is not None else (WIDTH // 2, HEIGHT // 2)
+    direction = args.get("direction", "down")
+    button = {"up": 4, "down": 5, "left": 6, "right": 7}[direction]
+    xdo("mousemove", "--sync", x, y)
+    xdo("click", "--repeat", int(args.get("amount", 5)), "--delay", 30, button)
+    return f"scrolled {direction} at ({x},{y})"
+
+
+def drag(args):
+    x1, y1 = point({"x": args["from_x"], "y": args["from_y"]})
+    x2, y2 = point({"x": args["to_x"], "y": args["to_y"]})
+    xdo("mousemove", "--sync", x1, y1)
+    xdo("mousedown", 1)
+    xdo("mousemove", "--sync", (x1 + x2) // 2, (y1 + y2) // 2)
+    xdo("mousemove", "--sync", x2, y2)
+    xdo("mouseup", 1)
+    return f"dragged ({x1},{y1}) → ({x2},{y2})"
+
+
+def launch(args):
+    cmd = args["command"]
+    spawn(["bash", "-lc", cmd], session_env(), open(LOG, "ab"))
+    time.sleep(float(args.get("wait", 3)))
+    return f"started: {cmd}"
+
+
+def windows(args):
+    out = run("wmctrl", "-lG", env=session_env(), check=False).stdout.decode()
+    rows = []
+    for line in out.splitlines():
+        parts = line.split(None, 7)
+        if len(parts) == 8 and parts[1] != "-1":  # skip panel and desktop
+            wid, _, x, y, w, h, _, title = parts
+            rows.append(f"{wid} \"{title}\" at ({x},{y}) {w}x{h}")
+    return "\n".join(rows) or "no windows open"
+
+
+def focus(args):
+    target = args["window"]
+    flag = ["-i", "-a"] if target.startswith("0x") else ["-a"]
+    if run("wmctrl", *flag, target, env=session_env(), check=False).returncode:
+        raise ValueError(f"no window matching {target!r}; see windows")
+    return f"focused {target}"
+
+
+def clipboard(args):
+    env = session_env()
+    if "text" in args:
+        subprocess.run(["xclip", "-selection", "clipboard"], input=args["text"].encode(), env=env, check=True)
+        return "clipboard set"
+    out = run("xclip", "-selection", "clipboard", "-o", env=env, check=False).stdout.decode(errors="replace")
+    return out[:20000] or "(clipboard is empty)"
+
+
+def wait(args):
+    time.sleep(min(float(args.get("seconds", 2)), 30))
+    return "waited"
+
+
+# ---- MCP over stdio -----------------------------------------------------------------------
+
+POINT = {
+    "element": {"type": "integer", "description": "Control number from the last observe"},
+    "x": {"type": "integer"}, "y": {"type": "integer"},
+}
+TOOLS = {
+    "observe": (
+        "Screenshot of the desktop plus the active window's on-screen controls (buttons, links, "
+        "fields, menu items) with numbers and centre points. Actions return the same view of the "
+        "screen after they run, so call this only to start or to refresh; target controls by "
+        "number when they're listed.",
+        {"all_windows": {"type": "boolean", "description": "List controls of every window, not just the active one"}},
+        [], lambda a: None,
+    ),
+    "screenshot": ("Screenshot only (cheaper than observe).", {}, [], lambda a: None),
+    "click": (
+        "Click a control from observe (element) or a screen point (x, y).",
+        {**POINT, "button": {"type": "string", "enum": ["left", "right", "middle"]},
+         "clicks": {"type": "integer", "description": "2 for a double-click"}},
+        [], click,
+    ),
+    "type": (
+        "Type text into the focused field, like a keyboard. Click the field first.",
+        {"text": {"type": "string"}, "enter": {"type": "boolean", "description": "Press Enter after"}},
+        ["text"], type_text,
+    ),
+    "key": (
+        "Press keys or shortcuts, space-separated, xdotool names: Return, Tab, Escape, BackSpace, "
+        "ctrl+l, ctrl+t, alt+Tab, super, Down, Page_Down.",
+        {"keys": {"type": "string"}}, ["keys"], key,
+    ),
+    "scroll": (
+        "Scroll at a control or point (default: screen centre).",
+        {**POINT, "direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
+         "amount": {"type": "integer", "description": "Wheel clicks, default 5"}},
+        [], scroll,
+    ),
+    "drag": (
+        "Drag with the left button from one point to another.",
+        {"from_x": {"type": "integer"}, "from_y": {"type": "integer"},
+         "to_x": {"type": "integer"}, "to_y": {"type": "integer"}},
+        ["from_x", "from_y", "to_x", "to_y"], drag,
+    ),
+    "launch": (
+        "Open an app on the desktop with a shell command, e.g. `chromium https://example.com`, "
+        "`thunar ~/workspace`, `mousepad notes.txt`, `xfce4-terminal`.",
+        {"command": {"type": "string"}, "wait": {"type": "number", "description": "Seconds to wait before the screenshot, default 3"}},
+        ["command"], launch,
+    ),
+    "windows": ("List open windows (id, title, position, size).", {}, [], windows),
+    "focus": (
+        "Bring a window to the front by id (0x…) or part of its title.",
+        {"window": {"type": "string"}}, ["window"], focus,
+    ),
+    "clipboard": (
+        "Read the clipboard, or set it when text is given (paste with ctrl+v).",
+        {"text": {"type": "string"}}, [], clipboard,
+    ),
+    "wait": ("Wait for something to load (max 30 s).", {"seconds": {"type": "number"}}, [], wait),
+}
+# Actions that change the screen return what observe would (controls + screenshot), so the next
+# step can see the result without another call: each call re-sends the whole conversation.
+SHOW_AFTER = {"click", "type", "key", "scroll", "drag", "launch", "focus", "wait"}
+
+
+def call_tool(name, args):
+    if name not in TOOLS:
+        raise ValueError(f"unknown tool {name}")
+    started = start()
+    touch()
+    lines = ["(desktop started)"] if started else []
+    if name not in ("observe", "screenshot"):
+        lines.append(TOOLS[name][3](args))
+        if name not in SHOW_AFTER:
+            return [{"type": "text", "text": "\n".join(lines)}]
+        time.sleep(0.6)  # let the screen settle
+    if name == "screenshot":
+        lines.append(f"Screen {WIDTH}x{HEIGHT}. Active window: {active_window() or '(none)'}.")
+    else:
+        lines.append(observe(bool(args.get("all_windows"))))
+    data = base64.b64encode(screenshot()).decode()
+    return [
+        {"type": "text", "text": "\n".join(lines)},
+        {"type": "image", "data": data, "mimeType": "image/png"},
+    ]
+
+
+def mcp():
+    def send(message):
+        sys.stdout.write(json.dumps(message) + "\n")
+        sys.stdout.flush()
+
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        try:
+            request = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        method, rid = request.get("method"), request.get("id")
+        if rid is None:
+            continue  # notifications
+        params = request.get("params") or {}
+        if method == "initialize":
+            result = {
+                "protocolVersion": params.get("protocolVersion", "2025-06-18"),
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "desktop", "version": "0.1"},
+            }
+        elif method == "tools/list":
+            result = {"tools": [
+                {"name": name, "description": desc,
+                 "inputSchema": {"type": "object", "properties": props, "required": required}}
+                for name, (desc, props, required, _) in TOOLS.items()
+            ]}
+        elif method == "tools/call":
+            try:
+                result = {"content": call_tool(params["name"], params.get("arguments") or {})}
+            except (ValueError, KeyError, subprocess.CalledProcessError) as error:
+                detail = error.stderr.decode(errors="replace").strip() if isinstance(error, subprocess.CalledProcessError) and error.stderr else str(error)
+                result = {"content": [{"type": "text", "text": f"error: {detail}"}], "isError": True}
+        elif method == "ping":
+            result = {}
+        else:
+            send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"unknown method {method}"}})
+            continue
+        send({"jsonrpc": "2.0", "id": rid, "result": result})
+
+
+def link(reason):
+    """Asks the bot (which signs the links) to send them to the person; see agent/bot-api.ts."""
+    api, caller = os.environ.get("DOT_API"), os.environ.get("DOT_CALLER")
+    if not api or not caller:
+        sys.exit("error: links aren't available here (no connection to the bot in this turn).")
+    request = urllib.request.Request(
+        f"{api}/desktop/link", method="POST", data=json.dumps({"reason": reason}).encode(),
+        headers={"x-dot-caller": caller, "content-type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            print(json.load(response)["text"])
+    except urllib.error.HTTPError as error:
+        try:
+            sys.exit(f"error: {json.load(error)['text']}")
+        except (ValueError, KeyError):
+            sys.exit(f"error: the bot answered {error.code}")
+
+
+def main(args):
+    command = args[0] if args else "status"
+    if command == "link":
+        link(" ".join(args[1:]))
+    elif command == "start":
+        print("started" if start() else "already running")
+    elif command == "stop":
+        stop()
+        print("stopped")
+    elif command == "status":
+        print(status())
+    elif command == "mcp":
+        mcp()
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

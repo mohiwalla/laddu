@@ -10,6 +10,24 @@ export type Step = {
 	title: string
 	status: "in_progress" | "complete" | "error"
 	details?: string
+	/** A step on dot's computer (the desktop tools), so the bot can offer the watch link. */
+	computer?: boolean
+}
+
+/** Desktop tool (runtime/desktop) → title, when Codex didn't narrate the step. */
+const DESKTOP_TITLES: Record<string, string> = {
+	observe: "Looking at the screen",
+	screenshot: "Looking at the screen",
+	click: "Clicking",
+	type: "Typing",
+	key: "Pressing keys",
+	scroll: "Scrolling",
+	drag: "Dragging",
+	launch: "Opening an app",
+	windows: "Checking open windows",
+	focus: "Switching windows",
+	clipboard: "Using the clipboard",
+	wait: "Waiting for the screen",
 }
 
 const MAX_TITLE = 150
@@ -94,6 +112,13 @@ function toStep(item: ThreadItem, done: boolean): Step | null {
 			}
 		}
 		case "mcp_tool_call":
+			if (item.server === "desktop")
+				return {
+					id: item.id,
+					title: DESKTOP_TITLES[item.tool] ?? "Using the computer",
+					status: status(item.status),
+					computer: true,
+				}
 			return {
 				id: item.id,
 				title: `Using ${item.server} (${item.tool})`,
@@ -120,10 +145,15 @@ function toStep(item: ThreadItem, done: boolean): Step | null {
 	}
 }
 
-/** Feed it every Codex item event; it reports each step's latest state, keeping its first title. */
+/**
+ * Feed it every Codex item event; it reports each step's latest state, keeping its first title.
+ * Back-to-back actions on dot's computer (dozens of clicks and keys) share one row, with a count.
+ */
 export function stepTracker(onStep: (step: Step) => void) {
 	const titles = new Map<string, string>()
 	let narration: string | null = null
+	let computer: { id: string; title: string; actions: Set<string> } | null =
+		null
 	return (item: ThreadItem, done: boolean) => {
 		if (item.type === "agent_message") {
 			if (done) narration = narrationTitle(item.text)
@@ -131,6 +161,26 @@ export function stepTracker(onStep: (step: Step) => void) {
 		}
 		const step = toStep(item, done)
 		if (!step) return
+		if (step.computer) {
+			if (!computer || (narration && !computer.actions.has(step.id))) {
+				computer = {
+					id: step.id,
+					title: narration ?? "Using my computer",
+					actions: new Set(),
+				}
+				narration = null
+			}
+			computer.actions.add(step.id)
+			const count = computer.actions.size
+			onStep({
+				...step,
+				id: computer.id,
+				title: computer.title,
+				details: `${count} action${count === 1 ? "" : "s"} · ${step.title}`,
+			})
+			return
+		}
+		computer = null
 		let title = titles.get(step.id)
 		if (!title) {
 			// A note applies to the action right after it; later ones get a guessed title.

@@ -1,6 +1,6 @@
 /**
  * A small API for dot's commands inside a container that need the bot itself: `schedule`, `ado`
- * (Azure DevOps) and `ms` (Microsoft 365), whose tokens stay here.
+ * (Azure DevOps) and `ms` (Microsoft 365), whose tokens stay here, and `desktop link`.
  *
  * Each Codex turn gets a caller credential signed by this process: who the turn runs for and the
  * Slack thread it came from. The command sends it back, so a request can only act as that person,
@@ -13,6 +13,7 @@ import type { BotConfig } from "../config"
 import * as azureDevOps from "../integrations/azure-devops"
 import * as graph from "../integrations/graph"
 import * as microsoft from "../integrations/microsoft"
+import { sendDesktopLinks } from "./desktop"
 import {
 	addJob,
 	cronProblem,
@@ -330,6 +331,44 @@ async function handleGraph(
 	}
 }
 
+/** `desktop link`: the person's watch / take-control links, privately in this conversation. */
+async function handleDesktopLink(
+	request: Request,
+	caller: Caller,
+	deps: Deps,
+): Promise<Response> {
+	if (request.method !== "POST") return reply(405, "Use POST.")
+	if (!deps.config.desktop)
+		return reply(501, "dot's computer is turned off on this bot (DESKTOP).")
+	if (caller.scheduled)
+		return reply(
+			403,
+			"A scheduled run can't send links; nobody is in the conversation.",
+		)
+	const { reason } = (await request.json().catch(() => ({}))) as {
+		reason?: string
+	}
+	try {
+		await sendDesktopLinks(
+			deps.client,
+			deps.config,
+			{
+				teamId: caller.teamId,
+				userId: caller.userId,
+				channel: caller.channel,
+				threadTs: caller.threadTs,
+			},
+			reason?.trim() || "Here's my computer.",
+		)
+	} catch (error) {
+		return failed(error, "Desktop link")
+	}
+	return reply(
+		200,
+		"Sent them a private message with links to watch your computer or take control. Don't repeat or invent the links.",
+	)
+}
+
 type Deps = { config: BotConfig; client: App["client"] }
 
 export type BotApi = { url: string }
@@ -356,6 +395,8 @@ export function startBotApi(hostname: string, deps: Deps): BotApi {
 			if (resource === "ado")
 				return handleAzureDevOps(request, caller, id, deps)
 			if (resource === "ms") return handleGraph(request, caller, id, deps)
+			if (resource === "desktop" && id === "link")
+				return handleDesktopLink(request, caller, deps)
 			return reply(404, "Unknown endpoint.")
 		},
 	})

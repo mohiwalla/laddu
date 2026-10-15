@@ -22,6 +22,9 @@ export const TOOLS_DIR = `${appRoot}runtime`
 /** The same commands in the runtime mount; scripts/codex-docker.sh puts them on PATH. */
 export const CONTAINER_TOOLS_DIR = "/opt/dot/runtime/bin"
 
+/** Port of the desktop's web viewer inside each container (runtime/desktop). */
+export const DESKTOP_VIEWER_PORT = 6901
+
 /** Stand-in `codex` executable that forwards into the container named by $DOT_CONTAINER. */
 export const CODEX_DOCKER_WRAPPER = `${appRoot}scripts/codex-docker.sh`
 
@@ -114,7 +117,7 @@ export async function ensureImage(): Promise<string> {
 	return tag
 }
 
-export async function prepareDocker(): Promise<{
+export async function prepareDocker(config: BotConfig): Promise<{
 	tag: string
 	proxy: ModelProxy
 }> {
@@ -145,6 +148,9 @@ export async function prepareDocker(): Promise<{
 			baseUrl: proxy.baseUrl,
 			envKey: "DOT_PROXY_KEY",
 			modelCatalog: "/opt/dot/runtime/models.json",
+			desktop: config.desktop
+				? `${CONTAINER_TOOLS_DIR}/desktop`
+				: undefined,
 		}),
 	)
 	imageTag = tag
@@ -152,8 +158,24 @@ export async function prepareDocker(): Promise<{
 }
 
 const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "")
-export const containerName = (teamId: string, userId: string) =>
-	`dot-${slug(teamId)}-${slug(userId)}`
+
+/** First name for a Slack user ID, set at startup (index.ts); only used to make names readable. */
+let firstNameOf: (userId: string) => Promise<string> = async () => ""
+export function nameContainersWith(
+	lookup: (userId: string) => Promise<string>,
+) {
+	firstNameOf = lookup
+}
+
+/** `dot-<first name>-<team>-<user>`, e.g. dot-alex-t0123abcd-u0456efgh; the IDs keep it unique. */
+export const containerName = (
+	teamId: string,
+	userId: string,
+	firstName = "",
+) => {
+	const name = slug(firstName.normalize("NFKD")).slice(0, 20)
+	return ["dot", name, slug(teamId), slug(userId)].filter(Boolean).join("-")
+}
 
 const pending = new Map<string, Promise<string>>()
 
@@ -163,14 +185,30 @@ export function ensureContainer(
 	teamId: string,
 	userId: string,
 ): Promise<string> {
-	const name = containerName(teamId, userId)
-	const inflight = pending.get(name)
+	const key = `${teamId}/${userId}`
+	const inflight = pending.get(key)
 	if (inflight) return inflight
 
 	const isolated = config.isolateNetwork
 	const task = (async () => {
 		if (!imageTag)
 			throw new Error("prepareDocker() must run before ensureContainer()")
+		const name = containerName(
+			teamId,
+			userId,
+			await firstNameOf(userId).catch(() => ""),
+		)
+		// Found by its labels, so a container from before names had first names (or from before a
+		// rename in Slack) is renamed in place rather than recreated.
+		const existing = (
+			await Bun.$`docker ps --all --filter label=dot.bot=1 --filter ${`label=dot.team=${teamId}`} --filter ${`label=dot.user=${userId}`} --format ${"{{.Names}}"}`.text()
+		)
+			.trim()
+			.split("\n")[0]
+		if (existing && existing !== name) {
+			await Bun.$`docker rename ${existing} ${name}`.quiet()
+			console.log(`[containers] renamed ${existing} to ${name}`)
+		}
 		const options = [
 			"--init", // PID 1 reaps finished child processes
 			"--hostname",
@@ -190,7 +228,9 @@ export function ensureContainer(
 			"--restart",
 			"unless-stopped",
 			"--memory",
-			"2g",
+			config.desktop ? "3g" : "2g",
+			// Chromium on the desktop needs more shared memory than Docker's 64 MB default.
+			...(config.desktop ? ["--shm-size", "1g"] : []),
 			"--cpus",
 			"2",
 			"--pids-limit",
@@ -235,8 +275,8 @@ export function ensureContainer(
 		return name
 	})()
 
-	pending.set(name, task)
-	task.finally(() => pending.delete(name)).catch(() => {})
+	pending.set(key, task)
+	task.finally(() => pending.delete(key)).catch(() => {})
 	return task
 }
 
@@ -258,7 +298,8 @@ const isolatedAt = new Map<string, string>()
 
 /**
  * Internet only: blocks this machine's services (databases, SSH…), the home network and other
- * containers, except dot's model proxy and bot API, and DNS to the container's nameservers.
+ * containers, except dot's model proxy and bot API, replies to the desktop viewer gateway, and
+ * DNS to the container's nameservers.
  * The rules live in the container's own network namespace and are set from a short-lived root
  * helper with NET_ADMIN; the container itself has no capabilities, so it can't change them.
  * They're lost when the container restarts, so they're checked before every use.
@@ -283,6 +324,8 @@ async function isolate(name: string): Promise<void> {
 		":OUTPUT ACCEPT [0:0]",
 		"-A OUTPUT -o lo -j ACCEPT",
 		`-A OUTPUT -d ${proxy.hostname} -p tcp -m multiport --dports ${ports.join(",")} -j ACCEPT`,
+		// Replies from the desktop's web viewer to the bot's gateway (see agent/desktop.ts).
+		`-A OUTPUT -d ${proxy.hostname} -p tcp --sport ${DESKTOP_VIEWER_PORT} -j ACCEPT`,
 		...nameservers.flatMap(server => [
 			`-A OUTPUT -d ${server} -p udp --dport 53 -j ACCEPT`,
 			`-A OUTPUT -d ${server} -p tcp --dport 53 -j ACCEPT`,

@@ -83,7 +83,7 @@ export type Trigger = {
 
 const profiles = new Map<
 	string,
-	{ name: string; timezone: string; email: string }
+	{ name: string; firstName: string; timezone: string; email: string }
 >()
 const channels = new Map<string, string>()
 
@@ -100,6 +100,17 @@ async function profile(client: WebClient, userId: string) {
 			user?.real_name ||
 			user?.name ||
 			userId,
+		// For container names, which allow only Latin letters: the first candidate that has some
+		// (a first name in Gurmukhi falls back to the display name's first word).
+		firstName:
+			[
+				user?.profile?.first_name,
+				user?.real_name,
+				user?.profile?.display_name,
+				user?.name,
+			]
+				.map(name => name?.trim().split(/\s+/)[0] ?? "")
+				.find(name => /[a-z]/i.test(name.normalize("NFKD"))) ?? "",
 		timezone: user?.tz || "UTC",
 		email: user?.profile?.email ?? "",
 	}
@@ -110,6 +121,10 @@ async function profile(client: WebClient, userId: string) {
 
 export const userName = async (client: WebClient, userId: string) =>
 	(await profile(client, userId)).name
+
+/** First name from the person's Slack profile ("" if unknown). */
+export const userFirstName = async (client: WebClient, userId: string) =>
+	(await profile(client, userId)).firstName
 
 /** The email on the person's Slack profile ("" if Slack doesn't share it). */
 export const userEmail = async (client: WebClient, userId: string) =>

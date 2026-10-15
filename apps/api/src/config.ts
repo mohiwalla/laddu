@@ -60,6 +60,26 @@ export function loadBotConfig() {
 		 * this machine's services, its local network or other people's containers.
 		 */
 		isolateNetwork: optional("ISOLATE_NETWORK", "true") === "true",
+		/**
+		 * Docker runtime: each person's dot gets a desktop in their container (started when first
+		 * used, stopped when idle) that Codex can drive, and that they can watch or take over.
+		 */
+		desktop:
+			optional("DESKTOP", "true") === "true" &&
+			optional("CODEX_RUNTIME", "docker") === "docker",
+		/** Where the desktop viewer gateway listens; keep it local and put a tunnel or proxy in front. */
+		desktopViewer: (() => {
+			const host = optional("DESKTOP_VIEWER_HOST", "127.0.0.1")
+			const port = Number(optional("DESKTOP_VIEWER_PORT", "6900"))
+			/** The address people open (a tunnel or HTTPS domain on a server). */
+			const publicUrl = optional(
+				"DESKTOP_PUBLIC_URL",
+				`http://localhost:${port}`,
+			).replace(/\/$/, "")
+			return { host, port, publicUrl }
+		})(),
+		/** Minutes without actions or viewers before a desktop is stopped (files and logins stay). */
+		desktopIdleMinutes: Number(optional("DESKTOP_IDLE_MINUTES", "10")),
 		/** Host runtime only; in Docker the container is the boundary. */
 		sandbox: optional("CODEX_SANDBOX", "workspace-write") as SandboxMode,
 		/**

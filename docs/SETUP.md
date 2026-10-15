@@ -163,6 +163,44 @@ A sign-in is only accepted when the Microsoft account's email matches the person
 dot then reads and changes Azure DevOps and Microsoft 365 as the person asking. Permissions added
 later apply within minutes after admin consent; otherwise people run the sign-in again.
 
+### dot's computer: watch links
+
+On by default with the Docker runtime. The links dot sends to watch or take over its computer point
+at a gateway on `http://localhost:6900`, so they open only on this machine. For people on other
+machines, put a tunnel or an HTTPS reverse proxy in front of it and point the links there.
+
+With a domain on Cloudflare, a named tunnel gives a stable HTTPS address (`dot.example.com` here):
+
+```sh
+cloudflared tunnel login                          # once; pick the domain in the browser
+cloudflared tunnel create dot
+cloudflared tunnel route dns dot dot.example.com
+```
+
+```yaml
+# ~/.cloudflared/dot.yml
+tunnel: <tunnel ID printed by `create`>
+credentials-file: /home/<you>/.cloudflared/<tunnel ID>.json
+ingress:
+  - hostname: dot.example.com
+    service: http://127.0.0.1:6900
+  - service: http_status:404
+```
+
+Run it as a user service next to the bot (`ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel
+--config /home/<you>/.cloudflared/dot.yml run`, otherwise like the unit below), then in `.env`:
+
+```sh
+DESKTOP_PUBLIC_URL="https://dot.example.com"
+```
+
+To try it without a domain, `cloudflared tunnel --url http://localhost:6900` prints a
+`https://<random>.trycloudflare.com` address; it changes on every restart, and old links stop working.
+
+With several workspaces, give each its own `DESKTOP_VIEWER_PORT` (and `DESKTOP_PUBLIC_URL`) in its
+`.env.<name>`. Keep `DESKTOP_VIEWER_HOST` on `127.0.0.1`: every request needs a signed link, but the tunnel or
+proxy is what should face the network. `DESKTOP="false"` turns the computer off.
+
 ### Run as a service (Linux, systemd)
 
 So the bot starts at boot and comes back if it crashes. A user service needs no root:
@@ -207,27 +245,32 @@ offline).
 
 ## Configuration
 
-| Var                      | Default           | Notes                                                                                                            |
-| ------------------------ | ----------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `SLACK_BOT_TOKEN`        | required          | `xoxb-…`, from installing the app                                                                                |
-| `SLACK_APP_TOKEN`        | required          | `xapp-…`, app-level token with `connections:write` (Socket Mode)                                                 |
-| `CODEX_MODEL`            | required          | Model slug from `bun run login`                                                                                  |
-| `OWNER_SLACK_USER_ID`    | required          | You; see step 2.4. Only the default for `ALLOWED_SLACK_USERS`, no special treatment                              |
-| `ALLOWED_SLACK_USERS`    | the owner         | `"*"` for everyone, or comma-separated member IDs                                                                |
-| `CODEX_RUNTIME`          | `docker`          | `docker`: one container per Slack user; `host`: on this machine (just yourself, at most)                         |
-| `CODEX_REASONING_EFFORT` | `medium`          | `minimal` … `xhigh`                                                                                              |
-| `CODEX_FAST`             | `false`           | `true`: fast mode, quicker answers that use more of the plan's limits                                            |
-| `ISOLATE_NETWORK`        | `true`            | Docker: every container (yours too) gets internet only, not this machine's services, the LAN or other containers |
-| `CODEX_SANDBOX`          | `workspace-write` | Host runtime only: `read-only`, `workspace-write`, `danger-full-access`                                          |
-| `CODEX_NETWORK`          | `true`            | Host runtime only: internet for Codex's shell; containers are always networked                                   |
-| `CODEX_WORKDIR`          | `agent-home`      | Codex's working directory; its `AGENTS.md` is the persona                                                        |
-| `CONTEXT_MESSAGES`       | `20`              | Channel messages read before a top-level tag                                                                     |
-| `MEMORY_REVIEW_EVERY`    | `3`               | Turns per person between background memory reviews; `"0"` turns them off                                         |
-| `TRIGGER_EMOJI`          | `robot_face`      | Reacting with this emoji to a message asks dot to handle it                                                      |
-| `MICROSOFT_CLIENT_ID`    | unset (off)       | Entra app for Azure DevOps and Microsoft 365 sign-in; see "Microsoft" above                                      |
-| `MICROSOFT_TENANT`       | `organizations`   | Directory (tenant) ID of that app                                                                                |
-| `MICROSOFT_GRAPH_SCOPES` | all of them       | Graph permissions asked for at sign-in; trim when the tenant needs admin approval for some                       |
-| `DATA_DIR`               | `.data`           | Credentials, sessions, the bot's `CODEX_HOME`                                                                    |
-| `APP_NAME`               | `slack-codex-bot` | Name shown on the ChatGPT consent screen at first registration                                                   |
+| Var                      | Default                 | Notes                                                                                                            |
+| ------------------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `SLACK_BOT_TOKEN`        | required                | `xoxb-…`, from installing the app                                                                                |
+| `SLACK_APP_TOKEN`        | required                | `xapp-…`, app-level token with `connections:write` (Socket Mode)                                                 |
+| `CODEX_MODEL`            | required                | Model slug from `bun run login`                                                                                  |
+| `OWNER_SLACK_USER_ID`    | required                | You; see step 2.4. Only the default for `ALLOWED_SLACK_USERS`, no special treatment                              |
+| `ALLOWED_SLACK_USERS`    | the owner               | `"*"` for everyone, or comma-separated member IDs                                                                |
+| `CODEX_RUNTIME`          | `docker`                | `docker`: one container per Slack user; `host`: on this machine (just yourself, at most)                         |
+| `CODEX_REASONING_EFFORT` | `medium`                | `minimal` … `xhigh`                                                                                              |
+| `CODEX_FAST`             | `false`                 | `true`: fast mode, quicker answers that use more of the plan's limits                                            |
+| `ISOLATE_NETWORK`        | `true`                  | Docker: every container (yours too) gets internet only, not this machine's services, the LAN or other containers |
+| `CODEX_SANDBOX`          | `workspace-write`       | Host runtime only: `read-only`, `workspace-write`, `danger-full-access`                                          |
+| `CODEX_NETWORK`          | `true`                  | Host runtime only: internet for Codex's shell; containers are always networked                                   |
+| `CODEX_WORKDIR`          | `agent-home`            | Codex's working directory; its `AGENTS.md` is the persona                                                        |
+| `CONTEXT_MESSAGES`       | `20`                    | Channel messages read before a top-level tag                                                                     |
+| `MEMORY_REVIEW_EVERY`    | `3`                     | Turns per person between background memory reviews; `"0"` turns them off                                         |
+| `TRIGGER_EMOJI`          | `robot_face`            | Reacting with this emoji to a message asks dot to handle it                                                      |
+| `MICROSOFT_CLIENT_ID`    | unset (off)             | Entra app for Azure DevOps and Microsoft 365 sign-in; see "Microsoft" above                                      |
+| `MICROSOFT_TENANT`       | `organizations`         | Directory (tenant) ID of that app                                                                                |
+| `MICROSOFT_GRAPH_SCOPES` | all of them             | Graph permissions asked for at sign-in; trim when the tenant needs admin approval for some                       |
+| `DESKTOP`                | `true`                  | Docker: a desktop per person that Codex drives and they can watch (see ARCHITECTURE.md, "dot's computer")        |
+| `DESKTOP_VIEWER_HOST`    | `127.0.0.1`             | Where the viewer gateway listens                                                                                 |
+| `DESKTOP_VIEWER_PORT`    | `6900`                  |                                                                                                                  |
+| `DESKTOP_PUBLIC_URL`     | `http://localhost:6900` | What watch/control links point to: a tunnel or an HTTPS domain when people open them from elsewhere              |
+| `DESKTOP_IDLE_MINUTES`   | `10`                    | A desktop with no actions and no viewers this long is stopped (files and logins stay)                            |
+| `DATA_DIR`               | `.data`                 | Credentials, sessions, the bot's `CODEX_HOME`                                                                    |
+| `APP_NAME`               | `slack-codex-bot`       | Name shown on the ChatGPT consent screen at first registration                                                   |
 
 Relative paths resolve against `apps/api`.

@@ -28,6 +28,28 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends iptables \
  && rm -rf /var/lib/apt/lists/*
 
+# dot's computer (runtime/desktop, started when first used): KasmVNC is the display and the web
+# viewer people watch it in (its "watch" login can only look); XFCE is the desktop; Chromium and
+# the usual apps. AT-SPI exposes on-screen controls by name, xdotool sends real mouse and keyboard
+# input, wmctrl/xclip handle windows and the clipboard. About 1 GB.
+ARG KASMVNC=1.5.0
+RUN arch="$(dpkg --print-architecture)" \
+ && curl -fsSLo /tmp/kasmvnc.deb \
+      "https://github.com/kasmtech/KasmVNC/releases/download/v${KASMVNC}/kasmvncserver_trixie_${KASMVNC}_${arch}.deb" \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+      /tmp/kasmvnc.deb \
+      xfce4-session xfwm4 xfce4-panel xfdesktop4 xfce4-terminal thunar mousepad \
+      dbus dbus-x11 at-spi2-core libatk-adaptor python3-gi gir1.2-atspi-2.0 python3-pyatspi \
+      xdotool wmctrl xclip x11-utils x11-xserver-utils \
+      chromium fonts-liberation \
+ && rm -rf /var/lib/apt/lists/* /tmp/kasmvnc.deb
+# For every Chromium launch (from dot, the menu, or someone who took control): the container is
+# the sandbox (Chromium's own needs namespaces the container doesn't grant), pages appear in the
+# accessibility tree, and saved passwords work without a desktop keyring.
+RUN printf '%s\n' 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --test-type --force-renderer-accessibility --password-store=basic --no-first-run --no-default-browser-check"' \
+      > /etc/chromium.d/dot
+
 USER dot
 WORKDIR /home/dot/workspace
 ENV HOME=/home/dot CODEX_HOME=/home/dot/.codex PATH=/opt/codex/bin:/opt/codex/codex-path:$PATH \

@@ -1,8 +1,14 @@
 import { App, LogLevel } from "@slack/bolt"
 import { prepareCodexHome } from "./agent/codex"
-import { prepareDocker, stopOrphanedRuns } from "./agent/containers"
+import {
+	nameContainersWith,
+	prepareDocker,
+	stopOrphanedRuns,
+} from "./agent/containers"
+import { startDesktopGateway, startDesktopReaper } from "./agent/desktop"
 import { getAccessToken } from "./auth/siwc"
 import { loadBotConfig } from "./config"
+import { userFirstName } from "./slack/context"
 import {
 	registerHandlers,
 	resumeInterrupted,
@@ -18,7 +24,7 @@ const config = loadBotConfig()
 // Docker: per-user containers from one runtime image. Host: Codex runs on this machine.
 const runtime =
 	config.runtime === "docker"
-		? `docker (${(await prepareDocker()).tag})`
+		? `docker (${(await prepareDocker(config)).tag})`
 		: (await prepareCodexHome(config.workdir), "host")
 // Fail fast if `bun run login` hasn't been run (or the session has ended).
 await getAccessToken()
@@ -38,6 +44,12 @@ startBotApi(
 		: "127.0.0.1",
 	{ config, client: app.client },
 )
+// Container names carry the person's first name, for whoever looks at `docker ps`.
+nameContainersWith(userId => userFirstName(app.client, userId))
+if (config.desktop) {
+	startDesktopGateway(config)
+	startDesktopReaper(config)
+}
 registerHandlers(app, config, auth.user_id!)
 // A previous bot process may have left Codex runs going in containers (they hold thread locks).
 if (config.runtime === "docker") await stopOrphanedRuns(auth.team_id!)

@@ -30,6 +30,7 @@ apps/
       agent/learning.ts turn log + background review (memory, personal skills)
       agent/tools.ts   runs runtime/ commands for a user (container or host)
       agent/bot-api.ts API for container commands that need the bot (`schedule`), signed per turn
+      agent/desktop.ts dot's computer, bot side: signed watch/control links, viewer gateway, idle stop
       scheduler.ts     scheduled tasks: store, cron/time-zone maths, 30-second check
       integrations/microsoft.ts one Microsoft sign-in per person: device code, tokens per API
       integrations/azure-devops.ts Azure DevOps requests as the person
@@ -46,7 +47,8 @@ apps/
                        skills.local/ (git-ignored) = the deployment's team skills
     runtime/           commands for Codex (Python, stdlib): `memory` (per-user memory),
                        `recall` (search past conversations), `schedule` (scheduled tasks),
-                       `ado` (Azure DevOps), `ms` (Microsoft 365)
+                       `ado` (Azure DevOps), `ms` (Microsoft 365), `desktop` (dot's computer:
+                       starts it, and serves Codex the tools that drive it, over MCP)
     docker/Dockerfile  per-user runtime image (Debian + the SDK's own codex build)
     scripts/codex-docker.sh stand-in `codex` that runs the real one via `docker exec`
     slack-manifest.yaml
@@ -54,8 +56,8 @@ packages/
   typescript-config/   shared tsconfig
 ```
 
-Expected later: `packages/integrations-*` (MCP servers), a dashboard app to watch what the bot is
-doing on its computer, and a marketing site if this becomes something teammates can run.
+Expected later: `packages/integrations-*` (MCP servers), a dashboard app for running tasks, and a
+marketing site if this becomes something teammates can run.
 
 ## Request flow (V0)
 
@@ -85,16 +87,18 @@ user's container volume; the bot stores only `{key → codex thread id, last see
 ## Isolation: one container per user
 
 Everything Codex executes runs in a Docker container dedicated to the Slack user who asked
-(`dot-<team>-<user>`, created on first use, `--restart unless-stopped`):
+(`dot-<first name>-<team>-<user>`, created on first use, `--restart unless-stopped`; found by its
+labels and renamed in place when the name changes):
 
-- Non-root user `dot`, all Linux capabilities dropped, `no-new-privileges`, no sudo; 2 GB memory,
-  2 CPUs, 512 processes.
+- Non-root user `dot`, all Linux capabilities dropped, `no-new-privileges`, no sudo; 3 GB memory
+  (2 GB without the desktop), 2 CPUs, 512 processes, 1 GB shared memory for Chromium.
 - No host files except the persona and Codex config, both read-only. A named volume
   (`dot-home-<team>-<user>`) keeps the user's workspace and Codex sessions; nobody else sees it.
 - Internet access on (Codex needs it to reach the model proxy; users need it for `curl`).
 - **Internet only** (`ISOLATE_NETWORK`, on by default). Firewall
   rules in the container's own network namespace refuse this machine's services (databases, SSH…),
-  the home network and other containers, except the model proxy, the bot API and DNS. They're set
+  the home network and other containers, except the model proxy, the bot API, replies to the desktop
+  viewer gateway and DNS. They're set
   from a short-lived root helper with `NET_ADMIN` (the container has no capabilities, so it can't
   read or undo them) and re-applied whenever the container has restarted.
   Everyone gets the same rules.
@@ -102,13 +106,47 @@ Everything Codex executes runs in a Docker container dedicated to the Slack user
   Bun server on the Docker bridge address (not reachable from the LAN). It requires a random
   per-process key, allows only `POST /v1/responses` and `GET /v1/models`, and adds the real token.
   Verified: no token in any process environment inside the container; other API paths get 403.
-- The image (~2.8 GB) carries tools for files people send and ask for: pandas, matplotlib,
-  python-docx, openpyxl, reportlab, pypdf, Pillow, pandoc, poppler, qpdf, ImageMagick, ffmpeg.
+- The image (~3.8 GB) carries tools for files people send and ask for: pandas, matplotlib,
+  python-docx, openpyxl, reportlab, pypdf, Pillow, pandoc, poppler, qpdf, ImageMagick, ffmpeg; and
+  dot's computer (below, about 1 GB of it).
 - The image bundles the exact codex build the SDK ships (`node_modules/@openai/codex-linux-*`),
   and is rebuilt (containers recreated, volumes kept) when that version or the Dockerfile changes.
 
 `CODEX_RUNTIME="host"` runs Codex on the host instead (Codex sandbox only: blocks writes outside
 `agent-home`, but can read your files). Only for yourself, at most.
+
+## dot's computer
+
+Each person's dot has a full desktop in their container (`DESKTOP`, on by default in Docker), which
+Codex drives and the person can watch or take over in the browser. Native computer use isn't on the
+plan route, so it's our own tools over MCP; the approach is borrowed from computer-use-linux (the
+computer-use plugin of a Linux build of Codex Desktop) and Bytebot.
+
+- **Desktop** (`runtime/desktop start`): KasmVNC as the X display (1280×800, fixed so screenshot
+  coordinates hold) and web viewer, XFCE, Chromium, Thunar, Mousepad, a terminal. Started on the
+  first tool call (~0.5 s), stopped after `DESKTOP_IDLE_MINUTES` without actions or viewers. Files,
+  downloads and the Chromium profile (logins, saved passwords, extensions) live on the volume.
+- **Control** (`runtime/desktop mcp`, registered as the `desktop` MCP server in Codex's config):
+  `observe` returns a screenshot plus the active window's controls from the accessibility tree
+  (AT-SPI; Chromium runs with renderer accessibility, so page links, fields and buttons are listed
+  along with its own toolbar, popups and autofill), numbered with centre points. `click`, `type`,
+  `key`, `scroll`, `drag` go through the X server (xdotool), like a real mouse and keyboard, so
+  browser UI, extensions and native dialogs work like anything else; `launch`, `windows`, `focus`,
+  `clipboard`, `wait`. Every action returns the new controls and screenshot, saving a call per step.
+  Consecutive actions show as one "Using my computer" row in Slack, with a count.
+- **Watching and taking over** (`agent/desktop.ts`): the first desktop action of a turn sends the
+  person an ephemeral message (only they see it) with two signed links, valid 12 hours: watch and
+  take control. `desktop link "<why>"` sends them on request (e.g. to sign in to a site, so
+  passwords never go through Slack). The links open a gateway in the bot (`DESKTOP_VIEWER_HOST`/
+  `PORT`, local by default; `DESKTOP_PUBLIC_URL` is what links point to, e.g. a tunnel or HTTPS
+  domain) that sets a cookie and proxies KasmVNC's web viewer and websocket from that person's
+  container, logging in as `watch` (the VNC server refuses its input) or `drive`. The logins are
+  random per container (`~/.desktop/viewer.json`) and never leave the bot; no container port is
+  published. Taking control doesn't pause Codex yet: say so in the thread.
+- Spike results (2026-10-16, on the plan's model): searching Wikipedia and reading an infobox (24
+  actions, 83 s), saving a password in Chromium's own popup and logging back in with its autofill
+  (16 actions, 67 s), writing a file through Mousepad's Save dialog (10 actions, 48 s); 150k–370k
+  input tokens a task, ~85% cached. About 0.6 GB of memory with Chromium open, ~0% CPU idle.
 
 ## Integrations
 
@@ -297,11 +335,9 @@ scratch directory, no integrations.
 
 **Later.**
 
-- A computer for the bot (browser + computer use) for things no API exposes, similar to OpenAI's
-  "dots" (always-on agents with their own cloud computer, launched 2026-09-29). Native computer use
-  isn't available on the plan route, so this would be a local tool (e.g. a browser-automation MCP
-  server on a VM).
-- A dashboard app to watch the bot's computer and running tasks.
+- dot's computer, next: pause Codex while someone has control, a Stop button on the viewer page,
+  a success rate on a subset of OSWorld tasks.
+- A dashboard app for running tasks.
 - Guardrails: per-task sandboxes, an audit log of changes.
 - Per-user billing (each user signs in with their own ChatGPT) and per-user usage caps.
 

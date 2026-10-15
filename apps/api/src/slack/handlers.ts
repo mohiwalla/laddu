@@ -27,6 +27,8 @@ import {
 } from "./context"
 import { downloadAttachments, uploadFiles } from "./attachments"
 import { closeInterrupted, openReply, type Reply } from "./reply"
+import { sendDesktopLinks } from "../agent/desktop"
+import type { Step } from "../agent/steps"
 import { markDone, markReply, markStarted, takeInterrupted } from "../inflight"
 import { chunkMarkdown } from "./reply"
 import {
@@ -116,6 +118,23 @@ async function handle(
 				})
 
 			const user = { teamId: trigger.teamId, userId: trigger.userId }
+			// The first time this turn uses dot's computer, the person gets their watch link.
+			let linkSent = false
+			const onStep = (step: Step) => {
+				reply!.step(step)
+				if (!step.computer || linkSent) return
+				linkSent = true
+				sendDesktopLinks(client, config, {
+					...user,
+					channel: trigger.channel,
+					threadTs,
+				}).catch(error =>
+					console.warn(
+						`[${key}] couldn't send the desktop link`,
+						error,
+					),
+				)
+			}
 			let session = await getSession(key)
 			let turn: TurnInput
 			let result: TurnResult
@@ -147,7 +166,7 @@ async function handle(
 								trigger.userId,
 							),
 						},
-						onStep: reply.step,
+						onStep,
 					})
 					break
 				} catch (error) {
