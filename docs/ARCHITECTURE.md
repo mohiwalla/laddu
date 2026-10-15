@@ -31,7 +31,9 @@ apps/
       agent/tools.ts   runs runtime/ commands for a user (container or host)
       agent/bot-api.ts API for container commands that need the bot (`schedule`), signed per turn
       scheduler.ts     scheduled tasks: store, cron/time-zone maths, 30-second check
-      integrations/azure-devops.ts per-person Azure DevOps: Microsoft sign-in, tokens, read requests
+      integrations/microsoft.ts one Microsoft sign-in per person: device code, tokens per API
+      integrations/azure-devops.ts Azure DevOps requests as the person
+      integrations/graph.ts Microsoft 365 (Graph) requests, downloads and uploads as the person
       slack/context.ts Slack messages → transcript for Codex
       slack/attachments.ts Slack files in (downloads) and out (outbox uploads)
       slack/handlers.ts mention/DM handling
@@ -44,7 +46,7 @@ apps/
                        skills.local/ (git-ignored) = the deployment's team skills
     runtime/           commands for Codex (Python, stdlib): `memory` (per-user memory),
                        `recall` (search past conversations), `schedule` (scheduled tasks),
-                       `ado` (Azure DevOps)
+                       `ado` (Azure DevOps), `ms` (Microsoft 365)
     docker/Dockerfile  per-user runtime image (Debian + the SDK's own codex build)
     scripts/codex-docker.sh stand-in `codex` that runs the real one via `docker exec`
     slack-manifest.yaml
@@ -114,19 +116,26 @@ Per person, never shared: each person connects their own account, and dot only s
 account can. Tokens stay on the host; containers reach an integration through the bot API with the
 turn's signed caller credential, so a command can only act as the person asking.
 
-**Azure DevOps** (`integrations/azure-devops.ts`, `runtime/ado`), on when `AZURE_DEVOPS_CLIENT_ID`
-is set:
+**One Microsoft connection** (`integrations/microsoft.ts`), on when `MICROSOFT_CLIENT_ID` is set
+(an Entra app registration, public client), shared by Azure DevOps and Microsoft 365:
 
-- **Connecting.** Asking dot anything Azure DevOps-related while not connected makes Codex run
-  `ado connect`. The bot starts Microsoft Entra's device code flow (public client, scope: Azure
-  DevOps' `.default` plus `offline_access`) and DMs the person the code, never in the channel. It
-  polls until they approve, then accepts the account only if one of its emails (token claims or
-  Azure DevOps profile) matches their Slack email. Otherwise anyone could link someone else's
-  account to their own dot by getting them to enter a code. Their organizations come from the
-  Azure DevOps profile API.
-- **Tokens.** `.data/azure-devops.json` (mode 600): access token (1 h), refresh token, refreshed
-  5 minutes before expiry, one refresh at a time per person. A rejected refresh (`invalid_grant`)
-  disconnects them.
+- **Connecting.** Asking dot about Azure DevOps or Microsoft 365 while not connected makes Codex
+  run `ado connect` or `ms connect`. The bot starts Microsoft Entra's device code flow for that API
+  (its `.default` scope plus `offline_access openid profile email`; Entra takes one API per token
+  request) and DMs the person the code, never in the channel. It polls until they approve, then
+  accepts the account only if one of its emails (token claims, the Graph or Azure DevOps profile)
+  matches their Slack email. Otherwise anyone could link someone else's account to their own dot
+  by getting them to enter a code.
+- **Tokens.** `.data/microsoft.json` (mode 600): one refresh token per person and an access token
+  per API, minted from it on demand (Entra refresh tokens work for every API the app has consent
+  for), refreshed 5 minutes before expiry, one refresh at a time per person since each rotates the
+  refresh token. No consent yet for an API (`AADSTS65001`) tells them to run `<command> connect`;
+  a rejected refresh (`invalid_grant`) disconnects them. Connections from before Microsoft 365
+  (`azure-devops.json`) are moved over on first load.
+
+**Azure DevOps** (`integrations/azure-devops.ts`, `runtime/ado`); organizations come from the
+Azure DevOps profile API at sign-in.
+
 - **Requests.** `ado` posts to the bot API's `/ado/request`. Only Azure DevOps hosts
   (`dev.azure.com`, `*.dev.azure.com`, `*.visualstudio.com`) over https; GET, plus POST to the
   read-only query endpoints (`wit/wiql`, `wit/workitemsbatch`, `search/`). `api-version=7.1` is
@@ -140,6 +149,23 @@ is set:
 - **For Codex.** `ado wiql` (query, then a batch read of the usual fields), `ado item <id>
 --comments`, and `ado get`/`ado post` for the rest of the REST API. Scheduled runs can read
   ("every Monday, summarize my open bugs") but can't start a sign-in.
+
+**Microsoft 365** (`integrations/graph.ts`, `runtime/ms`), through Microsoft Graph v1.0:
+
+- **Requests.** `ms` posts to `/ms/request` (any method; only `graph.microsoft.com` over https;
+  `Prefer`, `ConsistencyLevel` and `If-Match` headers pass through). Changes are logged. A 403 is
+  retried once with a fresh token, so permissions added to the app apply without waiting for the
+  cached token to expire; then it's reported with a hint that the app may lack that permission.
+  Responses are capped at 400 KB. Files go through `/ms/download` (bytes, following Graph's
+  pre-signed redirect) and `/ms/upload` (a single PUT up to 4 MB, an upload session in 6.25 MiB
+  chunks beyond, up to 100 MB).
+- **For Codex.** Helpers where raw Graph is awkward: mail (list, read as text, send with
+  attachments, reply), calendar (list in their time zone, create with Teams links, free/busy),
+  files (Microsoft Search across OneDrive and SharePoint, list, download into the workspace,
+  upload), Teams (chats, read, send, which opens a 1:1 chat by email, channels, post) and Planner
+  (plans, tasks, create, done with the ETag). `ms get/post/patch/put/delete` reach the rest.
+- **Permissions** are delegated Graph scopes on the app registration (see docs/SETUP.md); the
+  persona has dot show a draft before sending email or Teams messages it worded itself.
 
 ## Ways in
 

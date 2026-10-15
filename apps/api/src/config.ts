@@ -72,16 +72,28 @@ export function loadBotConfig() {
 		/** Every this many turns per person, a background Codex run updates their memory; 0 turns it off. */
 		memoryReviewEvery: Number(optional("MEMORY_REVIEW_EVERY", "3")),
 		/**
-		 * Azure DevOps, per person: an Entra app registration's client ID (public client flows on,
-		 * Azure DevOps user_impersonation permission). Unset: the integration is off.
+		 * Microsoft (Azure DevOps and Microsoft 365), per person: an Entra app registration's client
+		 * ID, with public client flows on. Unset: those integrations are off. The AZURE_DEVOPS_*
+		 * names are read too, from before Microsoft 365 was added.
 		 */
-		azureDevOps: Bun.env.AZURE_DEVOPS_CLIENT_ID?.trim()
-			? {
-					clientId: Bun.env.AZURE_DEVOPS_CLIENT_ID.trim(),
-					/** Directory (tenant) ID, or "organizations" for any work account. */
-					tenant: optional("AZURE_DEVOPS_TENANT", "organizations"),
-				}
-			: null,
+		microsoft: (() => {
+			const clientId = (
+				Bun.env.MICROSOFT_CLIENT_ID || Bun.env.AZURE_DEVOPS_CLIENT_ID
+			)?.trim()
+			if (!clientId) return null
+			const tenant =
+				(
+					Bun.env.MICROSOFT_TENANT || Bun.env.AZURE_DEVOPS_TENANT
+				)?.trim() || "organizations"
+			/** Graph permissions asked for at sign-in (space or comma separated); see microsoft.ts. */
+			const graphScopes = (
+				Bun.env.MICROSOFT_GRAPH_SCOPES?.trim() ||
+				"User.Read User.ReadBasic.All Mail.ReadWrite Mail.Send Calendars.ReadWrite Files.ReadWrite.All Sites.ReadWrite.All Chat.ReadWrite ChannelMessage.Send Team.ReadBasic.All Channel.ReadBasic.All Tasks.ReadWrite"
+			)
+				.split(/[\s,]+/)
+				.filter(Boolean)
+			return { clientId, tenant, graphScopes }
+		})(),
 		/** Reacting with this emoji (name without colons) to a message asks dot to handle it. */
 		triggerEmoji: optional("TRIGGER_EMOJI", "robot_face"),
 	}

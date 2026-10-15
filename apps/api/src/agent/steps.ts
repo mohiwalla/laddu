@@ -44,6 +44,20 @@ export function commandTitle(command: string): string {
 		return /^\s*memory\s+show\b/.test(command)
 			? "Checking memory"
 			: "Updating memory"
+	if (program === "ms") {
+		const area = command.trim().split(/\s+/)[1] ?? ""
+		if (/^(connect|disconnect)$/.test(area))
+			return "Setting up Microsoft 365"
+		return (
+			{
+				mail: "Checking Outlook",
+				calendar: "Checking the calendar",
+				files: "Working with OneDrive and SharePoint",
+				teams: "Checking Teams",
+				planner: "Checking Planner",
+			}[area] ?? "Checking Microsoft 365"
+		)
+	}
 	if (program === "ado")
 		return /^\s*ado\s+(connect|disconnect)\b/.test(command)
 			? "Setting up Azure DevOps"

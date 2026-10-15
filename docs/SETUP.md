@@ -122,27 +122,46 @@ Skills are how-to guides dot follows when a task matches. Put your organization'
 `agent-home/skills/README.md`. dot also writes personal skills for each person on its own. New
 or edited skills apply from the next message.
 
-### Azure DevOps (optional)
+### Microsoft: Azure DevOps and Microsoft 365 (optional)
 
-Each person connects their own account by asking dot something about Azure DevOps; dot DMs them a
-Microsoft sign-in code. It needs a one-time app registration in the Microsoft Entra tenant your
-Azure DevOps organization is connected to (Organization settings → Microsoft Entra):
+Each person connects their own account by asking dot something that needs it; dot DMs them a
+Microsoft sign-in code. One app registration in your Microsoft Entra tenant serves both (for Azure
+DevOps, the organization must be connected to that tenant: Organization settings → Microsoft
+Entra):
 
 1. <https://entra.microsoft.com> → **Applications → App registrations → New registration**. Name it
    `dot`, pick **Accounts in this organizational directory only**, leave the redirect URI empty.
 2. **Authentication** → **Allow public client flows** → **Yes** → Save.
-3. **API permissions → Add a permission → APIs my organization uses** → search **Azure DevOps** →
-   **Delegated permissions → user_impersonation** → Add. If your tenant doesn't let users consent
-   to apps themselves, an admin clicks **Grant admin consent**.
+3. **API permissions → Add a permission**, all **Delegated**:
+   - **Azure DevOps** (under "APIs my organization uses"): `user_impersonation`.
+   - **Microsoft Graph**: `User.Read`, `User.ReadBasic.All`, `Mail.ReadWrite`, `Mail.Send`,
+     `Calendars.ReadWrite`, `Files.ReadWrite.All`, `Sites.ReadWrite.All`, `Chat.ReadWrite`,
+     `ChannelMessage.Read.All`, `ChannelMessage.Send`, `Team.ReadBasic.All`,
+     `Channel.ReadBasic.All`, `Tasks.ReadWrite`. Leave out any area you don't want dot to touch.
+
+   Then **Grant admin consent** (needed for `ChannelMessage.Read.All`, and for everything if your
+   tenant doesn't let people approve apps themselves). Without it, each person approves the
+   permissions at their own sign-in.
+
 4. From **Overview**, copy the IDs into `.env` and restart:
 
    ```sh
-   AZURE_DEVOPS_CLIENT_ID="<Application (client) ID>"
-   AZURE_DEVOPS_TENANT="<Directory (tenant) ID>"
+   MICROSOFT_CLIENT_ID="<Application (client) ID>"
+   MICROSOFT_TENANT="<Directory (tenant) ID>"
    ```
 
+If people get **Need admin approval** at sign-in, your tenant's consent policy keeps some of
+these for admins (often `Files.ReadWrite.All` and `Sites.ReadWrite.All`). Until an admin grants
+consent, list only what people may approve themselves, e.g. with `Files.ReadWrite` (their own
+OneDrive) in place of the two `.All` ones; `ms files search` then searches their OneDrive only:
+
+```sh
+MICROSOFT_GRAPH_SCOPES="User.Read User.ReadBasic.All Mail.ReadWrite Mail.Send Calendars.ReadWrite Files.ReadWrite Chat.ReadWrite ChannelMessage.Send Team.ReadBasic.All Channel.ReadBasic.All Tasks.ReadWrite"
+```
+
 A sign-in is only accepted when the Microsoft account's email matches the person's Slack email.
-dot reads and changes Azure DevOps (close, edit, comment, create) as the person asking.
+dot then reads and changes Azure DevOps and Microsoft 365 as the person asking. Permissions added
+later apply within minutes after admin consent; otherwise people run the sign-in again.
 
 ### Run as a service (Linux, systemd)
 
@@ -205,8 +224,9 @@ offline).
 | `CONTEXT_MESSAGES`       | `20`              | Channel messages read before a top-level tag                                                                     |
 | `MEMORY_REVIEW_EVERY`    | `3`               | Turns per person between background memory reviews; `"0"` turns them off                                         |
 | `TRIGGER_EMOJI`          | `robot_face`      | Reacting with this emoji to a message asks dot to handle it                                                      |
-| `AZURE_DEVOPS_CLIENT_ID` | unset (off)       | Entra app for Azure DevOps sign-in; see "Azure DevOps" above                                                     |
-| `AZURE_DEVOPS_TENANT`    | `organizations`   | Directory (tenant) ID of that app                                                                                |
+| `MICROSOFT_CLIENT_ID`    | unset (off)       | Entra app for Azure DevOps and Microsoft 365 sign-in; see "Microsoft" above                                      |
+| `MICROSOFT_TENANT`       | `organizations`   | Directory (tenant) ID of that app                                                                                |
+| `MICROSOFT_GRAPH_SCOPES` | all of them       | Graph permissions asked for at sign-in; trim when the tenant needs admin approval for some                       |
 | `DATA_DIR`               | `.data`           | Credentials, sessions, the bot's `CODEX_HOME`                                                                    |
 | `APP_NAME`               | `slack-codex-bot` | Name shown on the ChatGPT consent screen at first registration                                                   |
 

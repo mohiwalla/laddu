@@ -1,6 +1,6 @@
 /**
- * A small API for dot's commands inside a container that need the bot itself: `schedule`, and
- * `ado` (Azure DevOps, whose tokens stay here).
+ * A small API for dot's commands inside a container that need the bot itself: `schedule`, `ado`
+ * (Azure DevOps) and `ms` (Microsoft 365), whose tokens stay here.
  *
  * Each Codex turn gets a caller credential signed by this process: who the turn runs for and the
  * Slack thread it came from. The command sends it back, so a request can only act as that person,
@@ -11,6 +11,8 @@
 import type { App } from "@slack/bolt"
 import type { BotConfig } from "../config"
 import * as azureDevOps from "../integrations/azure-devops"
+import * as graph from "../integrations/graph"
+import * as microsoft from "../integrations/microsoft"
 import {
 	addJob,
 	cronProblem,
@@ -173,43 +175,76 @@ async function handleSchedule(
 	)
 }
 
+const notSetUp = () =>
+	reply(
+		501,
+		"Microsoft integrations aren't set up on this bot (the person running it needs to add MICROSOFT_CLIENT_ID; see docs/SETUP.md).",
+	)
+
+/** connect / disconnect, the same for `ado` and `ms` (one Microsoft connection). */
+async function handleConnection(
+	request: Request,
+	caller: Caller,
+	settings: microsoft.Settings,
+	resource: microsoft.Resource,
+	client: App["client"],
+): Promise<Response | null> {
+	const person = { teamId: caller.teamId, userId: caller.userId }
+	if (request.method === "POST") {
+		if (caller.scheduled)
+			return reply(403, "A scheduled run can't start a sign-in.")
+		return reply(
+			200,
+			await microsoft.connect(settings, client, person, resource),
+		)
+	}
+	if (request.method === "DELETE")
+		return reply(
+			200,
+			(await microsoft.disconnect(person))
+				? "Disconnected; dot no longer keeps their Microsoft sign-in (Azure DevOps and Microsoft 365)."
+				: "They weren't connected.",
+		)
+	return null
+}
+
+function failed(error: unknown, what: string): Response {
+	console.warn(`[${what}]`, error)
+	return reply(
+		502,
+		error instanceof microsoft.SignInError ||
+			error instanceof microsoft.ConsentError
+			? error.message
+			: `${what} request failed: ${error instanceof Error ? error.message : error}`,
+	)
+}
+
 async function handleAzureDevOps(
 	request: Request,
 	caller: Caller,
 	action: string | undefined,
 	deps: Deps,
 ): Promise<Response> {
-	const settings = deps.config.azureDevOps
-	if (!settings)
-		return reply(
-			501,
-			"Azure DevOps isn't set up on this bot (the person running it needs to add AZURE_DEVOPS_CLIENT_ID; see docs/SETUP.md).",
-		)
+	const settings = deps.config.microsoft
+	if (!settings) return notSetUp()
 	const person = { teamId: caller.teamId, userId: caller.userId }
 	try {
 		if (action === "status" && request.method === "GET")
 			return reply(200, await azureDevOps.status(settings, person))
-		if (action === "connect" && request.method === "POST") {
-			if (caller.scheduled)
-				return reply(403, "A scheduled run can't start a sign-in.")
-			return reply(
-				200,
-				await azureDevOps.connect(settings, deps.client, person),
+		if (action === "connect") {
+			const response = await handleConnection(
+				request,
+				caller,
+				settings,
+				"devops",
+				deps.client,
 			)
+			if (response) return response
 		}
-		if (action === "connect" && request.method === "DELETE")
-			return reply(
-				200,
-				(await azureDevOps.disconnect(person))
-					? "Disconnected; dot no longer keeps their Azure DevOps sign-in."
-					: "They weren't connected.",
-			)
 		if (action === "use" && request.method === "POST") {
 			const { organization } = (await request
 				.json()
-				.catch(() => ({}))) as {
-				organization?: string
-			}
+				.catch(() => ({}))) as { organization?: string }
 			const used = await azureDevOps.useOrganization(
 				settings,
 				person,
@@ -241,13 +276,57 @@ async function handleAzureDevOps(
 		}
 		return reply(404, "Use status, connect, use, request or write.")
 	} catch (error) {
-		console.warn("[azure-devops]", error)
-		return reply(
-			502,
-			error instanceof azureDevOps.SignInError
-				? error.message
-				: `Azure DevOps request failed: ${error instanceof Error ? error.message : error}`,
-		)
+		return failed(error, "Azure DevOps")
+	}
+}
+
+async function handleGraph(
+	request: Request,
+	caller: Caller,
+	action: string | undefined,
+	deps: Deps,
+): Promise<Response> {
+	const settings = deps.config.microsoft
+	if (!settings) return notSetUp()
+	const person = { teamId: caller.teamId, userId: caller.userId }
+	try {
+		if (action === "status" && request.method === "GET")
+			return reply(200, await microsoft.status(settings, person, "graph"))
+		if (action === "connect") {
+			const response = await handleConnection(
+				request,
+				caller,
+				settings,
+				"graph",
+				deps.client,
+			)
+			if (response) return response
+		}
+		if (action === "request" && request.method === "POST") {
+			const input = (await request
+				.json()
+				.catch(() => null)) as graph.GraphRequest | null
+			if (!input?.path) return reply(400, "Give the Graph path or URL.")
+			const result = await graph.request(settings, person, input)
+			return reply(result.status < 400 ? 200 : result.status, result.text)
+		}
+		const path = new URL(request.url).searchParams.get("path")
+		if (action === "download" && request.method === "GET" && path)
+			return await graph.download(settings, person, path)
+		if (action === "upload" && request.method === "PUT" && path) {
+			const result = await graph.upload(
+				settings,
+				person,
+				path,
+				await request.arrayBuffer(),
+				request.headers.get("content-type") ??
+					"application/octet-stream",
+			)
+			return reply(result.status < 400 ? 200 : result.status, result.text)
+		}
+		return reply(404, "Use status, connect, request, download or upload.")
+	} catch (error) {
+		return failed(error, "Microsoft Graph")
 	}
 }
 
@@ -276,6 +355,7 @@ export function startBotApi(hostname: string, deps: Deps): BotApi {
 				return handleSchedule(request, caller, id)
 			if (resource === "ado")
 				return handleAzureDevOps(request, caller, id, deps)
+			if (resource === "ms") return handleGraph(request, caller, id, deps)
 			return reply(404, "Unknown endpoint.")
 		},
 	})

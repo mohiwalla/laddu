@@ -1,0 +1,509 @@
+#!/usr/bin/env python3
+"""
+Microsoft 365 (Outlook, Calendar, OneDrive, SharePoint, Teams, Planner) as the person you're
+working for, through Microsoft Graph. Their sign-in stays with the bot; requests go through it.
+Reads and changes happen straight away, as them. Times are in their time zone ($DOT_TIMEZONE).
+
+  ms status | connect | disconnect          connection (one Microsoft sign-in, shared with `ado`)
+
+  ms mail list [--folder inbox] [--unread] [--from a@b.com] [--search "words"] [--top 15]
+  ms mail read <id>                        headers, body as text, attachment names
+  ms mail send --to a@b.com[,c@d.com] --subject "…" --body "…" [--cc …] [--bcc …] [--html] [--attach FILE …]
+  ms mail reply <id> --body "…" [--all]
+
+  ms calendar list [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--days 7]
+  ms calendar create --subject "…" --start "YYYY-MM-DD HH:MM" --end "YYYY-MM-DD HH:MM"
+                     [--attendees a@b.com,…] [--teams] [--location "…"] [--body "…"]
+  ms calendar free --people a@b.com,… --start "YYYY-MM-DD HH:MM" --end "YYYY-MM-DD HH:MM"
+
+  ms files search "words" [--top 15]       across OneDrive and SharePoint
+  ms files ls ["Folder/Sub"] [--drive ID]  their OneDrive, or another drive (a SharePoint library)
+  ms files get <path-or-id> [--drive ID] [--out FILE]      download into the workspace
+  ms files put <local file> [--to "Folder/name.ext"] [--drive ID]   upload (up to 100 MB)
+  ms files sites "words"                   find SharePoint sites (then `ms get sites/<id>/drives`)
+
+  ms teams chats [--top 20]                their chats, newest first
+  ms teams read <chat-id> [--top 20]
+  ms teams send <chat-id | email> "text"   an email opens (or reuses) a 1:1 chat with that person
+  ms teams list                            their teams and channels
+  ms teams channel <team-id> <channel-id> [--top 20]
+  ms teams post <team-id> <channel-id> "text"
+
+  ms planner plans
+  ms planner tasks [--plan ID]             their tasks, or every task in a plan
+  ms planner create --plan ID --title "…" [--bucket ID] [--due YYYY-MM-DD] [--assign a@b.com,…]
+  ms planner done <task-id>
+
+  ms get <path> [--header "Name: value"]   any Graph read, e.g. "me", "me/mailFolders", "users?$search=…"
+  ms post|patch|put|delete <path> [--json '<body>'] [--header …]   any other Graph change
+
+Paths are under https://graph.microsoft.com/v1.0/ ("beta/…" for beta). Add $select/$top/$filter to
+keep replies small.
+"""
+import argparse
+import base64
+import html
+import json
+import mimetypes
+import os
+import re
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+API = os.environ.get("DOT_API")
+CALLER = os.environ.get("DOT_CALLER")
+ZONE = ZoneInfo(os.environ.get("DOT_TIMEZONE") or "UTC")
+
+
+def bot(method, path, body=None, raw=None, content_type="application/json", binary=False, soft=False):
+    if not API or not CALLER:
+        sys.exit("error: Microsoft 365 isn't available here (no connection to the bot in this turn).")
+    data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
+    request = urllib.request.Request(f"{API}/ms/{path}", method=method, data=data,
+                                     headers={"x-dot-caller": CALLER, "content-type": content_type})
+    try:
+        with urllib.request.urlopen(request, timeout=300) as response:
+            return response.read() if binary else json.load(response)["text"]
+    except urllib.error.HTTPError as error:
+        try:
+            message = json.load(error)["text"]
+        except Exception:
+            message = f"HTTP {error.code}"
+        if soft:
+            return None
+        sys.exit(f"error: {message}")
+    except urllib.error.URLError as error:
+        sys.exit(f"error: couldn't reach the bot ({error.reason}).")
+
+
+def graph(method, path, body=None, headers=None, soft=False):
+    """The parsed JSON reply (or {} for an empty one); None on an error when soft."""
+    text = bot("POST", "request", {"method": method, "path": path, "body": body, "headers": headers or {}}, soft=soft)
+    if text is None:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {"text": text}
+
+
+def q(value):
+    return urllib.parse.quote(value, safe="")
+
+
+def plain(text):
+    text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", "", text or "")
+    text = re.sub(r"(?i)<br\s*/?>|</(p|div|li|tr|h\d)>", "\n", text)
+    text = re.sub(r"(?i)<li[^>]*>", "- ", text)
+    text = html.unescape(re.sub(r"<[^>]+>", "", text))
+    return re.sub(r"\n\s*\n\s*\n+", "\n\n", text).strip()
+
+
+def local(stamp):
+    """A Graph UTC timestamp ("2026-10-16T09:30:00Z" or dateTimeTimeZone) in their time zone."""
+    if isinstance(stamp, dict):
+        value, zone = stamp.get("dateTime", ""), stamp.get("timeZone", "UTC")
+        moment = datetime.fromisoformat(value[:26]).replace(tzinfo=ZoneInfo("UTC") if zone == "UTC" else ZoneInfo(zone))
+    else:
+        moment = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    return moment.astimezone(ZONE).strftime("%a %d %b %H:%M")
+
+
+def to_utc(text):
+    """"YYYY-MM-DD HH:MM" in their time zone → dateTimeTimeZone in UTC."""
+    try:
+        moment = datetime.strptime(text.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=ZONE)
+    except ValueError:
+        sys.exit(f'error: give times as "YYYY-MM-DD HH:MM" (got {text!r}).')
+    return {"dateTime": moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": "UTC"}
+
+
+def emails(text):
+    return [{"emailAddress": {"address": address.strip()}} for address in (text or "").split(",") if address.strip()]
+
+
+def who(field):
+    address = (field or {}).get("emailAddress") or (field or {}).get("user") or {}
+    return address.get("name") or address.get("address") or address.get("displayName") or "?"
+
+
+# ── Mail ─────────────────────────────────────────────────────────────────────────────────────
+
+def mail(args):
+    if args.action == "list":
+        params = {"$top": str(args.top), "$select": "id,subject,from,receivedDateTime,isRead,hasAttachments,bodyPreview"}
+        if args.search:
+            # Graph can't combine $search with $filter on mail, so the rest goes into the search.
+            words = [args.search] + (["isread:false"] if args.unread else []) + ([f"from:{args.sender}"] if args.sender else [])
+            params["$search"] = '"' + " ".join(words).replace('"', "") + '"'
+        else:
+            params["$orderby"] = "receivedDateTime desc"
+            filters = (["isRead eq false"] if args.unread else []) + (
+                [f"from/emailAddress/address eq '{args.sender}'"] if args.sender else [])
+            if filters:
+                params["$filter"] = " and ".join(filters)
+        found = graph("GET", f"me/mailFolders/{q(args.folder)}/messages?{urllib.parse.urlencode(params)}")
+        for m in found.get("value", []):
+            flags = ("" if m.get("isRead") else "[unread] ") + ("[attachments] " if m.get("hasAttachments") else "")
+            print(f"{local(m['receivedDateTime'])}  {who(m.get('from'))}  {flags}{m.get('subject') or '(no subject)'}")
+            print(f"    {m.get('bodyPreview', '')[:140]}")
+            print(f"    id: {m['id']}")
+        if not found.get("value"):
+            print("No messages match.")
+    elif args.action == "read":
+        m = graph("GET", f"me/messages/{q(args.id)}?$expand=attachments($select=name,size,contentType)")
+        print(f"From: {who(m.get('from'))} <{(m.get('from') or {}).get('emailAddress', {}).get('address', '')}>")
+        print("To: " + ", ".join(r["emailAddress"].get("address", "") for r in m.get("toRecipients", [])))
+        if m.get("ccRecipients"):
+            print("Cc: " + ", ".join(r["emailAddress"].get("address", "") for r in m["ccRecipients"]))
+        print(f"Date: {local(m.get('receivedDateTime'))}\nSubject: {m.get('subject')}\n")
+        body = m.get("body", {})
+        print(plain(body.get("content")) if body.get("contentType") == "html" else body.get("content", ""))
+        for a in m.get("attachments", []):
+            print(f"\nAttachment: {a.get('name')} ({a.get('size', 0) // 1024} KB)")
+        if m.get("webLink"):
+            print(f"\nOpen: {m['webLink']}")
+    elif args.action == "send":
+        message = {
+            "subject": args.subject,
+            "body": {"contentType": "HTML" if args.html else "Text", "content": args.body},
+            "toRecipients": emails(args.to), "ccRecipients": emails(args.cc), "bccRecipients": emails(args.bcc),
+        }
+        attachments = []
+        for path in args.attach or []:
+            with open(path, "rb") as handle:
+                data = handle.read()
+            if len(data) > 3 * 1024 * 1024:
+                sys.exit(f"error: {path} is over 3 MB; upload it with `ms files put` and send the link instead.")
+            attachments.append({"@odata.type": "#microsoft.graph.fileAttachment", "name": os.path.basename(path),
+                                "contentType": mimetypes.guess_type(path)[0] or "application/octet-stream",
+                                "contentBytes": base64.b64encode(data).decode()})
+        if attachments:
+            message["attachments"] = attachments
+        graph("POST", "me/sendMail", {"message": message, "saveToSentItems": True})
+        print(f"Sent \"{args.subject}\" to {args.to}.")
+    elif args.action == "reply":
+        graph("POST", f"me/messages/{q(args.id)}/{'replyAll' if args.all else 'reply'}", {"comment": args.body})
+        print("Replied" + (" to all." if args.all else "."))
+
+
+# ── Calendar ─────────────────────────────────────────────────────────────────────────────────
+
+def calendar(args):
+    if args.action == "list":
+        start = datetime.combine(date.fromisoformat(args.start) if args.start else date.today(), datetime.min.time(), ZONE)
+        end = (datetime.combine(date.fromisoformat(args.end), datetime.min.time(), ZONE) + timedelta(days=1)
+               if args.end else start + timedelta(days=args.days))
+        params = urllib.parse.urlencode({
+            "startDateTime": start.astimezone(timezone.utc).isoformat(), "endDateTime": end.astimezone(timezone.utc).isoformat(),
+            "$select": "subject,start,end,location,organizer,isOnlineMeeting,onlineMeeting,showAs,isCancelled,webLink",
+            "$orderby": "start/dateTime", "$top": "100"})
+        found = graph("GET", f"me/calendarView?{params}")
+        for e in found.get("value", []):
+            where = (e.get("location") or {}).get("displayName") or ""
+            online = " [Teams]" if e.get("isOnlineMeeting") else ""
+            cancelled = " [cancelled]" if e.get("isCancelled") else ""
+            print(f"{local(e['start'])}–{local(e['end'])[-5:]}  {e.get('subject')}{online}{cancelled}"
+                  f"{'  @ ' + where if where else ''}  (organizer: {who(e.get('organizer'))}; {e.get('showAs')})")
+        if not found.get("value"):
+            print("Nothing on the calendar then.")
+    elif args.action == "create":
+        event = {"subject": args.subject, "start": to_utc(args.start), "end": to_utc(args.end),
+                 "attendees": [{**a, "type": "required"} for a in emails(args.attendees)]}
+        if args.location:
+            event["location"] = {"displayName": args.location}
+        if args.body:
+            event["body"] = {"contentType": "Text", "content": args.body}
+        if args.teams:
+            event.update({"isOnlineMeeting": True, "onlineMeetingProvider": "teamsForBusiness"})
+        created = graph("POST", "me/events", event)
+        print(f"Created \"{args.subject}\" on {local(created.get('start', event['start']))}.")
+        if created.get("webLink"):
+            print(f"Open: {created['webLink']}")
+    elif args.action == "free":
+        found = graph("POST", "me/calendar/getSchedule", {
+            "schedules": [p.strip() for p in args.people.split(",") if p.strip()],
+            "startTime": to_utc(args.start), "endTime": to_utc(args.end), "availabilityViewInterval": 30})
+        for schedule in found.get("value", []):
+            busy = [f"{local(i['start'])}–{local(i['end'])[-5:]} {i.get('status')}" for i in schedule.get("scheduleItems", [])]
+            error = (schedule.get("error") or {}).get("message")
+            print(f"{schedule.get('scheduleId')}: " + (error or ("free the whole time" if not busy else "; ".join(busy))))
+
+
+# ── Files: OneDrive and SharePoint ───────────────────────────────────────────────────────────
+
+def drive_base(drive):
+    return f"drives/{q(drive)}" if drive else "me/drive"
+
+
+def item_path(target, drive):
+    """A drive item by ID, or by path from the drive's root."""
+    if re.fullmatch(r"[0-9A-Za-z!]{10,}", target) and "/" not in target:
+        return f"{drive_base(drive)}/items/{q(target)}"
+    return f"{drive_base(drive)}/root:/{urllib.parse.quote(target.strip('/'))}:"
+
+
+def files(args):
+    if args.action == "search":
+        found = graph("POST", "search/query", {"requests": [{
+            "entityTypes": ["driveItem"], "query": {"queryString": args.words}, "size": args.top,
+            "fields": ["name", "webUrl", "lastModifiedDateTime", "lastModifiedBy", "parentReference", "size"]}]}, soft=True)
+        if found is None:
+            # Organization-wide search needs Files.Read.All/Sites.Read.All; fall back to their OneDrive.
+            print("(Searching their OneDrive only: dot can't search SharePoint on this account.)")
+            mine = graph("GET", f"me/drive/root/search(q='{q(args.words.replace(chr(39), ''))}')?$top={args.top}"
+                                "&$select=id,name,webUrl,lastModifiedDateTime,lastModifiedBy,parentReference")
+            found = {"value": [{"hitsContainers": [{"hits": [{"resource": item} for item in mine.get("value", [])]}]}]}
+        hits = [h for c in found.get("value", []) for g in c.get("hitsContainers", []) for h in g.get("hits", [])]
+        for hit in hits:
+            r = hit.get("resource", {})
+            parent = r.get("parentReference", {})
+            print(f"{r.get('name')}  (changed {str(r.get('lastModifiedDateTime', ''))[:10]} by {who(r.get('lastModifiedBy'))})")
+            print(f"    {r.get('webUrl')}")
+            print(f"    get: ms files get {r.get('id') or hit.get('hitId')} --drive {parent.get('driveId', '?')}")
+        if not hits:
+            print("No files match.")
+    elif args.action == "ls":
+        base = f"{drive_base(args.drive)}/root" + (f":/{urllib.parse.quote(args.folder.strip('/'))}:" if args.folder else "")
+        found = graph("GET", f"{base}/children?$select=id,name,size,folder,lastModifiedDateTime,webUrl&$top=200")
+        for i in found.get("value", []):
+            kind = f"[folder, {i['folder'].get('childCount', 0)} items]" if i.get("folder") else f"{i.get('size', 0) // 1024} KB"
+            print(f"{i['name']}  {kind}  changed {str(i.get('lastModifiedDateTime', ''))[:10]}  id: {i['id']}")
+        if not found.get("value"):
+            print("Empty folder.")
+    elif args.action == "get":
+        path = item_path(args.target, args.drive)
+        meta = graph("GET", f"{path}?$select=name,size,file")
+        out = args.out or meta.get("name") or "download"
+        data = bot("GET", f"download?path={q(path + '/content')}", binary=True)
+        with open(out, "wb") as handle:
+            handle.write(data)
+        print(f"Saved {out} ({len(data) // 1024} KB).")
+    elif args.action == "put":
+        with open(args.local, "rb") as handle:
+            data = handle.read()
+        destination = (args.to or os.path.basename(args.local)).strip("/")
+        path = f"{drive_base(args.drive)}/root:/{urllib.parse.quote(destination)}:/content"
+        text = bot("PUT", f"upload?path={q(path)}", raw=data,
+                   content_type=mimetypes.guess_type(args.local)[0] or "application/octet-stream")
+        try:
+            item = json.loads(text)
+            print(f"Uploaded {destination}: {item.get('webUrl', '')}")
+        except json.JSONDecodeError:
+            print(text)
+    elif args.action == "sites":
+        found = graph("GET", f"sites?search={q(args.words)}&$select=id,displayName,webUrl")
+        for site in found.get("value", []):
+            print(f"{site.get('displayName')}  {site.get('webUrl')}\n    id: {site['id']}")
+        if not found.get("value"):
+            print("No sites match.")
+
+
+# ── Teams ────────────────────────────────────────────────────────────────────────────────────
+
+def print_messages(found):
+    for m in reversed(found.get("value", [])):
+        if m.get("messageType") != "message":
+            continue
+        sender = ((m.get("from") or {}).get("user") or {}).get("displayName") or "?"
+        print(f"{local(m['createdDateTime'])}  {sender}: {plain((m.get('body') or {}).get('content'))[:1000]}")
+
+
+def chat_for(target):
+    """A chat ID, or the 1:1 chat with this email address (Graph returns the existing one)."""
+    if "@" not in target or target.startswith("19:"):
+        return target
+    me = graph("GET", "me?$select=id")["id"]
+    chat = graph("POST", "chats", {"chatType": "oneOnOne", "members": [
+        {"@odata.type": "#microsoft.graph.aadUserConversationMember", "roles": ["owner"],
+         "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{me}')"},
+        {"@odata.type": "#microsoft.graph.aadUserConversationMember", "roles": ["owner"],
+         "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{target}')"}]})
+    return chat["id"]
+
+
+def teams(args):
+    if args.action == "chats":
+        found = graph("GET", f"me/chats?$expand=members,lastMessagePreview"
+                             f"&$orderby=lastMessagePreview/createdDateTime desc&$top={args.top}")
+        for c in found.get("value", []):
+            names = ", ".join(m.get("displayName") or "?" for m in c.get("members", [])[:6])
+            preview = c.get("lastMessagePreview") or {}
+            last = plain((preview.get("body") or {}).get("content"))[:100]
+            print(f"{c.get('topic') or names}  [{c.get('chatType')}]")
+            if last:
+                print(f"    last: {last}")
+            print(f"    id: {c['id']}")
+    elif args.action == "read":
+        print_messages(graph("GET", f"me/chats/{q(args.chat)}/messages?$top={args.top}&$orderby=createdDateTime desc"))
+    elif args.action == "send":
+        chat = chat_for(args.target)
+        graph("POST", f"chats/{q(chat)}/messages", {"body": {"contentType": "text", "content": args.text}})
+        print(f"Sent to chat {chat}.")
+    elif args.action == "list":
+        for team in graph("GET", "me/joinedTeams?$select=id,displayName").get("value", []):
+            print(f"{team['displayName']}  id: {team['id']}")
+            for channel in graph("GET", f"teams/{q(team['id'])}/channels?$select=id,displayName").get("value", []):
+                print(f"    #{channel['displayName']}  id: {channel['id']}")
+    elif args.action == "channel":
+        print_messages(graph("GET", f"teams/{q(args.team)}/channels/{q(args.channel)}/messages?$top={args.top}"))
+    elif args.action == "post":
+        graph("POST", f"teams/{q(args.team)}/channels/{q(args.channel)}/messages",
+              {"body": {"contentType": "text", "content": args.text}})
+        print("Posted.")
+
+
+# ── Planner ──────────────────────────────────────────────────────────────────────────────────
+
+def planner(args):
+    if args.action == "plans":
+        for plan in graph("GET", "me/planner/plans?$select=id,title,owner").get("value", []):
+            print(f"{plan['title']}  id: {plan['id']}")
+    elif args.action == "tasks":
+        path = f"planner/plans/{q(args.plan)}/tasks" if args.plan else "me/planner/tasks"
+        for t in graph("GET", path).get("value", []):
+            done = "done" if t.get("percentComplete") == 100 else f"{t.get('percentComplete', 0)}%"
+            due = f", due {str(t.get('dueDateTime'))[:10]}" if t.get("dueDateTime") else ""
+            print(f"{t['title']}  ({done}{due})  id: {t['id']}")
+    elif args.action == "create":
+        task = {"planId": args.plan, "title": args.title}
+        if args.bucket:
+            task["bucketId"] = args.bucket
+        if args.due:
+            task["dueDateTime"] = f"{args.due}T17:00:00Z"
+        if args.assign:
+            assignments = {}
+            for address in args.assign.split(","):
+                user = graph("GET", f"users/{q(address.strip())}?$select=id")
+                assignments[user["id"]] = {"@odata.type": "#microsoft.graph.plannerAssignment", "orderHint": " !"}
+            task["assignments"] = assignments
+        created = graph("POST", "planner/tasks", task)
+        print(f"Created \"{args.title}\"  id: {created.get('id')}")
+    elif args.action == "done":
+        task = graph("GET", f"planner/tasks/{q(args.task)}")
+        graph("PATCH", f"planner/tasks/{q(args.task)}", {"percentComplete": 100},
+              headers={"If-Match": task.get("@odata.etag", "*")})
+        print(f"Marked \"{task.get('title')}\" done.")
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="ms", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    areas = parser.add_subparsers(dest="area", required=True)
+    for name in ("status", "connect", "disconnect"):
+        areas.add_parser(name)
+    for name in ("get", "post", "patch", "put", "delete"):
+        raw = areas.add_parser(name)
+        raw.add_argument("path")
+        raw.add_argument("--json", dest="body")
+        raw.add_argument("--header", action="append", default=[])
+
+    m = areas.add_parser("mail").add_subparsers(dest="action", required=True)
+    p = m.add_parser("list")
+    p.add_argument("--folder", default="inbox")
+    p.add_argument("--unread", action="store_true")
+    p.add_argument("--from", dest="sender")
+    p.add_argument("--search")
+    p.add_argument("--top", type=int, default=15)
+    m.add_parser("read").add_argument("id")
+    p = m.add_parser("send")
+    p.add_argument("--to", required=True)
+    p.add_argument("--cc")
+    p.add_argument("--bcc")
+    p.add_argument("--subject", required=True)
+    p.add_argument("--body", required=True)
+    p.add_argument("--html", action="store_true")
+    p.add_argument("--attach", action="append")
+    p = m.add_parser("reply")
+    p.add_argument("id")
+    p.add_argument("--body", required=True)
+    p.add_argument("--all", action="store_true")
+
+    c = areas.add_parser("calendar").add_subparsers(dest="action", required=True)
+    p = c.add_parser("list")
+    p.add_argument("--from", dest="start")
+    p.add_argument("--to", dest="end")
+    p.add_argument("--days", type=int, default=7)
+    p = c.add_parser("create")
+    p.add_argument("--subject", required=True)
+    p.add_argument("--start", required=True)
+    p.add_argument("--end", required=True)
+    p.add_argument("--attendees")
+    p.add_argument("--teams", action="store_true")
+    p.add_argument("--location")
+    p.add_argument("--body")
+    p = c.add_parser("free")
+    p.add_argument("--people", required=True)
+    p.add_argument("--start", required=True)
+    p.add_argument("--end", required=True)
+
+    f = areas.add_parser("files").add_subparsers(dest="action", required=True)
+    p = f.add_parser("search")
+    p.add_argument("words")
+    p.add_argument("--top", type=int, default=15)
+    p = f.add_parser("ls")
+    p.add_argument("folder", nargs="?")
+    p.add_argument("--drive")
+    p = f.add_parser("get")
+    p.add_argument("target")
+    p.add_argument("--drive")
+    p.add_argument("--out")
+    p = f.add_parser("put")
+    p.add_argument("local")
+    p.add_argument("--to")
+    p.add_argument("--drive")
+    f.add_parser("sites").add_argument("words")
+
+    t = areas.add_parser("teams").add_subparsers(dest="action", required=True)
+    t.add_parser("chats").add_argument("--top", type=int, default=20)
+    p = t.add_parser("read")
+    p.add_argument("chat")
+    p.add_argument("--top", type=int, default=20)
+    p = t.add_parser("send")
+    p.add_argument("target")
+    p.add_argument("text")
+    t.add_parser("list")
+    p = t.add_parser("channel")
+    p.add_argument("team")
+    p.add_argument("channel")
+    p.add_argument("--top", type=int, default=20)
+    p = t.add_parser("post")
+    p.add_argument("team")
+    p.add_argument("channel")
+    p.add_argument("text")
+
+    pl = areas.add_parser("planner").add_subparsers(dest="action", required=True)
+    pl.add_parser("plans")
+    pl.add_parser("tasks").add_argument("--plan")
+    p = pl.add_parser("create")
+    p.add_argument("--plan", required=True)
+    p.add_argument("--title", required=True)
+    p.add_argument("--bucket")
+    p.add_argument("--due")
+    p.add_argument("--assign")
+    pl.add_parser("done").add_argument("task")
+
+    args = parser.parse_args()
+    if args.area == "status":
+        print(bot("GET", "status"))
+    elif args.area == "connect":
+        print(bot("POST", "connect"))
+    elif args.area == "disconnect":
+        print(bot("DELETE", "connect"))
+    elif args.area in ("get", "post", "patch", "put", "delete"):
+        try:
+            body = json.loads(args.body) if args.body else None
+        except json.JSONDecodeError as error:
+            sys.exit(f"error: --json isn't valid JSON ({error}).")
+        headers = dict(h.split(":", 1) for h in args.header if ":" in h)
+        print(bot("POST", "request", {"method": args.area.upper(), "path": args.path, "body": body,
+                                      "headers": {k.strip(): v.strip() for k, v in headers.items()}}))
+    else:
+        {"mail": mail, "calendar": calendar, "files": files, "teams": teams, "planner": planner}[args.area](args)
+
+
+if __name__ == "__main__":
+    main()
