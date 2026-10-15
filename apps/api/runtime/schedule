@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""
+Scheduled tasks: dot runs a task later, or on a schedule, and posts the answer to Slack.
+Each run is a fresh conversation that only gets the task text (and the person's memory), so write
+the task to stand on its own: what to do, for whom, and what the answer should look like.
+
+  schedule add --at "YYYY-MM-DD HH:MM" --task "<what to do>" [--name "<label>"] [--post thread|channel|dm]
+  schedule add --cron "<min> <hour> <day> <month> <weekday>" --task "<what to do>" [--name ...] [--post ...]
+  schedule list
+  schedule remove <id>
+
+Times are in the person's time zone ($DOT_TIMEZONE). Recurring tasks run at most hourly (the
+minute must be a single number). --post: this thread (default), the channel itself, or a DM.
+A run that finds nothing worth saying replies exactly [SILENT] and nothing is posted.
+"""
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+API = os.environ.get("DOT_API")
+CALLER = os.environ.get("DOT_CALLER")
+
+
+def call(method, path, body=None):
+    if not API or not CALLER:
+        sys.exit("error: scheduling isn't available here (no connection to the bot in this turn).")
+    request = urllib.request.Request(
+        f"{API}{path}",
+        method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"x-dot-caller": CALLER, "content-type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            print(json.load(response)["text"])
+    except urllib.error.HTTPError as error:
+        try:
+            message = json.load(error)["text"]
+        except Exception:
+            message = f"HTTP {error.code}"
+        sys.exit(f"error: {message}")
+    except urllib.error.URLError as error:
+        sys.exit(f"error: couldn't reach the bot ({error.reason}).")
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="schedule", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = parser.add_subparsers(dest="command", required=True)
+    add = commands.add_parser("add")
+    when = add.add_mutually_exclusive_group(required=True)
+    when.add_argument("--at")
+    when.add_argument("--cron")
+    add.add_argument("--task", required=True)
+    add.add_argument("--name")
+    add.add_argument("--post", choices=["thread", "channel", "dm"], default="thread")
+    commands.add_parser("list")
+    remove = commands.add_parser("remove")
+    remove.add_argument("id")
+    args = parser.parse_args()
+
+    if args.command == "list":
+        call("GET", "/schedule")
+    elif args.command == "remove":
+        call("DELETE", f"/schedule/{args.id}")
+    else:
+        body = {"task": args.task, "name": args.name, "post": args.post, "timezone": os.environ.get("DOT_TIMEZONE", "UTC")}
+        body["at" if args.at else "cron"] = args.at or args.cron
+        call("POST", "/schedule", body)
+
+
+if __name__ == "__main__":
+    main()

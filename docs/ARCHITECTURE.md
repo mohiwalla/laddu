@@ -29,6 +29,8 @@ apps/
       agent/errors.ts  failure classes → message + recovery (retry, fresh thread, quota pause)
       agent/learning.ts turn log + background memory review
       agent/tools.ts   runs runtime/ commands for a user (container or host)
+      agent/bot-api.ts API for container commands that need the bot (`schedule`), signed per turn
+      scheduler.ts     scheduled tasks: store, cron/time-zone maths, 30-second check
       slack/context.ts Slack messages → transcript for Codex
       slack/attachments.ts Slack files in (downloads) and out (outbox uploads)
       slack/handlers.ts mention/DM handling
@@ -37,7 +39,7 @@ apps/
                        needs undici's `ping`, which Bun's undici lacks)
     agent-home/        AGENTS.md = bot persona (mounted read-only into containers)
     runtime/           commands for Codex (Python, stdlib): `memory` (per-user memory),
-                       `recall` (search past conversations)
+                       `recall` (search past conversations), `schedule` (scheduled tasks)
     docker/Dockerfile  per-user runtime image (Debian + the SDK's own codex build)
     scripts/codex-docker.sh stand-in `codex` that runs the real one via `docker exec`
     slack-manifest.yaml
@@ -94,6 +96,29 @@ Everything Codex executes runs in a Docker container dedicated to the Slack user
 
 `CODEX_RUNTIME="host"` runs Codex on the host instead (Codex sandbox only: blocks writes outside
 `agent-home`, but can read your files). Owner-only use at most.
+
+## Ways in
+
+- **@mention** in channels (`app_mention`) and group DMs (`message.mpim` containing the mention;
+  Slack sends no `app_mention` there), and **every DM** (`message.im`).
+- **Reaction**: reacting with `TRIGGER_EMOJI` (default `robot_face`) to a message asks dot to
+  handle that message; it answers in the message's thread, for the person who reacted.
+- **`/dot <request>`**: dot posts "<@you> asked: …" where it was typed and answers in its thread
+  (in channels it's in, and its DM). Otherwise an ephemeral note says to invite it.
+- **"Ask dot" message shortcut**: a modal asks what to do with the message (optional), then dot
+  answers in that message's thread.
+- If dot can't post where it was asked (not in the channel), it DMs the person instead.
+
+## Scheduled tasks
+
+Codex creates them with the `schedule` command (`--at` once, or `--cron`, at most hourly; times in
+the person's Slack time zone). The command calls the bot's API (`agent/bot-api.ts`) with
+`DOT_CALLER`, a credential this process signs per turn over (team, user, channel, thread), so a
+request can only act as that person, in that conversation. Jobs live in `.data/schedules.json`;
+every 30 seconds the bot runs due ones as fresh Codex turns for their owner (memory loaded) and
+posts the answer to the thread, the channel or a DM. A run can reply `[SILENT]` to post nothing,
+can't schedule more tasks, and failed one-offs retry after 5, 15 and 30 minutes (from Hermes).
+One-offs missed by more than 6 hours while the bot was down are reported instead of run.
 
 ## Memory and reliability
 
@@ -204,6 +229,9 @@ scratch directory, no integrations.
 - Slack links in the new messages (typed, unfurled or forwarded; up to 3) are read through the API
   and added to the transcript with their attachments, up to 100 messages each. Private channels and
   DMs only if the person asking is a member, so a link can't expose what they couldn't read.
+- Channels mentioned in the new messages (#name; up to 2) are read the same way and with the same
+  privacy rule: their last 100 top-level messages plus the latest 15 replies of the 10 newest
+  threads. If dot isn't in the channel, the prompt says to invite it. Not logged to history.
 - Each turn gets an outbox, `slack-outbox/<turn>/` (host runtime: `.data/slack-outbox/...`, added
   as a writable dir to the sandbox). Files Codex saves there (up to 10, 50 MB each) are uploaded to
   the thread after the reply. Codex can't generate images on the plan route; it can draw them with code.
@@ -212,5 +240,7 @@ scratch directory, no integrations.
   directly (as they can through the bot). No per-user rate limits yet.
 - Containers share Docker's default bridge: they can reach services on the host bound to
   `0.0.0.0`/the bridge, and each other's IPs.
-- Cancelling a turn stops `docker exec` on the host, not the Codex process inside the container.
+- A running answer can't be cancelled from Slack. (`runTurn` takes an `AbortSignal` that also ends
+  the run inside the container, but no Slack control uses it: a Stop button can only be shared,
+  where everyone sees it, or private, where Slack can't remove it afterwards.)
 - State is in local JSON files; one process only.

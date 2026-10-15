@@ -64,18 +64,17 @@ live in `docs/ARCHITECTURE.md` and `docs/SETUP.md`; this is the why and the wher
 - Show live progress, explain failures in plain words (a used-up plan says when it resets), retry
   the ones worth retrying, and pick up answers a restart cut off.
 - Keep a separate conversation with each person in a shared thread.
+- Run scheduled tasks: reminders and recurring work ("every Monday 9am, summarize #sales").
+- Be asked by @mention, DM, group DM, `/dot`, the "Ask dot" message shortcut, or reacting with 🤖
+  (the last four once the Slack app manifest is applied). It reacts instead of replying when a
+  message needs no answer, and adds no status reactions except ❌ on failure.
 
 What it won't do: identify people from photos (the model refuses), generate images (the ChatGPT
 plan route doesn't offer it), or search the web through a built-in tool (it uses `curl` instead).
 
 ### Next
 
-- **Scheduled jobs:** "every Monday 9am, summarize #sales", "remind me tomorrow at 5".
-- **More ways in:** group DMs, emoji reactions, a `/dot` command and buttons, not just tags and DMs.
-- **Per-person usage limits** and **network isolation** between containers, now that the whole
-  workspace uses dot.
-- **Acting in Slack:** search Slack, read other channels, react, create canvases, lists and
-  reminders, message people, with guardrails.
+- **Network isolation** between containers, now that the whole workspace uses dot.
 - **Skills:** how-to guides dot writes for itself and keeps current, loaded only when relevant.
 - **Integrations:** GitHub/repos, Outlook, App Store Connect/TestFlight, issue tracker, so the
   original examples work ("issues reported on TestFlight by Troy last week", "progress on Ask AI").
@@ -84,6 +83,14 @@ plan route doesn't offer it), or search the web through a built-in tool (it uses
   in the thread.
 
 ### Later
+
+Low priority for now (decided 15 Oct):
+
+- **Per-person usage limits** on the ChatGPT plan.
+- **Acting in Slack:** search Slack, react, create canvases, lists and reminders, message people,
+  with guardrails.
+
+Further out:
 
 - **dot's own computer with a browser and computer use**, like OpenAI's dots, for things no API
   exposes (TestFlight's UI, for example). The per-user containers are the first step.

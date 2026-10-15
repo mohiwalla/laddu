@@ -63,6 +63,8 @@ export function loadBotConfig() {
 		contextMessages: Number(optional("CONTEXT_MESSAGES", "20")),
 		/** Every this many turns per person, a background Codex run updates their memory; 0 turns it off. */
 		memoryReviewEvery: Number(optional("MEMORY_REVIEW_EVERY", "3")),
+		/** Reacting with this emoji (name without colons) to a message asks dot to handle it. */
+		triggerEmoji: optional("TRIGGER_EMOJI", "robot_face"),
 	}
 }
 

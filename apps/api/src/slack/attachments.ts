@@ -52,11 +52,11 @@ export async function downloadAttachments(
 	return results.filter(file => file !== null)
 }
 
-/** Uploads files to the thread as one message (needs `files:write`). */
+/** Uploads files as one message, in a thread or (no `threadTs`) the channel (needs `files:write`). */
 export async function uploadFiles(
 	client: WebClient,
 	channel: string,
-	threadTs: string,
+	threadTs: string | undefined,
 	files: { name: string; data: Uint8Array }[],
 ): Promise<void> {
 	if (!files.length) return
@@ -81,6 +81,6 @@ export async function uploadFiles(
 	await client.files.completeUploadExternal({
 		files: uploaded as [(typeof uploaded)[number], ...typeof uploaded],
 		channel_id: channel,
-		thread_ts: threadTs,
+		...(threadTs ? { thread_ts: threadTs } : {}),
 	})
 }

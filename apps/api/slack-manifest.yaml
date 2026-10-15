@@ -21,6 +21,16 @@ features:
   bot_user:
     display_name: dot
     always_online: true
+  slash_commands:
+    - command: /dot
+      description: Ask dot anything; it answers in a thread here
+      usage_hint: summarize this channel's last week
+      should_escape: false
+  shortcuts:
+    - name: Ask dot
+      type: message
+      callback_id: ask_dot
+      description: Ask dot about this message
 oauth_config:
   scopes:
     bot:
@@ -163,8 +173,10 @@ settings:
     bot_events:
       - app_mention
       - message.im
+      - message.mpim
+      - reaction_added
   interactivity:
-    is_enabled: false
+    is_enabled: true
   org_deploy_enabled: false
   socket_mode_enabled: true
   token_rotation_enabled: false

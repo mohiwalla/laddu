@@ -245,6 +245,16 @@ export async function listContainerDir(container: string, dir: string) {
 		})
 }
 
+/** Ends one Codex run inside a container (Stop): the wrapper names it codex[turn=<id>]. */
+export async function stopRun(
+	container: string,
+	turnId: string,
+): Promise<void> {
+	await Bun.$`docker exec ${container} pkill -f ${`^codex\\[turn=${turnId}\\]`}`
+		.quiet()
+		.nothrow()
+}
+
 /**
  * Stops Codex runs left in this workspace's containers by a previous bot process. Killing the bot
  * only ends `docker exec` on the host; the run inside keeps going and holds its thread's lock
@@ -255,7 +265,7 @@ export async function stopOrphanedRuns(teamId: string): Promise<void> {
 		await Bun.$`docker ps --filter label=dot.bot=1 --filter ${`label=dot.team=${teamId}`} --format ${"{{.Names}}"}`.text()
 	for (const name of listing.split("\n").filter(Boolean)) {
 		const killed =
-			await Bun.$`docker exec ${name} pkill -f ${"^codex exec"}`
+			await Bun.$`docker exec ${name} pkill -f ${"^codex(\\[turn=[^]]*\\])? exec"}`
 				.quiet()
 				.nothrow()
 		if (killed.exitCode === 0)

@@ -21,9 +21,11 @@ import {
 	ensureContainer,
 	listContainerDir,
 	makeDirInContainer,
+	stopRun,
 	writeIntoContainer,
 } from "./containers"
 import { startModelProxy } from "./model-proxy"
+import { botApiUrl, callerCredential } from "./bot-api"
 import { stepTracker, type Step } from "./steps"
 import { hostToolEnv, runTool } from "./tools"
 
@@ -66,7 +68,12 @@ const MAX_OUT_FILES = 10
 const MAX_OUT_BYTES = 50 * 1024 * 1024
 
 /** Attachments are saved under `slack-files/`, the turn's outbox is `slack-outbox/<turn>/`. */
-async function createCodex(config: BotConfig, user: TurnUser) {
+async function createCodex(
+	config: BotConfig,
+	user: TurnUser,
+	turnId: string,
+	turnEnv: Record<string, string>,
+) {
 	const base: ThreadOptions = {
 		model: config.model,
 		modelReasoningEffort: config.reasoningEffort,
@@ -74,10 +81,6 @@ async function createCodex(config: BotConfig, user: TurnUser) {
 		// Nobody is around to approve commands mid-turn.
 		approvalPolicy: "never",
 	}
-	const turnId =
-		new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-") +
-		`-${crypto.randomUUID().slice(0, 4)}`
-
 	if (config.runtime === "host") {
 		// Outside the workdir, which is the persona folder.
 		const owner = `${user.teamId}-${user.userId}`
@@ -88,6 +91,7 @@ async function createCodex(config: BotConfig, user: TurnUser) {
 			CODEX_HOME: paths.codexHome,
 			ACCESS_TOKEN: await getAccessToken(),
 			...toolEnv,
+			...turnEnv,
 			PATH: `${TOOLS_DIR}:${Bun.env.PATH ?? ""}`,
 		})
 		return {
@@ -109,6 +113,8 @@ async function createCodex(config: BotConfig, user: TurnUser) {
 				return path
 			},
 			outbox,
+			// The SDK ends the codex process itself when the turn's signal aborts.
+			stop: async () => {},
 			listOutbox: async (): Promise<OutboxEntry[]> => {
 				const names = await Array.fromAsync(
 					new Bun.Glob("*").scan({ cwd: outbox, onlyFiles: true }),
@@ -134,6 +140,7 @@ async function createCodex(config: BotConfig, user: TurnUser) {
 			env: codexEnv({
 				DOT_CONTAINER: container,
 				DOT_PROXY_KEY: proxy.key,
+				...turnEnv,
 			}),
 		}),
 		// The container is the boundary (network is set on the container), so no nested sandbox.
@@ -148,6 +155,8 @@ async function createCodex(config: BotConfig, user: TurnUser) {
 			return path
 		},
 		outbox,
+		// Aborting only ends `docker exec` on the host; the run inside needs ending too.
+		stop: () => stopRun(container, turnId),
 		listOutbox: () => listContainerDir(container, outbox),
 	}
 }
@@ -198,13 +207,49 @@ export async function runTurn(options: {
 	threadId?: string
 	input: string
 	files?: TurnFile[]
+	/** Cancels the turn (Stop button). */
+	signal?: AbortSignal
+	/** The Slack conversation the turn is for, so commands like `schedule` can act on it. */
+	slack?: {
+		channel: string
+		threadTs: string
+		timezone: string
+		scheduled?: boolean
+	}
 	onStep?: (step: Step) => void
 }): Promise<TurnResult> {
-	const { config, input } = options
+	const { config, input, slack } = options
 	const track = stepTracker(step => options.onStep?.(step))
 
-	const { codex, threadOptions, saveFile, outbox, listOutbox } =
-		await createCodex(config, options.user)
+	const turnId =
+		new Date()
+			.toISOString()
+			.slice(0, 19)
+			.replace(/[T:]/g, "-")
+			.toLowerCase() + `-${crypto.randomUUID().slice(0, 4)}`
+	const api = botApiUrl()
+	const turnEnv: Record<string, string> = {
+		DOT_TURN: turnId,
+		...(slack
+			? {
+					DOT_CALLER: callerCredential({
+						...options.user,
+						channel: slack.channel,
+						threadTs: slack.threadTs,
+						scheduled: slack.scheduled ?? false,
+					}),
+					DOT_TIMEZONE: slack.timezone,
+					...(api ? { DOT_API: api } : {}),
+				}
+			: {}),
+	}
+	const { codex, threadOptions, saveFile, outbox, listOutbox, stop } =
+		await createCodex(config, options.user, turnId, turnEnv)
+	options.signal?.addEventListener(
+		"abort",
+		() => void stop().catch(() => {}),
+		{ once: true },
+	)
 	// Loaded once per Codex thread, like a system prompt; resumed threads already have it.
 	const memory = options.threadId
 		? null
@@ -241,7 +286,9 @@ export async function runTurn(options: {
 		? codex.resumeThread(options.threadId, threadOptions)
 		: codex.startThread(threadOptions)
 
-	const { events } = await thread.runStreamed(turnInput)
+	const { events } = await thread.runStreamed(turnInput, {
+		signal: options.signal,
+	})
 	let threadId = options.threadId ?? null
 	let text = ""
 	let completed = false

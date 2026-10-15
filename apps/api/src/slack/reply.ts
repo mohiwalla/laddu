@@ -19,6 +19,26 @@ export type ReplyTarget = {
 	teamId: string
 }
 
+/** Reads one message of a thread back (to see what a stream left behind). */
+async function readMessage(
+	client: WebClient,
+	channel: string,
+	threadTs: string,
+	ts: string,
+) {
+	const page = await client.conversations
+		.replies({
+			channel,
+			ts: threadTs,
+			oldest: ts,
+			latest: ts,
+			inclusive: true,
+			limit: 1,
+		})
+		.catch(() => null)
+	return page?.messages?.find(candidate => candidate.ts === ts)
+}
+
 export type Reply = {
 	/** The reply message; `streaming` when it's a Slack stream rather than a plain placeholder. */
 	ts: string
@@ -27,6 +47,8 @@ export type Reply = {
 	/** Posts the answer; an empty answer (files only) just closes the progress. */
 	finish(text: string): Promise<void>
 	fail(message: string): Promise<void>
+	/** Removes the reply altogether (the answer was only a reaction). */
+	discard(): Promise<void>
 }
 
 /** Slack's limit for `markdown_text`. */
@@ -260,6 +282,15 @@ async function openStream(
 				],
 			})
 		},
+		async discard() {
+			await settle("complete")
+			await client.chat.stopStream({ channel, ts }).catch(() => {})
+			await client.chat
+				.delete({ channel, ts })
+				.catch(error =>
+					console.warn("[reply] couldn't remove the reply:", error),
+				)
+		},
 	}
 }
 
@@ -349,6 +380,10 @@ async function openPlaceholder(
 				markdown_text: `:warning: ${message}`,
 			})
 		},
+		async discard() {
+			await close()
+			await client.chat.delete({ channel, ts }).catch(() => {})
+		},
 	}
 }
 
@@ -365,17 +400,12 @@ export async function closeInterrupted(
 		return
 	}
 	// This process never saw the steps; read the ones still spinning off the message itself.
-	const page = await client.conversations
-		.replies({
-			channel,
-			ts: target.threadTs,
-			oldest: reply.ts,
-			latest: reply.ts,
-			inclusive: true,
-			limit: 1,
-		})
-		.catch(() => null)
-	const message = page?.messages?.find(candidate => candidate.ts === reply.ts)
+	const message = await readMessage(
+		client,
+		channel,
+		target.threadTs,
+		reply.ts,
+	)
 	// The SDK's block types predate plan blocks.
 	type PlanBlock = {
 		type: string
