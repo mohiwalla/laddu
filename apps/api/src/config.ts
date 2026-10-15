@@ -39,6 +39,7 @@ export function loadBotConfig() {
 	return {
 		slackBotToken: required("SLACK_BOT_TOKEN"),
 		slackAppToken: required("SLACK_APP_TOKEN"),
+		/** Who runs this bot. Only the default for ALLOWED_SLACK_USERS; it gets no special treatment. */
 		ownerUserId,
 		/** Who can use the bot: "*" for everyone in the workspace, else comma-separated user IDs. */
 		allowedUsers:
@@ -54,6 +55,11 @@ export function loadBotConfig() {
 		) as ModelReasoningEffort,
 		/** Fast mode (Codex's service_tier "fast"): quicker answers that use more of the plan's limits. */
 		fast: optional("CODEX_FAST", "false") === "true",
+		/**
+		 * Docker runtime: every container gets internet only, without access to
+		 * this machine's services, its local network or other people's containers.
+		 */
+		isolateNetwork: optional("ISOLATE_NETWORK", "true") === "true",
 		/** Host runtime only; in Docker the container is the boundary. */
 		sandbox: optional("CODEX_SANDBOX", "workspace-write") as SandboxMode,
 		/**

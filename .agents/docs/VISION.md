@@ -2,42 +2,54 @@
 
 ## 14th October 2026
 
-I want to create an slack app/bot which I can tag anywhere in my workspace being it a DM or channel to help me with day to day stuff.
-Eg: "@bot, list all issues reported on TestFlight by Troy in last week"/"@bot, What's the rough progress we've made so far in Ask AI feature, what's left?"
+A Slack app you can tag anywhere in a workspace, in a DM or a channel, to help with day-to-day work.
+For example: "@bot, list all issues reported on TestFlight by a teammate last week" or "@bot, what's
+the rough progress on the new search feature, and what's left?"
 
-And it should be able to fetch the data from my backend, which will have all the plugins and stuff that we need hooked into it, being it Outlook, the external sources like access to my repositories or whatever the query demands.
+It should fetch data through a backend that has the integrations the query needs hooked in: email,
+calendars, repositories, issue trackers and so on.
 
-So the bot will basically be communicating with my backend. I don't know how that's going to work, but that's what I have in my mind. It could spin new Claude code or Codex threads for me. to handle some real-life work. For example, I could say "@bot complete the rest of the features for Ask AI", Of course, bot itself can't do that, so it will have to intelligently use Codex or Claude code. Of course, I don't think there will be even one instance where it will be able to do anything. For every single use case, it will have to spin up Codex, let's say. Let's not consider Claude code in this scope for now. So yeah, I will be able to hook in the Codex and delegate some tasks, which will be sitting at the backend listening to all the messages. I don't know how that's going to work. I don't know the details, but I know how it should function from user's perspective.
+The bot talks to that backend, which can spin up Codex threads for real work. For example, "@bot,
+finish the remaining parts of the search feature". The bot can't do that by itself, so every request
+goes to Codex, which sits behind the bot, listening to the messages it's given and doing the work.
+Claude Code is out of scope for now.
 
-And for Codex, basically the AI part, the brain, should be working behind the scenes for bot. We need to implement some sign in with ChatGPT feature. I think they have launched it recently, although I don't know if it is widely available for us to use. And if it is, then we can simply hook up like any other agent harness, being it Pi agent, open code. Like they also give us the option to sign in with Codex or sign in with ChatGPT. So I think with that, we should be good with that.
+Codex is the brain. It runs on a ChatGPT plan through Sign in with ChatGPT, the way agent harnesses
+such as Pi or OpenCode let you sign in with ChatGPT instead of using an API key.
 
 ## 15th October 2026
 
-The bot exists now. It's called **dot** (`@dot`), and V0 is live in the srafis workspace. Details
-live in `docs/ARCHITECTURE.md` and `docs/SETUP.md`; this is the why and the where-next.
+The bot exists now. It's called **dot** (`@dot`), and V0 is live in a team workspace. Details live
+in `docs/ARCHITECTURE.md` and `docs/SETUP.md`; this is the why and the where-next.
 
 ### Decisions so far
 
 - **Codex is the brain, for every request.** The bot never does work itself: each tag becomes a
   Codex turn (via the Codex SDK), and the bot only moves messages between Slack and Codex. Claude
   Code stays out of scope.
-- **Billed to my ChatGPT plan via Sign in with ChatGPT.** It did launch (DevDay, 29 Sep 2026).
-  dot registers as its own client and uses the "plan usage" grant; no API key, no reusing the
-  Codex CLI login.
-- **Integrations live in the backend, not in Slack.** Outlook, repos, TestFlight and so on will be
+- **Billed to the owner's ChatGPT plan via Sign in with ChatGPT.** It did launch (DevDay, 29 Sep
+  2026). dot registers as its own client and uses the "plan usage" grant; no API key, no reusing
+  the Codex CLI login.
+- **Integrations live in the backend, not in Slack.** Email, repos, TestFlight and so on will be
   tools Codex can call (MCP servers), so the bot stays one Slack app and works on Slack's free plan.
 - **Stack: Bun + TypeScript, Bun APIs only, Turborepo monorepo.** The backend is `apps/api`; room
   for more apps later (integrations, a dashboard, a marketing site).
-- **Slack over Socket Mode.** My machine holds an outgoing connection to Slack; nothing is exposed
-  or tunnelled. The app asks for every scope a non-Enterprise workspace allows, so features never
-  wait on reinstalls.
+- **Slack over Socket Mode.** The machine running dot holds an outgoing connection to Slack; nothing
+  is exposed or tunnelled. The app asks for every scope a non-Enterprise workspace allows, so
+  features never wait on reinstalls.
 - **Context comes from the conversation.** dot reads the thread, or the channel messages before
   the tag, and can tag people properly.
-- **Open to everyone in srafis, each in their own computer.** Started as owner-only; now anyone
-  who tags `@dot` gets a private Docker container (their own workspace that persists, no access to
-  my machine). My ChatGPT token never enters a container; a small proxy on my machine adds it.
-  mohiwalla stays owner-only.
-- **Runs on my machine** as a systemd service. When my machine is off, dot is off.
+- **Owner first, then the whole team, each in their own computer.** A new install answers only its
+  owner; `ALLOWED_SLACK_USERS` opens it up. Everyone who tags `@dot` gets a private Docker
+  container (their own workspace that persists, no access to the host). The ChatGPT token never
+  enters a container; a small proxy on the host adds it. Being the owner brings no special
+  treatment.
+- **Containers get the internet only, the owner's included.** No access to the host's services,
+  its local network or each other. No owner exception, since dot is meant to run on a shared
+  server for a whole team; `ISOLATE_NETWORK="false"` turns it off.
+- **Runs as a service** (systemd on Linux). When the host is off, dot is off.
+- **A public, generic repo.** Nothing in it is tied to one person, workspace or machine:
+  deployment-specific settings live in git-ignored `.env` files and `AGENTS.local.md`.
 - **Borrow from Hermes Agent where it fits.** NousResearch's open-source agent (MIT) runs on Codex
   too, so its ideas port: per-person memory, searchable past conversations, a background pass that
   learns from recent turns, surviving restarts, and sorting errors into ones to retry and ones to
@@ -65,21 +77,20 @@ live in `docs/ARCHITECTURE.md` and `docs/SETUP.md`; this is the why and the wher
   the ones worth retrying, and pick up answers a restart cut off.
 - Keep a separate conversation with each person in a shared thread.
 - Run scheduled tasks: reminders and recurring work ("every Monday 9am, summarize #sales").
-- Be asked by @mention, DM, group DM, `/dot`, the "Ask dot" message shortcut, or reacting with 🤖
-  (the last four once the Slack app manifest is applied). It reacts instead of replying when a
-  message needs no answer, and adds no status reactions except ❌ on failure.
+- Be asked by @mention, DM, group DM, `/dot`, the "Ask dot" message shortcut, or reacting with 🤖.
+  It reacts instead of replying when a message needs no answer, and adds no status reactions
+  except ❌ on failure.
 
 What it won't do: identify people from photos (the model refuses), generate images (the ChatGPT
 plan route doesn't offer it), or search the web through a built-in tool (it uses `curl` instead).
 
 ### Next
 
-- **Network isolation** between containers, now that the whole workspace uses dot.
 - **Skills:** how-to guides dot writes for itself and keeps current, loaded only when relevant.
-- **Integrations:** GitHub/repos, Outlook, App Store Connect/TestFlight, issue tracker, so the
-  original examples work ("issues reported on TestFlight by Troy last week", "progress on Ask AI").
-- **A context map:** project names ("Ask AI") → the repos, trackers and docs that describe them.
-- **Real work:** "complete the rest of Ask AI" runs in an isolated checkout and ends with a PR link
+- **Integrations:** GitHub/repos, email, App Store Connect/TestFlight, issue tracker, so the
+  original examples work ("issues reported on TestFlight last week", "progress on a feature").
+- **A context map:** project names → the repos, trackers and docs that describe them.
+- **Real work:** "finish the search feature" runs in an isolated checkout and ends with a PR link
   in the thread.
 
 ### Later
@@ -95,21 +106,20 @@ Further out:
 - **dot's own computer with a browser and computer use**, like OpenAI's dots, for things no API
   exposes (TestFlight's UI, for example). The per-user containers are the first step.
 - **A dashboard** to watch what dot is doing on its computer.
-- **Always on:** host it somewhere other than my laptop.
+- **Always on:** host it on a server (a VPS) for the whole team instead of a personal machine.
 - **Guardrails:** approval before write actions, an audit log.
 - **Per-user billing** (each person signs in with their own ChatGPT) and teammates running their
   own dot.
 
 ### Open questions
 
-- Everyone's usage bills my ChatGPT plan. dot now explains a used-up plan and backs off, but there
-  are no per-person limits yet, and OpenAI's terms on serving others from a personal plan need
-  checking before this spreads.
+- Everyone's usage bills the owner's ChatGPT plan. dot explains a used-up plan and backs off, but
+  there are no per-person limits yet, and OpenAI's terms on serving others from a personal plan
+  need checking before this spreads.
 - Sign in with ChatGPT plan usage is meant for local, personal projects; hosting dot remotely may
   need OpenAI's approval.
 - Once private integrations exist, anyone who can tag dot could reach them. They'll need scoping
   per user.
 - Other people's messages, linked threads and anything dot fetches are untrusted input (prompt
   injection). Memory refuses entries that look like injection and the containers limit the damage,
-  but the rules matter more once dot can act on my accounts.
-- Containers can still reach each other and services on my machine over Docker's default network.
+  but the rules matter more once dot can act on someone's accounts.

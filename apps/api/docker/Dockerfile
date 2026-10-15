@@ -22,6 +22,12 @@ RUN useradd --create-home --uid 1000 --shell /bin/bash dot \
 
 COPY codex /opt/codex
 
+# For the bot's network rules (src/agent/containers.ts): applied from a short-lived root helper
+# with NET_ADMIN; the user's own container has no capabilities, so it can't run or undo them.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends iptables \
+ && rm -rf /var/lib/apt/lists/*
+
 USER dot
 WORKDIR /home/dot/workspace
 ENV HOME=/home/dot CODEX_HOME=/home/dot/.codex PATH=/opt/codex/bin:/opt/codex/codex-path:$PATH \

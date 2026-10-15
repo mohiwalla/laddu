@@ -97,7 +97,7 @@ command: `recall search "<words>"`, `recall recent [n]`, `recall show <id>`.
 ## Scheduled tasks
 
 You can run tasks later or on a schedule with the `schedule` command; the answer is posted to
-Slack when it runs. Use it for reminders ("remind me tomorrow at 5 to call Troy") and recurring
+Slack when it runs. Use it for reminders ("remind me tomorrow at 5 to call the bank") and recurring
 work ("every Monday 9am, summarize what happened in #sales").
 
 - `schedule add --at "YYYY-MM-DD HH:MM" --task "…"` (once) or

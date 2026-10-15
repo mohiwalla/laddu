@@ -8,6 +8,7 @@ import { paths } from "../config"
 import { writePrivate } from "../files"
 import { codexConfig } from "./codex-config"
 import { startModelProxy, type ModelProxy } from "./model-proxy"
+import { botApiUrl } from "./bot-api"
 
 const appRoot = Bun.fileURLToPath(new URL("../../", import.meta.url))
 const dirname = (path: string) => path.slice(0, path.lastIndexOf("/"))
@@ -141,6 +142,7 @@ export function ensureContainer(
 	const inflight = pending.get(name)
 	if (inflight) return inflight
 
+	const isolated = config.isolateNetwork
 	const task = (async () => {
 		if (!imageTag)
 			throw new Error("prepareDocker() must run before ensureContainer()")
@@ -154,6 +156,9 @@ export function ensureContainer(
 			`dot.team=${teamId}`,
 			"--label",
 			`dot.user=${userId}`,
+			// Part of the spec, so turning isolation off recreates the container without the rules.
+			"--label",
+			`dot.isolated=${isolated ? 1 : 0}`,
 			"--restart",
 			"unless-stopped",
 			"--memory",
@@ -166,7 +171,8 @@ export function ensureContainer(
 			"ALL",
 			"--security-opt",
 			"no-new-privileges",
-			// Always networked: Codex reaches the model through the proxy on the bridge gateway.
+			// Always networked: Codex reaches the model through the proxy on the bridge gateway. With
+			// ISOLATE_NETWORK on, it's then limited to the internet (see isolate()).
 			"--volume",
 			`dot-home-${slug(teamId)}-${slug(userId)}:${CONTAINER_HOME}`,
 			// Directories, not files: a file bind mount keeps the old inode when an editor replaces the
@@ -190,20 +196,76 @@ export function ensureContainer(
 			.split(" ")
 		if (inspect.exitCode === 0 && currentSpec === spec) {
 			if (running !== "true") await Bun.$`docker start ${name}`.quiet()
-			return name
+		} else {
+			// Missing, or created from an older image/options: (re)create it. The volume keeps the user's files.
+			if (inspect.exitCode === 0)
+				await Bun.$`docker rm --force ${name}`.quiet()
+			await Bun.$`docker run --detach --name ${name} --label ${`dot.spec=${spec}`} ${options}`.quiet()
+			console.log(`[containers] started ${name} for ${userId}`)
 		}
-		// Missing, or created from an older image/options: (re)create it. The volume keeps the user's files.
-		if (inspect.exitCode === 0)
-			await Bun.$`docker rm --force ${name}`.quiet()
-
-		await Bun.$`docker run --detach --name ${name} --label ${`dot.spec=${spec}`} ${options}`.quiet()
-		console.log(`[containers] started ${name} for ${userId}`)
+		if (isolated) await isolate(name)
 		return name
 	})()
 
 	pending.set(name, task)
 	task.finally(() => pending.delete(name)).catch(() => {})
 	return task
+}
+
+/** Addresses that aren't the public internet: this machine, the home network, other containers. */
+const PRIVATE_RANGES = [
+	"0.0.0.0/8",
+	"10.0.0.0/8",
+	"100.64.0.0/10",
+	"127.0.0.0/8",
+	"169.254.0.0/16",
+	"172.16.0.0/12",
+	"192.168.0.0/16",
+	"224.0.0.0/4",
+	"240.0.0.0/4",
+].join(",")
+
+/** Container → the start time its rules were applied at; a restart (or reboot) clears them. */
+const isolatedAt = new Map<string, string>()
+
+/**
+ * Internet only: blocks this machine's services (databases, SSH…), the home network and other
+ * containers, except dot's model proxy and bot API, and DNS to the container's nameservers.
+ * The rules live in the container's own network namespace and are set from a short-lived root
+ * helper with NET_ADMIN; the container itself has no capabilities, so it can't change them.
+ * They're lost when the container restarts, so they're checked before every use.
+ */
+async function isolate(name: string): Promise<void> {
+	const started = (
+		await Bun.$`docker inspect --format ${"{{.State.StartedAt}}"} ${name}`.text()
+	).trim()
+	if (isolatedAt.get(name) === started) return
+
+	const proxy = new URL((await startModelProxy()).baseUrl)
+	const api = botApiUrl()
+	const ports = [proxy.port, api && new URL(api).port].filter(Boolean)
+	const nameservers = (
+		await Bun.$`docker exec ${name} cat /etc/resolv.conf`.text()
+	)
+		.split("\n")
+		.map(line => line.match(/^nameserver\s+(\d+\.\d+\.\d+\.\d+)/)?.[1])
+		.filter(Boolean)
+	const rules = [
+		"*filter",
+		":OUTPUT ACCEPT [0:0]",
+		"-A OUTPUT -o lo -j ACCEPT",
+		`-A OUTPUT -d ${proxy.hostname} -p tcp -m multiport --dports ${ports.join(",")} -j ACCEPT`,
+		...nameservers.flatMap(server => [
+			`-A OUTPUT -d ${server} -p udp --dport 53 -j ACCEPT`,
+			`-A OUTPUT -d ${server} -p tcp --dport 53 -j ACCEPT`,
+		]),
+		`-A OUTPUT -d ${PRIVATE_RANGES} -j REJECT`,
+		"COMMIT",
+		"",
+	].join("\n")
+	await Bun.$`docker run --rm -i --network ${`container:${name}`} --user root --cap-drop ALL --cap-add NET_ADMIN --entrypoint iptables-restore ${imageTag!} < ${new Blob([rules])}`.quiet()
+	isolatedAt.set(name, started)
+	console.log(`[containers] ${name}: internet only`)
 }
 
 /** Writes a file into the container as its user, creating parent directories. */

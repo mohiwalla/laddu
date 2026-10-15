@@ -59,7 +59,7 @@ doing on its computer, and a marketing site if this becomes something teammates 
    │
    ▼  Slack Socket Mode (websocket, no public URL)
  apps/api
-   1. allow-list: ALLOWED_SLACK_USERS ("*" = everyone; default: owner only)
+   1. allow-list: ALLOWED_SLACK_USERS ("*" = everyone, or member IDs; default: just the owner)
    2. react 👀, post "Working on it…" in the thread
    3. build transcript:
         in a thread  → thread replies (conversations.replies)
@@ -87,6 +87,12 @@ Everything Codex executes runs in a Docker container dedicated to the Slack user
 - No host files except the persona and Codex config, both read-only. A named volume
   (`dot-home-<team>-<user>`) keeps the user's workspace and Codex sessions; nobody else sees it.
 - Internet access on (Codex needs it to reach the model proxy; users need it for `curl`).
+- **Internet only** (`ISOLATE_NETWORK`, on by default). Firewall
+  rules in the container's own network namespace refuse this machine's services (databases, SSH…),
+  the home network and other containers, except the model proxy, the bot API and DNS. They're set
+  from a short-lived root helper with `NET_ADMIN` (the container has no capabilities, so it can't
+  read or undo them) and re-applied whenever the container has restarted.
+  Everyone gets the same rules.
 - **The ChatGPT token never enters a container.** Codex there talks to `agent/model-proxy.ts`, a
   Bun server on the Docker bridge address (not reachable from the LAN). It requires a random
   per-process key, allows only `POST /v1/responses` and `GET /v1/models`, and adds the real token.
@@ -97,7 +103,7 @@ Everything Codex executes runs in a Docker container dedicated to the Slack user
   and is rebuilt (containers recreated, volumes kept) when that version or the Dockerfile changes.
 
 `CODEX_RUNTIME="host"` runs Codex on the host instead (Codex sandbox only: blocks writes outside
-`agent-home`, but can read your files). Owner-only use at most.
+`agent-home`, but can read your files). Only for yourself, at most.
 
 ## Ways in
 
@@ -206,7 +212,7 @@ scratch directory, no integrations.
 
 - Integrations as local MCP servers registered in the bot's `CODEX_HOME/config.toml`: GitHub/repos,
   Outlook (Microsoft Graph), App Store Connect/TestFlight, issue tracker.
-- A context map: project names ("Ask AI") → repos, trackers and docs, so questions about progress
+- A context map: project names → repos, trackers and docs, so questions about progress
   land on the right sources.
 - Deeper Slack context: older history when the tagged message needs it.
 - Coding tasks in per-task git worktrees, ending in a PR link in the thread.
