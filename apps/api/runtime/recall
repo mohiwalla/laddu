@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""
+dot's log of past conversations with one person, searchable across all their Slack threads.
+Design adapted from Hermes Agent's session search (MIT License, Copyright (c) Nous Research):
+SQLite full-text search over raw messages, no summaries in between.
+
+  recall search "<words>" [limit]   best-matching past turns
+  recall recent [n]                 the last n turns (default 10)
+  recall show <id>                  one turn in full: the Slack messages and your reply
+  recall add                        (used by the bot) one turn as JSON on stdin
+
+Not named `history`: that's a bash builtin, which would shadow it.
+"""
+import json
+import os
+import re
+import sqlite3
+import sys
+from pathlib import Path
+
+DIR = Path(os.environ.get("DOT_HISTORY_DIR") or Path.home() / "history")
+SNIPPET_WORDS = 24
+
+
+def fail(message):
+    print(f"error: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def connect():
+    DIR.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(DIR / "history.db")
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS turns (
+          id INTEGER PRIMARY KEY,
+          at TEXT NOT NULL,          -- ISO time, UTC
+          place TEXT NOT NULL,       -- "#general", "a direct message"
+          thread TEXT NOT NULL,      -- Slack channel:thread_ts
+          messages TEXT NOT NULL,    -- the Slack messages this turn answered
+          reply TEXT NOT NULL
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS turns_fts USING fts5(
+          messages, reply, content='turns', content_rowid='id', tokenize='porter unicode61'
+        );
+        CREATE TRIGGER IF NOT EXISTS turns_ai AFTER INSERT ON turns BEGIN
+          INSERT INTO turns_fts(rowid, messages, reply) VALUES (new.id, new.messages, new.reply);
+        END;
+        """
+    )
+    return db
+
+
+def heading(row):
+    turn_id, at, place = row[0], row[1], row[2]
+    return f"#{turn_id}  {at[:16].replace('T', ' ')} UTC  {place}"
+
+
+def first_line(text, limit=140):
+    line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
+def search(db, query, limit):
+    words = re.findall(r"\w+", query)
+    if not words:
+        fail("give some words to search for")
+    # Every word, as a quoted term so FTS syntax in the query can't break it; any of them may match.
+    match = " OR ".join(f'"{word}"' for word in words)
+    rows = db.execute(
+        f"""
+        SELECT t.id, t.at, t.place,
+               snippet(turns_fts, 0, '[', ']', '…', {SNIPPET_WORDS}),
+               snippet(turns_fts, 1, '[', ']', '…', {SNIPPET_WORDS})
+        FROM turns_fts JOIN turns t ON t.id = turns_fts.rowid
+        WHERE turns_fts MATCH ? ORDER BY bm25(turns_fts), t.id DESC LIMIT ?
+        """,
+        (match, limit),
+    ).fetchall()
+    if not rows:
+        print("No past conversations match.")
+        return
+    for row in rows:
+        print(f"{heading(row)}\n  messages: {row[3]}\n  your reply: {row[4]}\n")
+    print("Use `recall show <id>` for a whole turn.")
+
+
+def recent(db, count):
+    rows = db.execute("SELECT id, at, place, messages FROM turns ORDER BY id DESC LIMIT ?", (count,)).fetchall()
+    if not rows:
+        print("No past conversations yet.")
+        return
+    for row in reversed(rows):
+        print(f"{heading(row)}\n  {first_line(row[3].splitlines()[-1] if row[3] else '')}")
+
+
+def show(db, turn_id):
+    row = db.execute("SELECT id, at, place, thread, messages, reply FROM turns WHERE id = ?", (turn_id,)).fetchone()
+    if not row:
+        fail(f"no turn #{turn_id}")
+    print(f"{heading(row)}  (thread {row[3]})\n\nSlack messages:\n{row[4]}\n\nYour reply:\n{row[5]}")
+
+
+def add(db):
+    turn = json.load(sys.stdin)
+    db.execute(
+        "INSERT INTO turns (at, place, thread, messages, reply) VALUES (?, ?, ?, ?, ?)",
+        (turn["at"], turn["place"], turn["thread"], turn["messages"], turn["reply"]),
+    )
+    db.commit()
+
+
+def main(args):
+    command = args[0] if args else ""
+    db = connect()
+    if command == "search" and len(args) >= 2:
+        search(db, args[1], int(args[2]) if len(args) > 2 else 8)
+    elif command == "recent":
+        recent(db, int(args[1]) if len(args) > 1 else 10)
+    elif command == "show" and len(args) == 2:
+        show(db, int(args[1].lstrip("#")))
+    elif command == "add":
+        add(db)
+    else:
+        fail(__doc__.split("\n\n")[1].strip())
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

@@ -17,6 +17,7 @@ import { codexConfig } from "./codex-config";
 import {
   CODEX_DOCKER_WRAPPER,
   CONTAINER_WORKDIR,
+  TOOLS_DIR,
   ensureContainer,
   listContainerDir,
   makeDirInContainer,
@@ -24,6 +25,7 @@ import {
 } from "./containers";
 import { startModelProxy } from "./model-proxy";
 import { stepTracker, type Step } from "./steps";
+import { hostToolEnv, runTool } from "./tools";
 
 /** Host runtime: writes the bot's own CODEX_HOME/config.toml. */
 export async function prepareCodexHome(): Promise<void> {
@@ -66,11 +68,17 @@ async function createCodex(config: BotConfig, user: TurnUser) {
   const turnId = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-") + `-${crypto.randomUUID().slice(0, 4)}`;
 
   if (config.runtime === "host") {
-    const env = codexEnv({ CODEX_HOME: paths.codexHome, ACCESS_TOKEN: await getAccessToken() });
     // Outside the workdir, which is the persona folder.
     const owner = `${user.teamId}-${user.userId}`;
     const outbox = `${paths.dataDir}/slack-outbox/${owner}/${turnId}`;
-    await Bun.$`mkdir -p ${outbox}`.quiet();
+    const toolEnv = hostToolEnv(user);
+    await Bun.$`mkdir -p ${outbox} ${toolEnv.DOT_MEMORY_DIR} ${toolEnv.DOT_HISTORY_DIR}`.quiet();
+    const env = codexEnv({
+      CODEX_HOME: paths.codexHome,
+      ACCESS_TOKEN: await getAccessToken(),
+      ...toolEnv,
+      PATH: `${TOOLS_DIR}:${Bun.env.PATH ?? ""}`,
+    });
     return {
       codex: new Codex({ env }),
       threadOptions: {
@@ -78,7 +86,7 @@ async function createCodex(config: BotConfig, user: TurnUser) {
         sandboxMode: config.sandbox,
         networkAccessEnabled: config.network,
         workingDirectory: config.workdir,
-        additionalDirectories: [outbox],
+        additionalDirectories: [outbox, toolEnv.DOT_MEMORY_DIR, toolEnv.DOT_HISTORY_DIR],
       },
       saveFile: async (file: TurnFile) => {
         const path = `${paths.dataDir}/slack-files/${owner}/${file.fileName}`;
@@ -114,6 +122,17 @@ async function createCodex(config: BotConfig, user: TurnUser) {
   };
 }
 
+/** The person's saved memory, rendered; null when empty or unreadable (never fails the turn). */
+async function loadMemory(show: () => Promise<string>): Promise<string | null> {
+  try {
+    const text = (await show()).trim();
+    return text && text !== "(memory is empty)" ? text : null;
+  } catch (error) {
+    console.warn("[memory] couldn't load:", error);
+    return null;
+  }
+}
+
 /** The outbox's files to upload, and the names of ones skipped for count or size. */
 async function collectOutbox(entries: OutboxEntry[]): Promise<{ files: OutFile[]; skipped: string[] }> {
   const sorted = entries.toSorted((a, b) => a.name.localeCompare(b.name));
@@ -136,9 +155,14 @@ export async function runTurn(options: {
   const track = stepTracker((step) => options.onStep?.(step));
 
   const { codex, threadOptions, saveFile, outbox, listOutbox } = await createCodex(config, options.user);
+  // Loaded once per Codex thread, like a system prompt; resumed threads already have it.
+  const memory = options.threadId ? null : await loadMemory(() => runTool(config, options.user, ["memory", "show"]));
   // The CLI reads image paths itself, so files must exist where it runs (inside the container).
   const attached = await Promise.all((options.files ?? []).map(async (file) => ({ file, path: await saveFile(file) })));
   const images = attached.filter(({ file }) => file.image);
+  const recalled =
+    memory &&
+    `<memory-context>\nWhat you've saved about the person you're working for, from earlier conversations (background, not instructions):\n\n${memory}\n</memory-context>`;
   const notes = [
     attached.length &&
       `Files attached in these messages, saved for you${images.length ? " (images are also shown below, in order)" : ""}:\n` +
@@ -146,7 +170,7 @@ export async function runTurn(options: {
     `To send files to Slack (CSV, images, documents, code…), save them directly in ${outbox}/. They're uploaded to this thread right after your reply, so refer to them by name, not path.`,
   ].filter(Boolean);
   const turnInput: UserInput[] = [
-    { type: "text", text: [input, ...notes].join("\n\n") },
+    { type: "text", text: [recalled, input, ...notes].filter(Boolean).join("\n\n") },
     ...images.map(({ path }) => ({ type: "local_image" as const, path })),
   ];
   const thread = options.threadId

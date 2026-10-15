@@ -51,6 +51,8 @@ export function loadBotConfig() {
     network: optional("CODEX_NETWORK", "true") === "true",
     workdir: fromAppRoot(optional("CODEX_WORKDIR", "agent-home")),
     contextMessages: Number(optional("CONTEXT_MESSAGES", "20")),
+    /** Every this many turns per person, a background Codex run updates their memory; 0 turns it off. */
+    memoryReviewEvery: Number(optional("MEMORY_REVIEW_EVERY", "3")),
   };
 }
 

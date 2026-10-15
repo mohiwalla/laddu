@@ -13,6 +13,9 @@ type TaskChunk = Extract<Chunk, { type: "task_update" }>;
 export type ReplyTarget = { channel: string; threadTs: string; userId: string; teamId: string };
 
 export type Reply = {
+  /** The reply message; `streaming` when it's a Slack stream rather than a plain placeholder. */
+  ts: string;
+  streaming: boolean;
   step(step: Step): void;
   /** Posts the answer; an empty answer (files only) just closes the progress. */
   finish(text: string): Promise<void>;
@@ -114,6 +117,8 @@ async function openStream(client: WebClient, target: ReplyTarget): Promise<Reply
   const elapsed = () => `${Math.max(1, Math.round((Date.now() - started) / 1000))}s`;
 
   return {
+    ts,
+    streaming: true,
     step(step) {
       if (steps.get(opening.id)?.status === "in_progress") update({ ...opening, status: "complete" });
       update(step);
@@ -171,6 +176,8 @@ async function openPlaceholder(client: WebClient, target: ReplyTarget): Promise<
   };
 
   return {
+    ts,
+    streaming: false,
     step(step) {
       latest = step.title;
       timer ??= setTimeout(flush, Math.max(0, lastSent + PLACEHOLDER_INTERVAL_MS - Date.now()));
@@ -195,4 +202,34 @@ async function openPlaceholder(client: WebClient, target: ReplyTarget): Promise<
       await client.chat.update({ channel, ts, markdown_text: `:warning: ${message}` });
     },
   };
+}
+
+/** Closes a reply left open by a previous bot process (it was restarted mid-turn). */
+export async function closeInterrupted(
+  client: WebClient,
+  target: { channel: string; threadTs: string },
+  reply: { ts: string; streaming: boolean },
+  note: string,
+) {
+  const { channel } = target;
+  if (!reply.streaming) {
+    await client.chat.update({ channel, ts: reply.ts, markdown_text: note });
+    return;
+  }
+  // This process never saw the steps; read the ones still spinning off the message itself.
+  const page = await client.conversations
+    .replies({ channel, ts: target.threadTs, oldest: reply.ts, latest: reply.ts, inclusive: true, limit: 1 })
+    .catch(() => null);
+  const message = page?.messages?.find((candidate) => candidate.ts === reply.ts);
+  // The SDK's block types predate plan blocks.
+  type PlanBlock = { type: string; tasks?: { task_id: string; title: string; status: string }[] };
+  const plan = (message?.blocks as PlanBlock[] | undefined)?.find((block) => block.type === "plan");
+  const stuck: Chunk[] = (plan?.tasks ?? [])
+    .filter((task) => task.status === "in_progress")
+    .map((task) => ({ type: "task_update", id: task.task_id, title: task.title, status: "error" }));
+  await client.chat.stopStream({
+    channel,
+    ts: reply.ts,
+    chunks: [...stuck, { type: "plan_update", title: "Interrupted" }, { type: "markdown_text", text: note }],
+  });
 }

@@ -27,12 +27,18 @@ export function commandTitle(command: string): string {
   if (/^(rg|grep|find|ls|cat|head|tail|sed|awk|wc|jq|file|stat|tree)$/.test(program)) return "Looking through files";
   if (/^(mkdir|cp|mv|rm|touch|ln)$/.test(program)) return "Organizing files";
   if (program === "git") return "Working with git";
+  if (program === "memory") return /^\s*memory\s+show\b/.test(command) ? "Checking memory" : "Updating memory";
   return "Running a command";
 }
 
 /** First line of a note Codex wrote before acting, as a title. */
 function narrationTitle(text: string): string | null {
-  const line = text.trim().split("\n")[0]!.trim().replace(/[.:…]+$/, "");
+  const line = text
+    .trim()
+    .split("\n")[0]!
+    .replace(/^\s*(?:[-*•]|\d+[.)])\s+/, "") // list markers, when it writes notes as bullets
+    .trim()
+    .replace(/[.:…]+$/, "");
   return line ? clip(line, MAX_TITLE) : null;
 }
 

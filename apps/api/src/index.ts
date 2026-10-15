@@ -3,7 +3,7 @@ import { prepareCodexHome } from "./agent/codex";
 import { prepareDocker, stopOrphanedRuns } from "./agent/containers";
 import { getAccessToken } from "./auth/siwc";
 import { loadBotConfig } from "./config";
-import { registerHandlers } from "./slack/handlers";
+import { registerHandlers, resumeInterrupted } from "./slack/handlers";
 import { BunSocketModeReceiver } from "./slack/socket-mode";
 
 const config = loadBotConfig();
@@ -26,5 +26,7 @@ registerHandlers(app, config, auth.user_id!);
 if (config.runtime === "docker") await stopOrphanedRuns(auth.team_id!);
 
 await app.start();
+// Turns the previous process was in the middle of: close their replies and answer again.
+await resumeInterrupted(app.client, config, auth.user_id!);
 const who = config.allowedUsers === "*" ? "everyone" : [...config.allowedUsers].join(", ");
 console.log(`Listening as @${auth.user} in ${auth.team}; answering ${who}; runtime: ${runtime}.`);

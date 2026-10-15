@@ -16,6 +16,11 @@ const dirname = (path: string) => path.slice(0, path.lastIndexOf("/"));
 export const CONTAINER_HOME = "/home/dot";
 export const CONTAINER_WORKDIR = `${CONTAINER_HOME}/workspace`;
 
+/** Commands for Codex (`memory`, `recall`) in runtime/; the host runtime uses them in place. */
+export const TOOLS_DIR = `${appRoot}runtime`;
+/** The same commands in the runtime mount; scripts/codex-docker.sh puts them on PATH. */
+export const CONTAINER_TOOLS_DIR = "/opt/dot/runtime/bin";
+
 /** Stand-in `codex` executable that forwards into the container named by $DOT_CONTAINER. */
 export const CODEX_DOCKER_WRAPPER = `${appRoot}scripts/codex-docker.sh`;
 
@@ -62,6 +67,14 @@ export async function prepareDocker(): Promise<{ tag: string; proxy: ModelProxy 
     await Bun.$`docker build --quiet --tag ${tag} ${context}`.quiet();
     await Bun.$`rm -r ${context}`.quiet();
     console.log(`[containers] built ${tag}`);
+  }
+
+  // Copied, not linked: the mount can't follow a symlink out of runtimeDir. Cleared first so
+  // renamed or removed commands don't linger.
+  await Bun.$`rm -rf ${runtimeDir}/bin`.quiet();
+  for await (const name of new Bun.Glob("*").scan({ cwd: TOOLS_DIR, onlyFiles: true })) {
+    await Bun.write(`${runtimeDir}/bin/${name}`, Bun.file(`${TOOLS_DIR}/${name}`), { createPath: true });
+    await Bun.$`chmod 755 ${runtimeDir}/bin/${name}`.quiet();
   }
 
   const proxy = await startModelProxy();

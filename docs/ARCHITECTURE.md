@@ -18,6 +18,7 @@ apps/
       config.ts        env + paths
       files.ts         JSON / private-file helpers
       sessions.ts      (Slack thread, user) ↔ Codex thread map, per-key queue
+      inflight.ts      turns in progress, so a restart can resume them
       auth/siwc.ts     Sign in with ChatGPT credentials + token refresh
       auth/login.ts    `bun run login`: one-time OAuth (PKCE, loopback)
       agent/codex.ts   runs Codex turns on the ChatGPT plan (in the user's container)
@@ -32,6 +33,8 @@ apps/
       slack/socket-mode.ts Socket Mode receiver on Bun's WebSocket (Bolt's built-in one
                        needs undici's `ping`, which Bun's undici lacks)
     agent-home/        AGENTS.md = bot persona (mounted read-only into containers)
+    runtime/           commands for Codex (Python, stdlib): `memory` (per-user memory),
+                       `recall` (search past conversations)
     docker/Dockerfile  per-user runtime image (Debian + the SDK's own codex build)
     scripts/codex-docker.sh stand-in `codex` that runs the real one via `docker exec`
     slack-manifest.yaml
@@ -86,6 +89,29 @@ Everything Codex executes runs in a Docker container dedicated to the Slack user
 
 `CODEX_RUNTIME="host"` runs Codex on the host instead (Codex sandbox only: blocks writes outside
 `agent-home`, but can read your files). Owner-only use at most.
+
+## Memory and reliability
+
+Adapted from [Hermes Agent](https://github.com/nousresearch/hermes-agent) (MIT, Nous Research).
+
+- **Per-user long-term memory.** Two capped files on the user's volume, `~/memory/USER.md` (who
+  they are, how they like answers; 1,375 chars) and `~/memory/MEMORY.md` (Codex's notes; 2,200
+  chars). Codex edits them with the `memory` command (`runtime/memory`, copied into the runtime
+  mount and linked into `~/.local/bin`), which enforces the caps and refuses entries that look
+  like prompt injection. The bot loads them into the first turn of every new Codex thread, in a
+  `<memory-context>` block; resumed threads already have them. When to save is in the persona.
+- **Searchable past conversations.** After each turn the bot logs the Slack messages and the reply
+  to `~/history/history.db` (SQLite FTS5) on the user's volume; Codex searches it with `recall`
+  (`search`, `recent`, `show`). Raw messages, no summaries in between. (Not called `history`:
+  that's a bash builtin.)
+- **Background memory review.** Every `MEMORY_REVIEW_EVERY` turns per person (default 3; "0" turns
+  it off), a separate low-effort Codex run in their container reads the recent turns with `recall`
+  and updates memory, catching facts the turns didn't save. It uses plan quota.
+- **Duplicate events.** Slack can redeliver an event (e.g. after a socket reconnect); each message
+  is answered once (in-memory, 10 minutes).
+- **Restarts mid-answer.** Every turn is recorded in `.data/inflight.json` until it ends. On startup
+  (after stopping orphaned Codex runs) the bot closes replies it left open, marking spinning steps
+  failed, and answers turns younger than 30 minutes again; older ones get "please ask again".
 
 ## The brain: Codex on your ChatGPT plan
 
