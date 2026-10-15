@@ -27,7 +27,7 @@ apps/
       agent/codex-config.ts Codex provider config (direct, or via the proxy)
       agent/steps.ts   Codex items → plain-language progress steps
       agent/errors.ts  failure classes → message + recovery (retry, fresh thread, quota pause)
-      agent/learning.ts turn log + background memory review
+      agent/learning.ts turn log + background review (memory, personal skills)
       agent/tools.ts   runs runtime/ commands for a user (container or host)
       agent/bot-api.ts API for container commands that need the bot (`schedule`), signed per turn
       scheduler.ts     scheduled tasks: store, cron/time-zone maths, 30-second check
@@ -38,8 +38,9 @@ apps/
       slack/socket-mode.ts Socket Mode receiver on Bun's WebSocket (Bolt's built-in one
                        needs undici's `ping`, which Bun's undici lacks)
     agent-home/        AGENTS.md = bot persona (mounted read-only into containers); an optional,
-                       git-ignored AGENTS.local.md holds per-deployment private instructions
-                       (e.g. who owns dot), appended to the persona every turn
+                       git-ignored AGENTS.local.md holds per-deployment private instructions,
+                       appended to the persona every turn. skills/ = built-in skills;
+                       skills.local/ (git-ignored) = the deployment's team skills
     runtime/           commands for Codex (Python, stdlib): `memory` (per-user memory),
                        `recall` (search past conversations), `schedule` (scheduled tasks)
     docker/Dockerfile  per-user runtime image (Debian + the SDK's own codex build)
@@ -128,7 +129,7 @@ posts the answer to the thread, the channel or a DM. A run can reply `[SILENT]` 
 can't schedule more tasks, and failed one-offs retry after 5, 15 and 30 minutes (from Hermes).
 One-offs missed by more than 6 hours while the bot was down are reported instead of run.
 
-## Memory and reliability
+## Memory, skills and reliability
 
 Adapted from [Hermes Agent](https://github.com/nousresearch/hermes-agent) (MIT, Nous Research).
 
@@ -142,9 +143,19 @@ Adapted from [Hermes Agent](https://github.com/nousresearch/hermes-agent) (MIT, 
   to `~/history/history.db` (SQLite FTS5) on the user's volume; Codex searches it with `recall`
   (`search`, `recent`, `show`). Raw messages, no summaries in between. (Not called `history`:
   that's a bash builtin.)
-- **Background memory review.** Every `MEMORY_REVIEW_EVERY` turns per person (default 3; "0" turns
-  it off), a separate low-effort Codex run in their container reads the recent turns with `recall`
-  and updates memory, catching facts the turns didn't save. It uses plan quota.
+- **Background review.** Every `MEMORY_REVIEW_EVERY` turns per person (default 3; "0" turns it
+  off), a separate low-effort Codex run in their container reads the recent turns with `recall`
+  and updates memory and personal skills, catching what the turns didn't save. It uses plan quota.
+- **Skills** (Codex's native skills: a folder with a `SKILL.md`; Codex sees each name and
+  description and reads the full file only when a task matches). Three kinds:
+  built-in (`agent-home/skills/`, committed), team (`agent-home/skills.local/`, git-ignored), both
+  read-only through the persona mount and linked by `scripts/codex-docker.sh` into
+  `~/.agents/skills/{dot,team}`, a Codex skill root; and personal ones Codex writes for each
+  person in `$CODEX_HOME/skills` on their volume. When to write or fix one is in the persona; the
+  background review also looks for procedures worth keeping. Codex's built-in `imagegen` skill is
+  switched off (no image generation on the plan route). To share a personal skill with everyone,
+  copy it into `skills.local/`:
+  `docker cp dot-<team>-<user>:/home/dot/.codex/skills/<name> agent-home/skills.local/`.
 - **Duplicate events.** Slack can redeliver an event (e.g. after a socket reconnect); each message
   is answered once (in-memory, 10 minutes).
 - **Failures.** `agent/errors.ts` sorts them: usage limit (message with the reset time; Codex is
@@ -179,6 +190,12 @@ Auth uses **Sign in with ChatGPT** (SIWC), which OpenAI opened to third-party to
 What the plan route doesn't support (OpenAI preview limits): hosted MCP/connectors, native computer
 use, image generation, file search, Code Interpreter. Local tools (shell, local MCP servers) run
 inside Codex and do work, which is how integrations will be added.
+
+Sub-agents don't work either: their replies come back as input items the plan rejects
+(`subscription_sharing_unsupported_capability`), failing the turn. `[features] multi_agent = false`
+isn't enough, since current models switch them on from their catalog entry, so on every start the
+bot writes Codex's bundled model catalog with `multi_agent_version` cleared (`writeModelCatalog`,
+`model_catalog_json`). The persona tells Codex to do a skill's "sub-agent" steps itself.
 
 Docs: [SIWC overview](https://developers.openai.com/siwc/token-sharing-open-source),
 [sign-in contract](https://developers.openai.com/siwc/token-sharing-open-source/sign-in),

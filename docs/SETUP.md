@@ -115,6 +115,13 @@ deployment-specific context you'd rather keep out of git (your company, its proj
 there is your own choice, on top of the defaults. Edits to it, or to `AGENTS.md`, apply from the
 next message; no restart.
 
+### Team skills
+
+Skills are how-to guides dot follows when a task matches. Put your organization's in
+`agent-home/skills.local/<name>/SKILL.md` (git-ignored); the format is in
+`agent-home/skills/README.md`. dot also writes personal skills for each person on its own. New
+or edited skills apply from the next message.
+
 ### Run as a service (Linux, systemd)
 
 So the bot starts at boot and comes back if it crashes. A user service needs no root:

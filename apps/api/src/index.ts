@@ -19,7 +19,7 @@ const config = loadBotConfig()
 const runtime =
 	config.runtime === "docker"
 		? `docker (${(await prepareDocker()).tag})`
-		: (await prepareCodexHome(), "host")
+		: (await prepareCodexHome(config.workdir), "host")
 // Fail fast if `bun run login` hasn't been run (or the session has ended).
 await getAccessToken()
 // For dot's commands that need the bot (`schedule`): next to the model proxy, where containers

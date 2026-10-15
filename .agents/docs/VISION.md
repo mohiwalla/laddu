@@ -63,6 +63,10 @@ in `docs/ARCHITECTURE.md` and `docs/SETUP.md`; this is the why and the where-nex
   clock counting up while it works. Raw commands never show as the status.
 - **One conversation per Slack thread, per person.** A new top-level tag starts fresh; follow-ups
   in a thread continue it; memory and files carry across threads.
+- **Skills come in three layers.** Built-in (ship with the repo), team (each deployment's own,
+  kept out of git) and personal (dot writes them per person and fixes them when they're wrong).
+  Personal skills never reach anyone else on their own; sharing one is a deliberate copy into the
+  team skills.
 - **Code style:** Prettier with tabs and no semicolons, run with `bun run format`.
 
 ### What dot can do today
@@ -73,6 +77,8 @@ in `docs/ARCHITECTURE.md` and `docs/SETUP.md`; this is the why and the where-nex
 - Read Slack threads and messages people link to, including their images, without leaking private
   conversations to people who aren't in them.
 - Remember people across conversations, and search its past conversations with them.
+- Follow skills (how-to guides): built-in ones, a team's own, and personal ones it writes for each
+  person when it works something out, then keeps current.
 - Show live progress, explain failures in plain words (a used-up plan says when it resets), retry
   the ones worth retrying, and pick up answers a restart cut off.
 - Keep a separate conversation with each person in a shared thread.
@@ -86,7 +92,6 @@ plan route doesn't offer it), or search the web through a built-in tool (it uses
 
 ### Next
 
-- **Skills:** how-to guides dot writes for itself and keeps current, loaded only when relevant.
 - **Integrations:** GitHub/repos, email, App Store Connect/TestFlight, issue tracker, so the
   original examples work ("issues reported on TestFlight last week", "progress on a feature").
 - **A context map:** project names → the repos, trackers and docs that describe them.

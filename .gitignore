@@ -7,3 +7,6 @@ node_modules/
 
 # Private, per-deployment instructions appended to the persona (see docs/ARCHITECTURE.md)
 **/AGENTS.local.md
+
+# Team skills, per deployment (see apps/api/agent-home/skills/README.md)
+**/skills.local/

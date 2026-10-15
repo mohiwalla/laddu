@@ -23,15 +23,35 @@ import {
 	makeDirInContainer,
 	stopRun,
 	writeIntoContainer,
+	writeModelCatalog,
 } from "./containers"
 import { startModelProxy } from "./model-proxy"
 import { botApiUrl, callerCredential } from "./bot-api"
 import { stepTracker, type Step } from "./steps"
 import { hostToolEnv, runTool } from "./tools"
 
-/** Host runtime: writes the bot's own CODEX_HOME/config.toml. */
-export async function prepareCodexHome(): Promise<void> {
-	await writePrivate(`${paths.codexHome}/config.toml`, codexConfig())
+/** Host runtime: writes the bot's own CODEX_HOME/config.toml and links in the shared skills. */
+export async function prepareCodexHome(workdir: string): Promise<void> {
+	const modelCatalog = `${paths.codexHome}/models.json`
+	await writeModelCatalog(modelCatalog)
+	await writePrivate(
+		`${paths.codexHome}/config.toml`,
+		codexConfig({ modelCatalog }),
+	)
+	const skills = `${paths.codexHome}/skills`
+	await Bun.$`mkdir -p ${skills}`.quiet()
+	for (const [link, source] of [
+		["dot", "skills"],
+		["team", "skills.local"],
+	] as const) {
+		const dir = `${workdir}/${source}`
+		const stat = await Bun.file(dir)
+			.stat()
+			.catch(() => null)
+		if (stat?.isDirectory())
+			await Bun.$`ln -sfn ${dir} ${skills}/${link}`.quiet()
+		else await Bun.$`rm -f ${skills}/${link}`.quiet()
+	}
 }
 
 /** Env for the Codex child (or the docker wrapper): this process's env minus Slack secrets. */
@@ -158,6 +178,14 @@ async function createCodex(
 				DOT_PROXY_KEY: proxy.key,
 				...turnEnv,
 			}),
+			config: {
+				...overrides,
+				// This process's proxy, per run: the shared config.toml can't pin one, since another
+				// bot process (a second workspace, a test) may have rewritten it with its own.
+				model_providers: {
+					openai_chatgpt_plan: { base_url: proxy.baseUrl },
+				},
+			},
 		}),
 		// The container is the boundary (network is set on the container), so no nested sandbox.
 		threadOptions: {

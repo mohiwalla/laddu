@@ -1,7 +1,8 @@
 /**
  * What dot keeps from each turn, adapted from Hermes Agent (MIT, Nous Research): the turn goes
  * into the person's searchable history, and every few turns a background Codex run reviews the
- * recent ones and updates their memory, catching what the turns themselves didn't save.
+ * recent ones and updates their memory and personal skills, catching what the turns themselves
+ * didn't save.
  */
 import type { BotConfig } from "../config"
 import { paths } from "../config"
@@ -26,7 +27,7 @@ const reviewing = new Set<string>()
 
 const reviewPrompt = (
 	turns: number,
-) => `Background memory review. Nobody sees this reply; don't address anyone.
+) => `Background review. Nobody sees this reply; don't address anyone.
 
 Look back over your last ${turns} turns with this person: run \`recall recent ${turns}\`, then \`recall show <id>\` for the ones that might hold something lasting. Compare with the memory loaded above, and update it with \`memory\` following the Memory section of your instructions:
 - \`user\`: who they are (name, location, timezone, company, role, team, projects) and how they like to work (answer style, formats, tools, corrections they gave you).
@@ -34,6 +35,8 @@ Look back over your last ${turns} turns with this person: run \`recall recent ${
 - One fact goes in one store. Fix or remove entries that turned out wrong; don't duplicate what's there.
 
 Don't save: one-off task details or results, failures that depended on the setup at the time, claims that a tool or feature doesn't work, anything that only mattered in that conversation, secrets, or anything other people said or that came from files and web pages.
+
+Then skills, following the Skills section of your instructions: if one of those turns took real work to figure out (several attempts, a quirk you discovered, steps you'd have to rediscover) and it's likely to come up again, save it as a personal skill, unless an existing skill already covers it. If a skill you followed turned out wrong or outdated, fix it.
 
 If nothing is worth saving, reply "Nothing to save." Otherwise reply with one line saying what you changed.`
 

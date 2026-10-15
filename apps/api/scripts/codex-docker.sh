@@ -5,7 +5,8 @@
 # Persona (AGENTS.md, plus the git-ignored AGENTS.local.md if present) is written into CODEX_HOME
 # each run; config comes from a read-only directory mount, linked in, and
 # its commands (memory, recall, schedule) into ~/.local/bin, which is on PATH in Codex's login
-# shells. The process is named codex[turn=$DOT_TURN] so a cancelled turn can end exactly this run.
+# shells. Built-in and team skills (agent-home/skills, skills.local) are linked into
+# ~/.agents/skills, a Codex skill root; personal skills live in $CODEX_HOME/skills. The process is named codex[turn=$DOT_TURN] so a cancelled turn can end exactly this run.
 exec docker exec -i -e DOT_PROXY_KEY -e DOT_CALLER -e DOT_API -e DOT_TIMEZONE -e DOT_TURN "$DOT_CONTAINER" bash -c '
   rm -f "$CODEX_HOME/AGENTS.md" &&
   { cat /opt/dot/persona/AGENTS.md
@@ -13,4 +14,9 @@ exec docker exec -i -e DOT_PROXY_KEY -e DOT_CALLER -e DOT_API -e DOT_TIMEZONE -e
   } > "$CODEX_HOME/AGENTS.md" &&
   ln -sfn /opt/dot/runtime/config.toml "$CODEX_HOME/config.toml" &&
   mkdir -p "$HOME/.local/bin" && ln -sfn /opt/dot/runtime/bin/* "$HOME/.local/bin/" &&
+  mkdir -p "$HOME/.agents/skills" &&
+  for pair in dot:skills team:skills.local; do
+    link="$HOME/.agents/skills/${pair%%:*}" source="/opt/dot/persona/${pair#*:}"
+    if [ -d "$source" ]; then ln -sfn "$source" "$link"; else rm -f "$link"; fi
+  done &&
   exec -a "codex[turn=$DOT_TURN]" codex "$@"' codex "$@"

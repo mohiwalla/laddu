@@ -27,6 +27,7 @@ export const CODEX_DOCKER_WRAPPER = `${appRoot}scripts/codex-docker.sh`
 
 const runtimeDir = `${paths.dataDir}/runtime`
 const hostConfigToml = `${runtimeDir}/config.toml`
+const hostModelCatalog = `${runtimeDir}/models.json`
 
 let imageTag: string | null = null
 
@@ -67,6 +68,24 @@ async function codexDistribution() {
 	throw new Error(
 		"Could not find the Linux codex binary in node_modules (@openai/codex-linux-*)",
 	)
+}
+
+/**
+ * Writes Codex's bundled model catalog (from the codex build the SDK uses) with sub-agents
+ * switched off for every model. Current models enable them from their catalog entry
+ * (`multi_agent_version`) whatever `[features]` says, and a sub-agent's reply is an input item
+ * the ChatGPT plan rejects, failing the turn. Regenerated each start, so it follows Codex updates.
+ */
+export async function writeModelCatalog(path: string): Promise<void> {
+	const { dir } = await codexDistribution()
+	// The bot's own CODEX_HOME, so this never reads or writes your personal ~/.codex.
+	await Bun.$`mkdir -p ${paths.codexHome}`.quiet()
+	const catalog = (await Bun.$`${dir}/bin/codex debug models --bundled`
+		.env({ ...Bun.env, CODEX_HOME: paths.codexHome })
+		.quiet()
+		.json()) as { models: Record<string, unknown>[] }
+	for (const model of catalog.models) model.multi_agent_version = null
+	await writePrivate(path, JSON.stringify(catalog, null, "\t"))
 }
 
 /**
@@ -116,11 +135,17 @@ export async function prepareDocker(): Promise<{
 		await Bun.$`chmod 755 ${runtimeDir}/bin/${name}`.quiet()
 	}
 
+	await writeModelCatalog(hostModelCatalog)
 	const proxy = await startModelProxy()
-	// Bind-mounted into every container; rewritten in place, so running containers see the new port.
+	// Bind-mounted into every container. Each run also passes its own proxy address (see codex.ts),
+	// so another bot process rewriting this file can't point a run at the wrong proxy.
 	await writePrivate(
 		hostConfigToml,
-		codexConfig({ baseUrl: proxy.baseUrl, envKey: "DOT_PROXY_KEY" }),
+		codexConfig({
+			baseUrl: proxy.baseUrl,
+			envKey: "DOT_PROXY_KEY",
+			modelCatalog: "/opt/dot/runtime/models.json",
+		}),
 	)
 	imageTag = tag
 	return { tag, proxy }
@@ -156,6 +181,9 @@ export function ensureContainer(
 			`dot.team=${teamId}`,
 			"--label",
 			`dot.user=${userId}`,
+			// Groups them as one "dot" app in Docker Desktop and editor container views.
+			"--label",
+			"com.docker.compose.project=dot",
 			// Part of the spec, so turning isolation off recreates the container without the rules.
 			"--label",
 			`dot.isolated=${isolated ? 1 : 0}`,
