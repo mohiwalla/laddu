@@ -127,6 +127,29 @@ export function ensureContainer(config: BotConfig, teamId: string, userId: strin
   return task;
 }
 
+/** Writes a file into the container as its user, creating parent directories. */
+export async function writeIntoContainer(container: string, path: string, data: Uint8Array): Promise<void> {
+  await Bun.$`docker exec -i ${container} sh -c ${'mkdir -p "$(dirname "$1")" && cat > "$1"'} sh ${path} < ${data}`.quiet();
+}
+
+export async function makeDirInContainer(container: string, path: string): Promise<void> {
+  await Bun.$`docker exec ${container} mkdir -p ${path}`.quiet();
+}
+
+/** The regular files directly inside a container directory, each read on demand. */
+export async function listContainerDir(container: string, dir: string) {
+  const listing = await Bun.$`docker exec ${container} find ${dir} -maxdepth 1 -type f -printf ${"%s %f\\n"}`.quiet().nothrow().text();
+  return listing
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const space = line.indexOf(" ");
+      const name = line.slice(space + 1);
+      const read = async () => new Uint8Array(await Bun.$`docker exec ${container} cat ${`${dir}/${name}`}`.quiet().arrayBuffer());
+      return { name, size: Number(line.slice(0, space)), read };
+    });
+}
+
 /**
  * Stops Codex runs left in this workspace's containers by a previous bot process. Killing the bot
  * only ends `docker exec` on the host; the run inside keeps going and holds its thread's lock

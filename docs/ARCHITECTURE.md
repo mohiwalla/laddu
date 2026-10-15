@@ -24,8 +24,11 @@ apps/
       agent/containers.ts runtime image + one Docker container per Slack user
       agent/model-proxy.ts keeps the ChatGPT token out of containers
       agent/codex-config.ts Codex provider config (direct, or via the proxy)
+      agent/steps.ts   Codex items → plain-language progress steps
       slack/context.ts Slack messages → transcript for Codex
-      slack/handlers.ts mention/DM handling, progress, replies
+      slack/attachments.ts Slack files in (downloads) and out (outbox uploads)
+      slack/handlers.ts mention/DM handling
+      slack/reply.ts   streamed reply: steps as Slack task cards, then the answer
       slack/socket-mode.ts Socket Mode receiver on Bun's WebSocket (Bolt's built-in one
                        needs undici's `ping`, which Bun's undici lacks)
     agent-home/        AGENTS.md = bot persona (mounted read-only into containers)
@@ -159,7 +162,12 @@ scratch directory, no integrations.
 
 - In channels the bot only responds when tagged, including in threads it's already in.
 - In DMs every message is handled, and each top-level DM starts its own thread.
-- Files and images in Slack are mentioned by name only; their content isn't fetched.
+- Files attached to messages new this turn (up to 100 MB each, 20 per turn) are saved in the user's
+  workspace under `slack-files/` (host runtime: `.data/slack-files/<team>-<user>/`); PNG, JPEG,
+  WebP and GIF up to 20 MB are also shown to the model. Codex reads other formats with its own tools.
+- Each turn gets an outbox, `slack-outbox/<turn>/` (host runtime: `.data/slack-outbox/...`, added
+  as a writable dir to the sandbox). Files Codex saves there (up to 10, 50 MB each) are uploaded to
+  the thread after the reply. Codex can't generate images on the plan route; it can draw them with code.
 - No hosted web search on the plan route (the tool isn't offered); Codex fetches live data with `curl`.
 - Anyone allowed can reach the model proxy from their container with its key, i.e. use the plan
   directly (as they can through the bot). No per-user rate limits yet.

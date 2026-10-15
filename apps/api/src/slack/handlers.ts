@@ -7,58 +7,10 @@ import { runTurn } from "../agent/codex";
 import { AuthError } from "../auth/siwc";
 import { deleteSession, getSession, saveSession, serialize, sessionKey } from "../sessions";
 import { buildTurnInput, type Trigger } from "./context";
+import { downloadAttachments, uploadFiles } from "./attachments";
+import { openReply, type Reply } from "./reply";
 
 type WebClient = App["client"];
-
-/** Slack's limit for `markdown_text`. */
-const MAX_MARKDOWN = 12_000;
-const PROGRESS_INTERVAL_MS = 2_500;
-
-/** Split on paragraph, then line, boundaries so each part fits in one Slack message. */
-export function chunkMarkdown(text: string, max = MAX_MARKDOWN - 500): string[] {
-  const chunks: string[] = [];
-  let rest = text;
-  while (rest.length > max) {
-    const window = rest.slice(0, max);
-    const cut = Math.max(window.lastIndexOf("\n\n"), window.lastIndexOf("\n"));
-    const at = cut > max / 2 ? cut : max;
-    chunks.push(rest.slice(0, at));
-    rest = rest.slice(at).replace(/^\n+/, "");
-  }
-  chunks.push(rest);
-  return chunks;
-}
-
-/** Edits the placeholder with Codex's latest activity, at most once per interval. */
-function progressReporter(update: (status: string) => Promise<unknown>) {
-  let latest: string | null = null;
-  let lastSent = 0;
-  let timer: Timer | undefined;
-  let closed = false;
-  let chain: Promise<unknown> = Promise.resolve();
-
-  const flush = () => {
-    timer = undefined;
-    if (closed || latest === null) return;
-    const status = latest;
-    latest = null;
-    lastSent = Date.now();
-    chain = chain.then(() => update(status)).catch(() => {});
-  };
-
-  return {
-    push(status: string) {
-      latest = status;
-      timer ??= setTimeout(flush, Math.max(0, lastSent + PROGRESS_INTERVAL_MS - Date.now()));
-    },
-    /** Stops updates and waits for any in-flight edit, so it can't overwrite the final answer. */
-    async close() {
-      closed = true;
-      clearTimeout(timer);
-      await chain;
-    },
-  };
-}
 
 async function react(client: WebClient, channel: string, ts: string, add: string, remove?: string) {
   if (remove) await client.reactions.remove({ channel, timestamp: ts, name: remove }).catch(() => {});
@@ -72,43 +24,41 @@ async function handle(client: WebClient, config: BotConfig, botUserId: string, t
   await react(client, trigger.channel, trigger.ts, "eyes");
 
   await serialize(key, async () => {
-    const placeholder = await client.chat.postMessage({
-      channel: trigger.channel,
-      thread_ts: threadTs,
-      markdown_text: "_Working on it…_",
-    });
-    const placeholderTs = placeholder.ts!;
-    const progress = progressReporter((status) =>
-      client.chat.update({ channel: trigger.channel, ts: placeholderTs, markdown_text: `_Working on it…_\n\n${status}` }),
-    );
-
+    let reply: Reply | undefined;
     try {
+      reply = await openReply(client, { channel: trigger.channel, threadTs, userId: trigger.userId, teamId: trigger.teamId });
       const session = await getSession(key);
-      const input = await buildTurnInput({
+      const turn = await buildTurnInput({
         client,
         trigger,
         session,
         botUserId,
         contextMessages: config.contextMessages,
       });
+      const files = await downloadAttachments(config.slackBotToken, turn.attachments);
       const result = await runTurn({
         config,
         user: { teamId: trigger.teamId, userId: trigger.userId },
         threadId: session?.codexThreadId,
-        input,
-        onProgress: progress.push,
+        input: turn.text,
+        files,
+        onStep: reply.step,
       });
       await saveSession(key, { codexThreadId: result.threadId, lastSeenTs: trigger.ts });
+      await reply.finish(result.text);
 
-      await progress.close();
-      const [first, ...rest] = chunkMarkdown(result.text);
-      await client.chat.update({ channel: trigger.channel, ts: placeholderTs, markdown_text: first! });
-      for (const chunk of rest) {
-        await client.chat.postMessage({ channel: trigger.channel, thread_ts: threadTs, markdown_text: chunk });
+      // After the answer is posted, so a failed upload doesn't replace it with an error.
+      const problems: string[] = [];
+      await uploadFiles(client, trigger.channel, threadTs, result.files).catch((error) => {
+        console.error(`[${key}] upload failed`, error);
+        problems.push(`Couldn't upload ${result.files.map((file) => file.name).join(", ")}: ${error instanceof Error ? error.message : error}`);
+      });
+      if (result.skipped.length) problems.push(`Not uploaded (empty, over 50 MB, or past 10 files): ${result.skipped.join(", ")}`);
+      for (const problem of problems) {
+        await client.chat.postMessage({ channel: trigger.channel, thread_ts: threadTs, markdown_text: `:warning: ${problem}` });
       }
       await react(client, trigger.channel, trigger.ts, "white_check_mark", "eyes");
     } catch (error) {
-      await progress.close();
       console.error(`[${key}]`, error);
       const text = error instanceof Error ? error.message : String(error);
       // The plan route rejected something in the Codex history; resuming would fail forever.
@@ -120,7 +70,7 @@ async function handle(client: WebClient, config: BotConfig, botUserId: string, t
           : poisoned
             ? "That hit something the ChatGPT plan can't run, so I've reset our conversation in this thread. Please ask again."
             : `Something went wrong: ${text}`;
-      await client.chat.update({ channel: trigger.channel, ts: placeholderTs, markdown_text: `:warning: ${message}` }).catch(() => {});
+      await reply?.fail(message).catch((failure) => console.error(`[${key}] couldn't report the error`, failure));
       await react(client, trigger.channel, trigger.ts, "x", "eyes");
     }
   });
@@ -145,7 +95,8 @@ export function registerHandlers(app: App, config: BotConfig, botUserId: string)
 
   // Every message in a DM with the bot; no mention needed there.
   app.message(async ({ message, client, context }) => {
-    if (message.channel_type !== "im" || message.subtype !== undefined) return;
+    // Plain messages and ones with attachments ("file_share"); edits, joins etc. carry other subtypes.
+    if (message.channel_type !== "im" || (message.subtype !== undefined && message.subtype !== "file_share")) return;
     if (!isAllowed(message.user)) return;
     void handle(client, config, botUserId, {
       channel: message.channel,
