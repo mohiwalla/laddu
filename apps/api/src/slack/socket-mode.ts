@@ -127,7 +127,7 @@ export class BunSocketModeReceiver implements Receiver {
         break;
       } catch (error) {
         const delay = Math.min(MAX_BACKOFF_MS, 1000 * 2 ** attempt);
-        console.error(`[socket-mode] reconnect failed, retrying in ${delay / 1000}s:`, error);
+        console.error(`[socket-mode] reconnect failed, retrying in ${delay / 1000}s: ${(error as Error).message}`);
         await Bun.sleep(delay);
       }
     }

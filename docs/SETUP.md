@@ -1,6 +1,7 @@
 # Setup (apps/api)
 
-Needs Bun ≥ 1.4 and a ChatGPT Plus or Pro account. All commands run from `apps/api` unless noted.
+Needs Bun ≥ 1.4, Docker (your user in the `docker` group) and a ChatGPT Plus or Pro account. All
+commands run from `apps/api` unless noted. The first start builds the `dot-runtime` image (a minute or two).
 
 ## 1. Install
 
@@ -83,8 +84,11 @@ Codex works, then the answer, and ✅ on your message.
 | Var | Default | Notes |
 | --- | --- | --- |
 | `CODEX_MODEL` | required | Model slug from `bun run login` |
+| `ALLOWED_SLACK_USERS` | owner only | `"*"` for everyone, or comma-separated member IDs |
+| `CODEX_RUNTIME` | `docker` | `docker`: one container per Slack user; `host`: on this machine (owner-only use) |
 | `CODEX_REASONING_EFFORT` | `medium` | `minimal` … `xhigh` |
-| `CODEX_SANDBOX` | `workspace-write` | `read-only`, `workspace-write`, `danger-full-access` |
+| `CODEX_SANDBOX` | `workspace-write` | Host runtime only: `read-only`, `workspace-write`, `danger-full-access` |
+| `CODEX_NETWORK` | `true` | Host runtime only: internet for Codex's shell; containers are always networked |
 | `CODEX_WORKDIR` | `agent-home` | Codex's working directory; its `AGENTS.md` is the persona |
 | `CONTEXT_MESSAGES` | `20` | Channel messages read before a top-level tag |
 | `DATA_DIR` | `.data` | Credentials, sessions, the bot's `CODEX_HOME` |

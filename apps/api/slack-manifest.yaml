@@ -11,14 +11,15 @@
 #   connections:write, authorizations:read, app_configurations:*   app-level/config tokens, not OAuth
 # incoming-webhook adds a channel picker to the install screen; pick any channel.
 display_information:
-  name: Codex Bot
+  name: dot
   description: Personal assistant backed by Codex.
+  background_color: "#2C2D30"
 features:
   app_home:
     messages_tab_enabled: true
     messages_tab_read_only_enabled: false
   bot_user:
-    display_name: codex
+    display_name: dot
     always_online: true
 oauth_config:
   scopes:

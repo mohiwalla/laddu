@@ -5,7 +5,7 @@ import type { App } from "@slack/bolt";
 import type { BotConfig } from "../config";
 import { runTurn } from "../agent/codex";
 import { AuthError } from "../auth/siwc";
-import { getSession, saveSession, serialize, sessionKey } from "../sessions";
+import { deleteSession, getSession, saveSession, serialize, sessionKey } from "../sessions";
 import { buildTurnInput, type Trigger } from "./context";
 
 type WebClient = App["client"];
@@ -67,7 +67,8 @@ async function react(client: WebClient, channel: string, ts: string, add: string
 
 async function handle(client: WebClient, config: BotConfig, botUserId: string, trigger: Trigger) {
   const threadTs = trigger.threadTs ?? trigger.ts;
-  const key = sessionKey(trigger.channel, threadTs);
+  // Per user: each person in a shared thread has their own Codex thread, in their own container.
+  const key = sessionKey(trigger.channel, threadTs, trigger.userId);
   await react(client, trigger.channel, trigger.ts, "eyes");
 
   await serialize(key, async () => {
@@ -90,7 +91,13 @@ async function handle(client: WebClient, config: BotConfig, botUserId: string, t
         botUserId,
         contextMessages: config.contextMessages,
       });
-      const result = await runTurn({ config, threadId: session?.codexThreadId, input, onProgress: progress.push });
+      const result = await runTurn({
+        config,
+        user: { teamId: trigger.teamId, userId: trigger.userId },
+        threadId: session?.codexThreadId,
+        input,
+        onProgress: progress.push,
+      });
       await saveSession(key, { codexThreadId: result.threadId, lastSeenTs: trigger.ts });
 
       await progress.close();
@@ -103,7 +110,16 @@ async function handle(client: WebClient, config: BotConfig, botUserId: string, t
     } catch (error) {
       await progress.close();
       console.error(`[${key}]`, error);
-      const message = error instanceof AuthError ? error.message : `Something went wrong: ${error instanceof Error ? error.message : String(error)}`;
+      const text = error instanceof Error ? error.message : String(error);
+      // The plan route rejected something in the Codex history; resuming would fail forever.
+      const poisoned = text.includes("subscription_sharing_unsupported_capability");
+      if (poisoned) await deleteSession(key);
+      const message =
+        error instanceof AuthError
+          ? error.message
+          : poisoned
+            ? "That hit something the ChatGPT plan can't run, so I've reset our conversation in this thread. Please ask again."
+            : `Something went wrong: ${text}`;
       await client.chat.update({ channel: trigger.channel, ts: placeholderTs, markdown_text: `:warning: ${message}` }).catch(() => {});
       await react(client, trigger.channel, trigger.ts, "x", "eyes");
     }
@@ -111,28 +127,33 @@ async function handle(client: WebClient, config: BotConfig, botUserId: string, t
 }
 
 export function registerHandlers(app: App, config: BotConfig, botUserId: string) {
-  const isOwner = (userId: string | undefined) => userId === config.ownerUserId;
+  const isAllowed = (userId: string | undefined): userId is string =>
+    userId !== undefined && userId !== botUserId && (config.allowedUsers === "*" || config.allowedUsers.has(userId));
 
   // @mentions in channels (and in threads inside channels).
-  app.event("app_mention", async ({ event, client }) => {
-    if (!isOwner(event.user)) return;
+  app.event("app_mention", async ({ event, client, context }) => {
+    if (!isAllowed(event.user)) return;
     void handle(client, config, botUserId, {
       channel: event.channel,
       ts: event.ts,
       threadTs: event.thread_ts,
       isDm: false,
+      teamId: context.teamId!,
+      userId: event.user,
     });
   });
 
-  // Every owner message in a DM with the bot; no mention needed there.
-  app.message(async ({ message, client }) => {
+  // Every message in a DM with the bot; no mention needed there.
+  app.message(async ({ message, client, context }) => {
     if (message.channel_type !== "im" || message.subtype !== undefined) return;
-    if (!isOwner(message.user)) return;
+    if (!isAllowed(message.user)) return;
     void handle(client, config, botUserId, {
       channel: message.channel,
       ts: message.ts,
       threadTs: message.thread_ts,
       isDm: true,
+      teamId: context.teamId!,
+      userId: message.user,
     });
   });
 }

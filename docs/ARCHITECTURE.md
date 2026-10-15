@@ -17,15 +17,20 @@ apps/
       index.ts         boot: config, ChatGPT token check, Slack Socket Mode
       config.ts        env + paths
       files.ts         JSON / private-file helpers
-      sessions.ts      Slack thread ↔ Codex thread map, per-thread queue
+      sessions.ts      (Slack thread, user) ↔ Codex thread map, per-key queue
       auth/siwc.ts     Sign in with ChatGPT credentials + token refresh
       auth/login.ts    `bun run login`: one-time OAuth (PKCE, loopback)
-      agent/codex.ts   runs Codex turns on the ChatGPT plan
+      agent/codex.ts   runs Codex turns on the ChatGPT plan (in the user's container)
+      agent/containers.ts runtime image + one Docker container per Slack user
+      agent/model-proxy.ts keeps the ChatGPT token out of containers
+      agent/codex-config.ts Codex provider config (direct, or via the proxy)
       slack/context.ts Slack messages → transcript for Codex
       slack/handlers.ts mention/DM handling, progress, replies
       slack/socket-mode.ts Socket Mode receiver on Bun's WebSocket (Bolt's built-in one
                        needs undici's `ping`, which Bun's undici lacks)
-    agent-home/        Codex's working directory; AGENTS.md = bot persona
+    agent-home/        AGENTS.md = bot persona (mounted read-only into containers)
+    docker/Dockerfile  per-user runtime image (Debian + the SDK's own codex build)
+    scripts/codex-docker.sh stand-in `codex` that runs the real one via `docker exec`
     slack-manifest.yaml
 packages/
   typescript-config/   shared tsconfig
@@ -41,22 +46,43 @@ doing on its computer, and a marketing site if this becomes something teammates 
    │
    ▼  Slack Socket Mode (websocket, no public URL)
  apps/api
-   1. owner check: only OWNER_SLACK_USER_ID is answered, everyone else is ignored
+   1. allow-list: ALLOWED_SLACK_USERS ("*" = everyone; default: owner only)
    2. react 👀, post "Working on it…" in the thread
    3. build transcript:
         in a thread  → thread replies (conversations.replies)
         top-level    → last N channel messages up to the tag (conversations.history)
         follow-up    → only messages newer than the last turn
-   4. Codex turn: new thread, or resume the one mapped to this Slack thread
-        • spawned per turn via @openai/codex-sdk (`codex exec`)
-        • billed to your ChatGPT plan through a SIWC access token
+   4. Codex turn in the requester's container: new thread, or resume theirs for this Slack thread
+        • spawned per turn via @openai/codex-sdk (`codex exec`, through scripts/codex-docker.sh)
+        • billed to your ChatGPT plan; the token stays on the host (model proxy)
         • progress events edit the placeholder ("Running `git log`", plan checklist…)
    5. final answer replaces the placeholder (Markdown; split past 12k chars), 👀 → ✅
 ```
 
-One Slack thread = one Codex thread. Turns in the same Slack thread are queued, never run in parallel.
-Codex stores the conversation in its own home (`.data/codex-home/sessions`); the bot stores only
-`{slack thread → codex thread id, last seen ts}` in `.data/sessions.json`.
+One (Slack thread, user) = one Codex thread, so two people in the same thread each have their own
+conversation with the bot. Turns for the same key are queued. Codex stores conversations in the
+user's container volume; the bot stores only `{key → codex thread id, last seen ts}` in
+`.data/sessions.json`.
+
+## Isolation: one container per user
+
+Everything Codex executes runs in a Docker container dedicated to the Slack user who asked
+(`dot-<team>-<user>`, created on first use, `--restart unless-stopped`):
+
+- Non-root user `dot`, all Linux capabilities dropped, `no-new-privileges`, no sudo; 2 GB memory,
+  2 CPUs, 512 processes.
+- No host files except the persona and Codex config, both read-only. A named volume
+  (`dot-home-<team>-<user>`) keeps the user's workspace and Codex sessions; nobody else sees it.
+- Internet access on (Codex needs it to reach the model proxy; users need it for `curl`).
+- **The ChatGPT token never enters a container.** Codex there talks to `agent/model-proxy.ts`, a
+  Bun server on the Docker bridge address (not reachable from the LAN). It requires a random
+  per-process key, allows only `POST /v1/responses` and `GET /v1/models`, and adds the real token.
+  Verified: no token in any process environment inside the container; other API paths get 403.
+- The image bundles the exact codex build the SDK ships (`node_modules/@openai/codex-linux-*`),
+  and is rebuilt (containers recreated, volumes kept) when that version or the Dockerfile changes.
+
+`CODEX_RUNTIME="host"` runs Codex on the host instead (Codex sandbox only: blocks writes outside
+`agent-home`, but can read your files). Owner-only use at most.
 
 ## The brain: Codex on your ChatGPT plan
 
@@ -100,8 +126,10 @@ Docs: [SIWC overview](https://developers.openai.com/siwc/token-sharing-open-sour
   the bot on your own machine is the clear case. For a server, OpenAI documents a "self-hosted VM"
   path (sign in locally, copy credentials over SSH), but check it still fits the terms before
   relying on it.
-- **Owner only.** Your ChatGPT plan and, later, your accounts sit behind this bot, so it answers
-  exactly one Slack user.
+- **Shared plan.** Every allowed user's turns bill the owner's ChatGPT plan. OpenAI's terms on
+  serving others from a personal plan are worth checking before opening this up widely.
+- **Integrations vs. multi-user.** Anything private wired in later (email, repos) would be reachable
+  by every allowed user unless scoped per user.
 
 ## Roadmap
 
@@ -125,12 +153,17 @@ scratch directory, no integrations.
   server on a VM).
 - A dashboard app to watch the bot's computer and running tasks.
 - Guardrails: approval before write actions, per-task sandboxes, audit log.
-- Multi-user or teammate-run instances (needs per-user SIWC and a look at OpenAI's terms).
+- Per-user billing (each user signs in with their own ChatGPT) and per-user usage caps.
 
 ## Known V0 limitations
 
 - In channels the bot only responds when tagged, including in threads it's already in.
 - In DMs every message is handled, and each top-level DM starts its own thread.
 - Files and images in Slack are mentioned by name only; their content isn't fetched.
-- Web search is off (support on the plan route depends on model and account policy).
+- No hosted web search on the plan route (the tool isn't offered); Codex fetches live data with `curl`.
+- Anyone allowed can reach the model proxy from their container with its key, i.e. use the plan
+  directly (as they can through the bot). No per-user rate limits yet.
+- Containers share Docker's default bridge: they can reach services on the host bound to
+  `0.0.0.0`/the bridge, and each other's IPs.
+- Cancelling a turn stops `docker exec` on the host, not the Codex process inside the container.
 - State is in local JSON files; one process only.

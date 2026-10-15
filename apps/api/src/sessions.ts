@@ -1,5 +1,5 @@
 /**
- * Maps a Slack thread to the Codex thread that answers in it.
+ * Maps (Slack thread, user) to the Codex thread that answers that user there.
  * Codex keeps the conversation itself (in CODEX_HOME/sessions); we only keep the pointer
  * and the newest Slack message ts already sent to Codex, so follow-ups only send new messages.
  */
@@ -19,7 +19,7 @@ async function all(): Promise<Record<string, Session>> {
   return sessions;
 }
 
-export const sessionKey = (channel: string, threadTs: string) => `${channel}:${threadTs}`;
+export const sessionKey = (channel: string, threadTs: string, userId: string) => `${channel}:${threadTs}:${userId}`;
 
 export async function getSession(key: string): Promise<Session | undefined> {
   return (await all())[key];
@@ -28,6 +28,12 @@ export async function getSession(key: string): Promise<Session | undefined> {
 export async function saveSession(key: string, session: Session): Promise<void> {
   const store = await all();
   store[key] = session;
+  await writeJsonPrivate(paths.sessions, store);
+}
+
+export async function deleteSession(key: string): Promise<void> {
+  const store = await all();
+  delete store[key];
   await writeJsonPrivate(paths.sessions, store);
 }
 

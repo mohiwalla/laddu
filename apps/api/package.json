@@ -6,6 +6,8 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun --watch run src/index.ts",
+    "start:srafis": "bun --env-file=.env --env-file=.env.srafis run src/index.ts",
+    "dev:srafis": "bun --watch --env-file=.env --env-file=.env.srafis run src/index.ts",
     "login": "bun run src/auth/login.ts",
     "typecheck": "tsc --noEmit"
   },

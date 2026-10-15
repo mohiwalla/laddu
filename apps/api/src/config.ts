@@ -30,13 +30,25 @@ export const appName = optional("APP_NAME", "slack-codex-bot");
 
 /** Settings only the bot process needs. Read lazily so `bun run login` works without Slack tokens. */
 export function loadBotConfig() {
+  const ownerUserId = required("OWNER_SLACK_USER_ID");
+  const allowed = optional("ALLOWED_SLACK_USERS", ownerUserId);
   return {
     slackBotToken: required("SLACK_BOT_TOKEN"),
     slackAppToken: required("SLACK_APP_TOKEN"),
-    ownerUserId: required("OWNER_SLACK_USER_ID"),
+    ownerUserId,
+    /** Who can use the bot: "*" for everyone in the workspace, else comma-separated user IDs. */
+    allowedUsers: allowed === "*" ? ("*" as const) : new Set(allowed.split(",").map((id) => id.trim())),
+    /** "docker": Codex runs in a per-user container (default). "host": on this machine, sandboxed only by Codex. */
+    runtime: optional("CODEX_RUNTIME", "docker") as "docker" | "host",
     model: required("CODEX_MODEL"),
     reasoningEffort: optional("CODEX_REASONING_EFFORT", "medium") as ModelReasoningEffort,
+    /** Host runtime only; in Docker the container is the boundary. */
     sandbox: optional("CODEX_SANDBOX", "workspace-write") as SandboxMode,
+    /**
+     * Host runtime only: internet access for Codex's shell (curl etc.). Containers are always
+     * networked, since Codex reaches the model through the proxy. No hosted web search on the plan route.
+     */
+    network: optional("CODEX_NETWORK", "true") === "true",
     workdir: fromAppRoot(optional("CODEX_WORKDIR", "agent-home")),
     contextMessages: Number(optional("CONTEXT_MESSAGES", "20")),
   };
