@@ -4,3 +4,6 @@ node_modules/
 .turbo/
 .env.*
 !.env.example
+
+# Private, per-deployment instructions appended to the persona (see docs/ARCHITECTURE.md)
+**/AGENTS.local.md

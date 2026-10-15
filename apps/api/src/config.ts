@@ -52,6 +52,8 @@ export function loadBotConfig() {
 			"CODEX_REASONING_EFFORT",
 			"medium",
 		) as ModelReasoningEffort,
+		/** Fast mode (Codex's service_tier "fast"): quicker answers that use more of the plan's limits. */
+		fast: optional("CODEX_FAST", "false") === "true",
 		/** Host runtime only; in Docker the container is the boundary. */
 		sandbox: optional("CODEX_SANDBOX", "workspace-write") as SandboxMode,
 		/**

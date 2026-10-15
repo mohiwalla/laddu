@@ -37,7 +37,9 @@ apps/
       slack/reply.ts   streamed reply: steps as Slack task cards, then the answer
       slack/socket-mode.ts Socket Mode receiver on Bun's WebSocket (Bolt's built-in one
                        needs undici's `ping`, which Bun's undici lacks)
-    agent-home/        AGENTS.md = bot persona (mounted read-only into containers)
+    agent-home/        AGENTS.md = bot persona (mounted read-only into containers); an optional,
+                       git-ignored AGENTS.local.md holds per-deployment private instructions
+                       (e.g. who owns dot), appended to the persona every turn
     runtime/           commands for Codex (Python, stdlib): `memory` (per-user memory),
                        `recall` (search past conversations), `schedule` (scheduled tasks)
     docker/Dockerfile  per-user runtime image (Debian + the SDK's own codex build)

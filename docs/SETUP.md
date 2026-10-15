@@ -42,7 +42,23 @@ changes. You still need `OWNER_SLACK_USER_ID` (step 4 below) and the ChatGPT sig
    newer scopes (`code_channels:manage`, `mcp:connect`, `assistant:write`), delete that line and retry.
 
 4. Your Slack profile → ⋮ → **Copy member ID** → `OWNER_SLACK_USER_ID`.
-5. Invite the bot to the channels where you'll tag it (`/invite @codex`).
+5. Invite the bot to the channels where you'll tag it (`/invite @dot`).
+
+### Updating the app later
+
+When `slack-manifest.yaml` changes (new events, commands, shortcuts), push it with the Slack CLI
+from `apps/api`:
+
+```sh
+slack login                           # once per machine; see below if it can't prompt
+slack manifest validate --app <APP_ID>
+slack install --app <APP_ID>          # updates the manifest and reinstalls; tokens stay the same
+```
+
+`slack app list` shows the app IDs. Where the CLI can't prompt (scripts, agents), log in in two
+steps: `slack login` prints a `/slackauthticket …` command; send it in Slack, approve, then run
+`slack login --ticket <ticket> --challenge <code>` with the code Slack shows. Or paste the manifest
+by hand: api.slack.com/apps → your app → **App Manifest**.
 
 ## 3. Sign in with ChatGPT
 
@@ -77,21 +93,82 @@ bun run dev      # from apps/api, with reload; or `bun run dev` at the root via 
 bun run start
 ```
 
-Then tag the bot in a channel or DM it. You'll see 👀, a "Working on it…" reply that updates as
-Codex works, then the answer, and ✅ on your message.
+Then tag the bot in a channel or DM it. A "Working on it" panel appears in the thread, lists what
+Codex is doing with a running clock, and the answer lands under it. The first start builds the
+`dot-runtime` image (a few minutes) before the bot connects.
+
+### Several workspaces
+
+Shared settings go in `.env`; each workspace gets its own `.env.<name>` with its Slack tokens and
+`OWNER_SLACK_USER_ID`, loaded on top. `start:srafis` / `dev:srafis` in `package.json` are the
+example; add a pair per workspace. Each needs its own `DATA_DIR` if two run at once.
+
+### Private instructions
+
+`agent-home/AGENTS.local.md` (git-ignored) is appended to the persona every turn: use it for
+deployment-specific rules, such as who owns the bot. Edits to it, or to `AGENTS.md`, apply from the
+next message; no restart.
+
+### Run as a service (Linux, systemd)
+
+So the bot starts at boot and comes back if it crashes. A user service needs no root:
+
+```ini
+# ~/.config/systemd/user/dot-srafis.service
+[Unit]
+Description=dot Slack bot (srafis workspace)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/path/to/repo/apps/api
+Environment=PATH=/home/<you>/.bun/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/<you>/.bun/bin/bun run start:srafis
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now dot-srafis   # start now and at every login
+sudo loginctl enable-linger $USER          # keep it running when you're logged out / at boot
+```
+
+Day to day:
+
+```sh
+systemctl --user restart dot-srafis        # after code changes (src/, runtime/, docker/)
+systemctl --user status dot-srafis         # running? since when?
+journalctl --user -u dot-srafis -f         # live logs (Ctrl-C to stop following)
+systemctl --user stop dot-srafis           # stop until the next start or reboot
+```
+
+A restart mid-answer is safe: the bot closes the half-finished reply and answers again. Prompt
+edits (`AGENTS.md`, `AGENTS.local.md`) need no restart; Slack app changes need `slack install`, not
+a restart. Changing `docker/Dockerfile` rebuilds the image on the next start (a few minutes
+offline).
 
 ## Configuration
 
 | Var                      | Default           | Notes                                                                            |
 | ------------------------ | ----------------- | -------------------------------------------------------------------------------- |
+| `SLACK_BOT_TOKEN`        | required          | `xoxb-…`, from installing the app                                                |
+| `SLACK_APP_TOKEN`        | required          | `xapp-…`, app-level token with `connections:write` (Socket Mode)                 |
+| `OWNER_SLACK_USER_ID`    | required          | Your member ID; see step 2.4                                                     |
 | `CODEX_MODEL`            | required          | Model slug from `bun run login`                                                  |
 | `ALLOWED_SLACK_USERS`    | owner only        | `"*"` for everyone, or comma-separated member IDs                                |
 | `CODEX_RUNTIME`          | `docker`          | `docker`: one container per Slack user; `host`: on this machine (owner-only use) |
 | `CODEX_REASONING_EFFORT` | `medium`          | `minimal` … `xhigh`                                                              |
+| `CODEX_FAST`             | `false`           | `true`: fast mode, quicker answers that use more of the plan's limits            |
 | `CODEX_SANDBOX`          | `workspace-write` | Host runtime only: `read-only`, `workspace-write`, `danger-full-access`          |
 | `CODEX_NETWORK`          | `true`            | Host runtime only: internet for Codex's shell; containers are always networked   |
 | `CODEX_WORKDIR`          | `agent-home`      | Codex's working directory; its `AGENTS.md` is the persona                        |
 | `CONTEXT_MESSAGES`       | `20`              | Channel messages read before a top-level tag                                     |
+| `MEMORY_REVIEW_EVERY`    | `3`               | Turns per person between background memory reviews; `"0"` turns them off         |
+| `TRIGGER_EMOJI`          | `robot_face`      | Reacting with this emoji to a message asks dot to handle it                      |
 | `DATA_DIR`               | `.data`           | Credentials, sessions, the bot's `CODEX_HOME`                                    |
 | `APP_NAME`               | `slack-codex-bot` | Name shown on the ChatGPT consent screen at first registration                   |
 

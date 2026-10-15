@@ -74,6 +74,10 @@ async function createCodex(
 	turnId: string,
 	turnEnv: Record<string, string>,
 ) {
+	// Passed to every codex run as `-c` overrides.
+	const overrides: Record<string, string> = config.fast
+		? { service_tier: "fast" }
+		: {}
 	const base: ThreadOptions = {
 		model: config.model,
 		modelReasoningEffort: config.reasoningEffort,
@@ -86,6 +90,18 @@ async function createCodex(
 		const owner = `${user.teamId}-${user.userId}`
 		const outbox = `${paths.dataDir}/slack-outbox/${owner}/${turnId}`
 		const toolEnv = hostToolEnv(user)
+		// Codex reads the persona from the workdir; the private additions go in as its global
+		// instructions (CODEX_HOME/AGENTS.md), refreshed each turn like the persona.
+		const privateNotes = Bun.file(`${config.workdir}/AGENTS.local.md`)
+		if (await privateNotes.exists())
+			await writePrivate(
+				`${paths.codexHome}/AGENTS.md`,
+				await privateNotes.text(),
+			)
+		else
+			await Bun.file(`${paths.codexHome}/AGENTS.md`)
+				.delete()
+				.catch(() => {})
 		await Bun.$`mkdir -p ${outbox} ${toolEnv.DOT_MEMORY_DIR} ${toolEnv.DOT_HISTORY_DIR}`.quiet()
 		const env = codexEnv({
 			CODEX_HOME: paths.codexHome,
@@ -95,7 +111,7 @@ async function createCodex(
 			PATH: `${TOOLS_DIR}:${Bun.env.PATH ?? ""}`,
 		})
 		return {
-			codex: new Codex({ env }),
+			codex: new Codex({ env, config: overrides }),
 			threadOptions: {
 				...base,
 				sandboxMode: config.sandbox,
