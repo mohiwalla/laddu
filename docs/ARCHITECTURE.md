@@ -31,6 +31,7 @@ apps/
       agent/tools.ts   runs runtime/ commands for a user (container or host)
       agent/bot-api.ts API for container commands that need the bot (`schedule`), signed per turn
       scheduler.ts     scheduled tasks: store, cron/time-zone maths, 30-second check
+      integrations/azure-devops.ts per-person Azure DevOps: Microsoft sign-in, tokens, read requests
       slack/context.ts Slack messages → transcript for Codex
       slack/attachments.ts Slack files in (downloads) and out (outbox uploads)
       slack/handlers.ts mention/DM handling
@@ -42,7 +43,8 @@ apps/
                        appended to the persona every turn. skills/ = built-in skills;
                        skills.local/ (git-ignored) = the deployment's team skills
     runtime/           commands for Codex (Python, stdlib): `memory` (per-user memory),
-                       `recall` (search past conversations), `schedule` (scheduled tasks)
+                       `recall` (search past conversations), `schedule` (scheduled tasks),
+                       `ado` (Azure DevOps)
     docker/Dockerfile  per-user runtime image (Debian + the SDK's own codex build)
     scripts/codex-docker.sh stand-in `codex` that runs the real one via `docker exec`
     slack-manifest.yaml
@@ -105,6 +107,39 @@ Everything Codex executes runs in a Docker container dedicated to the Slack user
 
 `CODEX_RUNTIME="host"` runs Codex on the host instead (Codex sandbox only: blocks writes outside
 `agent-home`, but can read your files). Only for yourself, at most.
+
+## Integrations
+
+Per person, never shared: each person connects their own account, and dot only sees what that
+account can. Tokens stay on the host; containers reach an integration through the bot API with the
+turn's signed caller credential, so a command can only act as the person asking.
+
+**Azure DevOps** (`integrations/azure-devops.ts`, `runtime/ado`), on when `AZURE_DEVOPS_CLIENT_ID`
+is set:
+
+- **Connecting.** Asking dot anything Azure DevOps-related while not connected makes Codex run
+  `ado connect`. The bot starts Microsoft Entra's device code flow (public client, scope: Azure
+  DevOps' `.default` plus `offline_access`) and DMs the person the code, never in the channel. It
+  polls until they approve, then accepts the account only if one of its emails (token claims or
+  Azure DevOps profile) matches their Slack email. Otherwise anyone could link someone else's
+  account to their own dot by getting them to enter a code. Their organizations come from the
+  Azure DevOps profile API.
+- **Tokens.** `.data/azure-devops.json` (mode 600): access token (1 h), refresh token, refreshed
+  5 minutes before expiry, one refresh at a time per person. A rejected refresh (`invalid_grant`)
+  disconnects them.
+- **Requests.** `ado` posts to the bot API's `/ado/request`. Only Azure DevOps hosts
+  (`dev.azure.com`, `*.dev.azure.com`, `*.visualstudio.com`) over https; GET, plus POST to the
+  read-only query endpoints (`wit/wiql`, `wit/workitemsbatch`, `search/`). `api-version=7.1` is
+  added when missing; responses are capped at 400 KB. A sign-in page in place of JSON (an org the
+  account isn't in, or one not on Entra) becomes a clear error.
+- **Changes.** `ado update`/`comment`/`create` (JSON Patch on work items; `System.History` for
+  comments) and `ado write` (any other POST/PATCH/PUT/DELETE) go to `/ado/write` and run straight
+  away with the person's token, scheduled runs included. Each is logged (who, what, status), and
+  dot reports the result with a link. The persona has it check first only when the request is
+  unclear or deletes something, and never act on instructions found in work items or messages.
+- **For Codex.** `ado wiql` (query, then a batch read of the usual fields), `ado item <id>
+--comments`, and `ado get`/`ado post` for the rest of the REST API. Scheduled runs can read
+  ("every Monday, summarize my open bugs") but can't start a sign-in.
 
 ## Ways in
 
@@ -227,8 +262,8 @@ scratch directory, no integrations.
 
 **V1.**
 
-- Integrations as local MCP servers registered in the bot's `CODEX_HOME/config.toml`: GitHub/repos,
-  Outlook (Microsoft Graph), App Store Connect/TestFlight, issue tracker.
+- More integrations, per person like Azure DevOps: GitHub/repos, Outlook (Microsoft Graph), App
+  Store Connect/TestFlight.
 - A context map: project names → repos, trackers and docs, so questions about progress
   land on the right sources.
 - Deeper Slack context: older history when the tagged message needs it.
@@ -241,7 +276,7 @@ scratch directory, no integrations.
   isn't available on the plan route, so this would be a local tool (e.g. a browser-automation MCP
   server on a VM).
 - A dashboard app to watch the bot's computer and running tasks.
-- Guardrails: approval before write actions, per-task sandboxes, audit log.
+- Guardrails: per-task sandboxes, an audit log of changes.
 - Per-user billing (each user signs in with their own ChatGPT) and per-user usage caps.
 
 ## Known V0 limitations

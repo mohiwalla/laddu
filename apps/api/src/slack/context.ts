@@ -81,7 +81,10 @@ export type Trigger = {
 	request?: string
 }
 
-const profiles = new Map<string, { name: string; timezone: string }>()
+const profiles = new Map<
+	string,
+	{ name: string; timezone: string; email: string }
+>()
 const channels = new Map<string, string>()
 
 /** Display name and time zone from the person's Slack profile, cached for the process. */
@@ -98,6 +101,7 @@ async function profile(client: WebClient, userId: string) {
 			user?.name ||
 			userId,
 		timezone: user?.tz || "UTC",
+		email: user?.profile?.email ?? "",
 	}
 	// Don't cache a failed lookup.
 	if (user) profiles.set(userId, found)
@@ -106,6 +110,10 @@ async function profile(client: WebClient, userId: string) {
 
 export const userName = async (client: WebClient, userId: string) =>
 	(await profile(client, userId)).name
+
+/** The email on the person's Slack profile ("" if Slack doesn't share it). */
+export const userEmail = async (client: WebClient, userId: string) =>
+	(await profile(client, userId)).email
 
 /** IANA time zone ("Asia/Kolkata") set in the person's Slack profile. */
 export const userTimezone = async (client: WebClient, userId: string) =>

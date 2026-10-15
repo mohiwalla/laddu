@@ -67,6 +67,13 @@ in `docs/ARCHITECTURE.md` and `docs/SETUP.md`; this is the why and the where-nex
   kept out of git) and personal (dot writes them per person and fixes them when they're wrong).
   Personal skills never reach anyone else on their own; sharing one is a deliberate copy into the
   team skills.
+- **Integrations are per person, never shared.** Everyone connects their own account and dot sees
+  only what they can. Tokens stay on the host; containers go through the bot. Azure DevOps came
+  first, with Microsoft's device code sign-in, accepted only when the account matches the person's
+  Slack email.
+- **Changes happen when asked, no approval step.** dot changes Azure DevOps as the person straight
+  away (an approval card was tried and dropped), checking first only when the request is unclear
+  or deletes something.
 - **Code style:** Prettier with tabs and no semicolons, run with `bun run format`.
 
 ### What dot can do today
@@ -82,6 +89,9 @@ in `docs/ARCHITECTURE.md` and `docs/SETUP.md`; this is the why and the where-nex
 - Show live progress, explain failures in plain words (a used-up plan says when it resets), retry
   the ones worth retrying, and pick up answers a restart cut off.
 - Keep a separate conversation with each person in a shared thread.
+- Work with Azure DevOps (Boards, Repos, Pipelines) as each person, once they've connected with
+  a Microsoft sign-in it DMs them: read work items, sprints, PRs and builds; close, edit, comment
+  on and create work items.
 - Run scheduled tasks: reminders and recurring work ("every Monday 9am, summarize #sales").
 - Be asked by @mention, DM, group DM, `/dot`, the "Ask dot" message shortcut, or reacting with 🤖.
   It reacts instead of replying when a message needs no answer, and adds no status reactions
@@ -92,8 +102,8 @@ plan route doesn't offer it), or search the web through a built-in tool (it uses
 
 ### Next
 
-- **Integrations:** GitHub/repos, email, App Store Connect/TestFlight, issue tracker, so the
-  original examples work ("issues reported on TestFlight last week", "progress on a feature").
+- **More integrations:** GitHub/repos, email, App Store Connect/TestFlight, so the original
+  examples work ("issues reported on TestFlight last week").
 - **A context map:** project names → the repos, trackers and docs that describe them.
 - **Real work:** "finish the search feature" runs in an isolated checkout and ends with a PR link
   in the thread.
@@ -112,7 +122,7 @@ Further out:
   exposes (TestFlight's UI, for example). The per-user containers are the first step.
 - **A dashboard** to watch what dot is doing on its computer.
 - **Always on:** host it on a server (a VPS) for the whole team instead of a personal machine.
-- **Guardrails:** approval before write actions, an audit log.
+- **Guardrails:** an audit log of changes.
 - **Per-user billing** (each person signs in with their own ChatGPT) and teammates running their
   own dot.
 

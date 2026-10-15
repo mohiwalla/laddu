@@ -1,0 +1,278 @@
+#!/usr/bin/env python3
+"""
+Azure DevOps (Boards, Repos, Pipelines…) as the person you're working for.
+Their sign-in stays with the bot; requests go through it.
+
+  ado status                      connected? which account and organizations
+  ado connect                     DM them a Microsoft sign-in link (never ask for passwords or tokens)
+  ado disconnect                  forget their sign-in
+  ado use <org>                   set their default organization
+  ado wiql "<WIQL>" [--project P] [--top N] [--fields a,b] [--json]
+                                  query work items; prints id, type, state, title, assignee
+  ado item <id> [--comments]      one work item: fields, description, links (and its comments)
+  ado get <path-or-url>           any REST API GET, e.g. "_apis/projects",
+                                  "<project>/_apis/git/repositories", "<project>/<team>/_apis/work/teamsettings/iterations?$timeframe=current"
+  ado post <path> --json '<body>' read-only POSTs only: _apis/wit/wiql, _apis/wit/workitemsbatch, search
+                                  (https://almsearch.dev.azure.com/<org>/<project>/_apis/search/workitemsearchresults)
+
+Changes (made straight away, as them):
+  ado update <id> --set State=Closed [--set AssignedTo=a@b.com ...] [--comment "text"]
+                                  field names: State, Title, AssignedTo, Tags, Priority, IterationPath,
+                                  AreaPath, Description, StoryPoints, RemainingWork, or full reference names
+  ado comment <id> "text"         add a comment (discussion) to a work item
+  ado create <project> <type> --title "..." [--set Field=Value ...]   e.g. type Bug, Task, "User Story"
+  ado write <METHOD> <path> [--json '<body>'] [--summary "<one line>"]  any other change in the REST API
+
+--org picks the organization (default: theirs from `ado use`, or their only one). Paths are under
+https://dev.azure.com/<org>/; api-version 7.1 is added unless given. Full URLs on other Azure
+DevOps hosts (vssps, vsrm, almsearch) work too.
+"""
+import argparse
+import html
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+API = os.environ.get("DOT_API")
+CALLER = os.environ.get("DOT_CALLER")
+
+
+def call(method, path, body=None, quiet=False):
+    """The bot's reply text, or exits with its error."""
+    if not API or not CALLER:
+        sys.exit("error: Azure DevOps isn't available here (no connection to the bot in this turn).")
+    request = urllib.request.Request(
+        f"{API}/ado/{path}",
+        method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"x-dot-caller": CALLER, "content-type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=90) as response:
+            return json.load(response)["text"]
+    except urllib.error.HTTPError as error:
+        try:
+            message = json.load(error)["text"]
+        except Exception:
+            message = f"HTTP {error.code}"
+        sys.exit(f"error: {message}")
+    except urllib.error.URLError as error:
+        sys.exit(f"error: couldn't reach the bot ({error.reason}).")
+
+
+def api(method, path, org=None, body=None):
+    text = call("POST", "request", {"method": method, "path": path, "organization": org, "body": body})
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        sys.exit(f"error: unexpected reply from Azure DevOps: {text[:500]}")
+
+
+def person(value):
+    if isinstance(value, dict):
+        return value.get("displayName") or value.get("uniqueName") or ""
+    return value or ""
+
+
+def plain(text):
+    """Work item HTML (descriptions, comments) as readable text."""
+    text = re.sub(r"<br\s*/?>|</(p|div|li|h\d)>", "\n", text or "", flags=re.I)
+    text = re.sub(r"<li[^>]*>", "- ", text, flags=re.I)
+    text = html.unescape(re.sub(r"<[^>]+>", "", text))
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+DEFAULT_FIELDS = [
+    "System.Id", "System.WorkItemType", "System.State", "System.Title",
+    "System.AssignedTo", "System.ChangedDate", "System.IterationPath",
+]
+
+
+def wiql(args):
+    path = f"{args.project}/_apis/wit/wiql?$top={args.top}" if args.project else f"_apis/wit/wiql?$top={args.top}"
+    result = api("POST", path, args.org, {"query": args.query})
+    ids = [item["id"] for item in result.get("workItems", [])][: args.top]
+    if not ids:
+        print("No work items match.")
+        return
+    fields = args.fields.split(",") if args.fields else DEFAULT_FIELDS
+    items = []
+    for start in range(0, len(ids), 200):
+        batch = api("POST", "_apis/wit/workitemsbatch", args.org, {"ids": ids[start:start + 200], "fields": fields})
+        items += batch.get("value", [])
+    order = {id: index for index, id in enumerate(ids)}
+    items.sort(key=lambda item: order.get(item["id"], 0))
+    if args.json:
+        print(json.dumps([item["fields"] for item in items], indent=1))
+        return
+    for item in items:
+        f = item["fields"]
+        if args.fields:
+            print(f"#{item['id']}  " + "  |  ".join(f"{name}: {person(f.get(name))}" for name in fields if name != "System.Id"))
+            continue
+        assignee = person(f.get("System.AssignedTo")) or "unassigned"
+        print(f"#{item['id']}  [{f.get('System.WorkItemType')}] {f.get('System.State')}  {f.get('System.Title')}  ({assignee}; {f.get('System.IterationPath', '')}; changed {str(f.get('System.ChangedDate', ''))[:10]})")
+    print(f"\n{len(items)} work item(s){' (limited by --top)' if len(ids) == args.top else ''}.")
+
+
+def item(args):
+    found = api("GET", f"_apis/wit/workitems/{args.id}?$expand=relations", args.org)
+    f = found.get("fields", {})
+    print(f"#{found['id']} [{f.get('System.WorkItemType')}] {f.get('System.Title')}")
+    for name in ["System.State", "System.Reason", "System.AssignedTo", "System.CreatedBy", "System.CreatedDate",
+                 "System.ChangedDate", "System.AreaPath", "System.IterationPath", "System.Tags",
+                 "Microsoft.VSTS.Common.Priority", "Microsoft.VSTS.Scheduling.StoryPoints",
+                 "Microsoft.VSTS.Scheduling.RemainingWork", "System.TeamProject"]:
+        if f.get(name) not in (None, ""):
+            print(f"{name.split('.')[-1]}: {person(f[name])}")
+    for name in ["System.Description", "Microsoft.VSTS.Common.AcceptanceCriteria", "Microsoft.VSTS.TCM.ReproSteps"]:
+        if f.get(name):
+            print(f"\n{name.split('.')[-1]}:\n{plain(f[name])}")
+    relations = found.get("relations") or []
+    if relations:
+        print("\nLinks:")
+        for relation in relations:
+            name = relation.get("attributes", {}).get("name") or relation.get("rel")
+            print(f"- {name}: {relation.get('url')}")
+    web = found.get("_links", {}).get("html", {}).get("href")
+    if web:
+        print(f"\nOpen: {web}")
+    if args.comments:
+        project = f.get("System.TeamProject")
+        comments = api("GET", f"{project}/_apis/wit/workItems/{args.id}/comments?api-version=7.1-preview.4", args.org)
+        print(f"\nComments ({comments.get('totalCount', 0)}):")
+        for comment in comments.get("comments", []):
+            print(f"- {person(comment.get('createdBy'))}, {str(comment.get('createdDate', ''))[:16]}: {plain(comment.get('text'))}")
+
+
+FIELDS = {
+    "state": "System.State", "title": "System.Title", "assignedto": "System.AssignedTo",
+    "tags": "System.Tags", "priority": "Microsoft.VSTS.Common.Priority",
+    "iterationpath": "System.IterationPath", "iteration": "System.IterationPath",
+    "areapath": "System.AreaPath", "area": "System.AreaPath", "description": "System.Description",
+    "storypoints": "Microsoft.VSTS.Scheduling.StoryPoints",
+    "remainingwork": "Microsoft.VSTS.Scheduling.RemainingWork", "reason": "System.Reason",
+    "acceptancecriteria": "Microsoft.VSTS.Common.AcceptanceCriteria",
+}
+
+
+def field_ops(pairs):
+    ops = []
+    for pair in pairs or []:
+        if "=" not in pair:
+            sys.exit(f"error: --set takes Field=Value, got {pair!r}.")
+        name, value = pair.split("=", 1)
+        name = FIELDS.get(name.strip().lower().replace(" ", ""), name.strip())
+        ops.append({"op": "add", "path": f"/fields/{name}", "value": value})
+    return ops
+
+
+def change(method, path, org, body, summary):
+    print(call("POST", "write", {"method": method, "path": path, "organization": org, "body": body, "summary": summary}))
+
+
+def title_of(id, org):
+    found = api("GET", f"_apis/wit/workitems/{id}?fields=System.Title,System.WorkItemType", org)
+    f = found.get("fields", {})
+    return f"{f.get('System.WorkItemType', 'Item')} #{id} \"{f.get('System.Title', '')}\""
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="ado", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("status")
+    commands.add_parser("connect")
+    commands.add_parser("disconnect")
+    use = commands.add_parser("use")
+    use.add_argument("org")
+    update = commands.add_parser("update")
+    update.add_argument("id", type=int)
+    update.add_argument("--set", action="append", dest="fields")
+    update.add_argument("--comment")
+    update.add_argument("--summary")
+    update.add_argument("--org")
+    comment = commands.add_parser("comment")
+    comment.add_argument("id", type=int)
+    comment.add_argument("text")
+    comment.add_argument("--org")
+    create = commands.add_parser("create")
+    create.add_argument("project")
+    create.add_argument("type")
+    create.add_argument("--title", required=True)
+    create.add_argument("--set", action="append", dest="fields")
+    create.add_argument("--org")
+    write = commands.add_parser("write")
+    write.add_argument("method", choices=["POST", "PATCH", "PUT", "DELETE", "post", "patch", "put", "delete"])
+    write.add_argument("path")
+    write.add_argument("--json", dest="body")
+    write.add_argument("--summary")
+    write.add_argument("--org")
+    for name in ("wiql", "item", "get", "post"):
+        sub = commands.add_parser(name)
+        sub.add_argument("--org")
+        if name == "wiql":
+            sub.add_argument("query")
+            sub.add_argument("--project")
+            sub.add_argument("--top", type=int, default=50)
+            sub.add_argument("--fields")
+            sub.add_argument("--json", action="store_true")
+        elif name == "item":
+            sub.add_argument("id", type=int)
+            sub.add_argument("--comments", action="store_true")
+        else:
+            sub.add_argument("path")
+            if name == "post":
+                sub.add_argument("--json", required=True, dest="body")
+    args = parser.parse_args()
+
+    if args.command == "status":
+        print(call("GET", "status"))
+    elif args.command == "connect":
+        print(call("POST", "connect"))
+    elif args.command == "disconnect":
+        print(call("DELETE", "connect"))
+    elif args.command == "use":
+        print(call("POST", "use", {"organization": args.org}))
+    elif args.command == "wiql":
+        wiql(args)
+    elif args.command == "item":
+        item(args)
+    elif args.command == "update":
+        ops = field_ops(args.fields)
+        if args.comment:
+            ops.append({"op": "add", "path": "/fields/System.History", "value": args.comment})
+        if not ops:
+            sys.exit("error: nothing to change; give --set Field=Value and/or --comment.")
+        changes = ", ".join(f"{op['path'].split('/')[-1].split('.')[-1].replace('History', 'comment')} → {op['value'][:60]}" for op in ops)
+        summary = args.summary or f"Update {title_of(args.id, args.org)}: {changes}"
+        change("PATCH", f"_apis/wit/workitems/{args.id}", args.org, ops, summary)
+    elif args.command == "comment":
+        ops = [{"op": "add", "path": "/fields/System.History", "value": args.text}]
+        change("PATCH", f"_apis/wit/workitems/{args.id}", args.org, ops, f"Comment on {title_of(args.id, args.org)}")
+    elif args.command == "create":
+        ops = [{"op": "add", "path": "/fields/System.Title", "value": args.title}] + field_ops(args.fields)
+        type_path = urllib.parse.quote(args.type)
+        change("POST", f"{urllib.parse.quote(args.project)}/_apis/wit/workitems/${type_path}", args.org, ops,
+                f"Create a {args.type} in {args.project}: \"{args.title}\"")
+    elif args.command == "write":
+        try:
+            body = json.loads(args.body) if args.body else None
+        except json.JSONDecodeError as error:
+            sys.exit(f"error: --json isn't valid JSON ({error}).")
+        change(args.method.upper(), args.path, args.org, body, args.summary)
+    elif args.command == "get":
+        print(call("POST", "request", {"method": "GET", "path": args.path, "organization": args.org}))
+    else:
+        try:
+            body = json.loads(args.body)
+        except json.JSONDecodeError as error:
+            sys.exit(f"error: --json isn't valid JSON ({error}).")
+        print(call("POST", "request", {"method": "POST", "path": args.path, "organization": args.org, "body": body}))
+
+
+if __name__ == "__main__":
+    main()

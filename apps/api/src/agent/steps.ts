@@ -44,6 +44,10 @@ export function commandTitle(command: string): string {
 		return /^\s*memory\s+show\b/.test(command)
 			? "Checking memory"
 			: "Updating memory"
+	if (program === "ado")
+		return /^\s*ado\s+(connect|disconnect)\b/.test(command)
+			? "Setting up Azure DevOps"
+			: "Checking Azure DevOps"
 	return "Running a command"
 }
 

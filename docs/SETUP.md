@@ -122,6 +122,28 @@ Skills are how-to guides dot follows when a task matches. Put your organization'
 `agent-home/skills/README.md`. dot also writes personal skills for each person on its own. New
 or edited skills apply from the next message.
 
+### Azure DevOps (optional)
+
+Each person connects their own account by asking dot something about Azure DevOps; dot DMs them a
+Microsoft sign-in code. It needs a one-time app registration in the Microsoft Entra tenant your
+Azure DevOps organization is connected to (Organization settings → Microsoft Entra):
+
+1. <https://entra.microsoft.com> → **Applications → App registrations → New registration**. Name it
+   `dot`, pick **Accounts in this organizational directory only**, leave the redirect URI empty.
+2. **Authentication** → **Allow public client flows** → **Yes** → Save.
+3. **API permissions → Add a permission → APIs my organization uses** → search **Azure DevOps** →
+   **Delegated permissions → user_impersonation** → Add. If your tenant doesn't let users consent
+   to apps themselves, an admin clicks **Grant admin consent**.
+4. From **Overview**, copy the IDs into `.env` and restart:
+
+   ```sh
+   AZURE_DEVOPS_CLIENT_ID="<Application (client) ID>"
+   AZURE_DEVOPS_TENANT="<Directory (tenant) ID>"
+   ```
+
+A sign-in is only accepted when the Microsoft account's email matches the person's Slack email.
+dot reads and changes Azure DevOps (close, edit, comment, create) as the person asking.
+
 ### Run as a service (Linux, systemd)
 
 So the bot starts at boot and comes back if it crashes. A user service needs no root:
@@ -183,6 +205,8 @@ offline).
 | `CONTEXT_MESSAGES`       | `20`              | Channel messages read before a top-level tag                                                                     |
 | `MEMORY_REVIEW_EVERY`    | `3`               | Turns per person between background memory reviews; `"0"` turns them off                                         |
 | `TRIGGER_EMOJI`          | `robot_face`      | Reacting with this emoji to a message asks dot to handle it                                                      |
+| `AZURE_DEVOPS_CLIENT_ID` | unset (off)       | Entra app for Azure DevOps sign-in; see "Azure DevOps" above                                                     |
+| `AZURE_DEVOPS_TENANT`    | `organizations`   | Directory (tenant) ID of that app                                                                                |
 | `DATA_DIR`               | `.data`           | Credentials, sessions, the bot's `CODEX_HOME`                                                                    |
 | `APP_NAME`               | `slack-codex-bot` | Name shown on the ChatGPT consent screen at first registration                                                   |
 

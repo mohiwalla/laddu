@@ -22,14 +22,6 @@ const runtime =
 		: (await prepareCodexHome(config.workdir), "host")
 // Fail fast if `bun run login` hasn't been run (or the session has ended).
 await getAccessToken()
-// For dot's commands that need the bot (`schedule`): next to the model proxy, where containers
-// can reach it; on localhost for the host runtime.
-startBotApi(
-	config.runtime === "docker"
-		? new URL((await startModelProxy()).baseUrl).hostname
-		: "127.0.0.1",
-)
-
 // Socket Mode: Slack connects over a websocket, so no public URL is needed.
 const app = new App({
 	token: config.slackBotToken,
@@ -38,6 +30,14 @@ const app = new App({
 })
 
 const auth = await app.client.auth.test()
+// For dot's commands that need the bot (`schedule`, `ado`): next to the model proxy, where
+// containers can reach it; on localhost for the host runtime.
+startBotApi(
+	config.runtime === "docker"
+		? new URL((await startModelProxy()).baseUrl).hostname
+		: "127.0.0.1",
+	{ config, client: app.client },
+)
 registerHandlers(app, config, auth.user_id!)
 // A previous bot process may have left Codex runs going in containers (they hold thread locks).
 if (config.runtime === "docker") await stopOrphanedRuns(auth.team_id!)

@@ -71,6 +71,17 @@ export function loadBotConfig() {
 		contextMessages: Number(optional("CONTEXT_MESSAGES", "20")),
 		/** Every this many turns per person, a background Codex run updates their memory; 0 turns it off. */
 		memoryReviewEvery: Number(optional("MEMORY_REVIEW_EVERY", "3")),
+		/**
+		 * Azure DevOps, per person: an Entra app registration's client ID (public client flows on,
+		 * Azure DevOps user_impersonation permission). Unset: the integration is off.
+		 */
+		azureDevOps: Bun.env.AZURE_DEVOPS_CLIENT_ID?.trim()
+			? {
+					clientId: Bun.env.AZURE_DEVOPS_CLIENT_ID.trim(),
+					/** Directory (tenant) ID, or "organizations" for any work account. */
+					tenant: optional("AZURE_DEVOPS_TENANT", "organizations"),
+				}
+			: null,
 		/** Reacting with this emoji (name without colons) to a message asks dot to handle it. */
 		triggerEmoji: optional("TRIGGER_EMOJI", "robot_face"),
 	}

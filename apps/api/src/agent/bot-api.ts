@@ -1,5 +1,6 @@
 /**
- * A small API for dot's commands inside a container that need the bot itself (today: `schedule`).
+ * A small API for dot's commands inside a container that need the bot itself: `schedule`, and
+ * `ado` (Azure DevOps, whose tokens stay here).
  *
  * Each Codex turn gets a caller credential signed by this process: who the turn runs for and the
  * Slack thread it came from. The command sends it back, so a request can only act as that person,
@@ -7,6 +8,9 @@
  * DOT_CALLER (no KEY/TOKEN/SECRET) so Codex passes it to the commands it runs. Listens on the
  * Docker bridge address (host runtime: localhost), like the model proxy.
  */
+import type { App } from "@slack/bolt"
+import type { BotConfig } from "../config"
+import * as azureDevOps from "../integrations/azure-devops"
 import {
 	addJob,
 	cronProblem,
@@ -169,13 +173,93 @@ async function handleSchedule(
 	)
 }
 
+async function handleAzureDevOps(
+	request: Request,
+	caller: Caller,
+	action: string | undefined,
+	deps: Deps,
+): Promise<Response> {
+	const settings = deps.config.azureDevOps
+	if (!settings)
+		return reply(
+			501,
+			"Azure DevOps isn't set up on this bot (the person running it needs to add AZURE_DEVOPS_CLIENT_ID; see docs/SETUP.md).",
+		)
+	const person = { teamId: caller.teamId, userId: caller.userId }
+	try {
+		if (action === "status" && request.method === "GET")
+			return reply(200, await azureDevOps.status(settings, person))
+		if (action === "connect" && request.method === "POST") {
+			if (caller.scheduled)
+				return reply(403, "A scheduled run can't start a sign-in.")
+			return reply(
+				200,
+				await azureDevOps.connect(settings, deps.client, person),
+			)
+		}
+		if (action === "connect" && request.method === "DELETE")
+			return reply(
+				200,
+				(await azureDevOps.disconnect(person))
+					? "Disconnected; dot no longer keeps their Azure DevOps sign-in."
+					: "They weren't connected.",
+			)
+		if (action === "use" && request.method === "POST") {
+			const { organization } = (await request
+				.json()
+				.catch(() => ({}))) as {
+				organization?: string
+			}
+			const used = await azureDevOps.useOrganization(
+				settings,
+				person,
+				organization ?? "",
+			)
+			if (used === null)
+				return reply(409, "Not connected. Run `ado connect`.")
+			return used
+				? reply(200, `Default organization: ${used}.`)
+				: reply(
+						404,
+						`They aren't in an organization called "${organization}".`,
+					)
+		}
+		if (action === "write" && request.method === "POST") {
+			const input = (await request.json().catch(() => null)) as
+				(azureDevOps.AdoRequest & { summary?: string }) | null
+			if (!input?.path) return reply(400, "Give the API path or URL.")
+			const result = await azureDevOps.write(settings, person, input)
+			return reply(result.status < 400 ? 200 : result.status, result.text)
+		}
+		if (action === "request" && request.method === "POST") {
+			const input = (await request
+				.json()
+				.catch(() => null)) as azureDevOps.AdoRequest | null
+			if (!input?.path) return reply(400, "Give the API path or URL.")
+			const result = await azureDevOps.request(settings, person, input)
+			return reply(result.status < 400 ? 200 : result.status, result.text)
+		}
+		return reply(404, "Use status, connect, use, request or write.")
+	} catch (error) {
+		console.warn("[azure-devops]", error)
+		return reply(
+			502,
+			error instanceof azureDevOps.SignInError
+				? error.message
+				: `Azure DevOps request failed: ${error instanceof Error ? error.message : error}`,
+		)
+	}
+}
+
+type Deps = { config: BotConfig; client: App["client"] }
+
 export type BotApi = { url: string }
 let api: BotApi | null = null
 
 /** The API's address once started (null before, or if this runtime doesn't use it). */
 export const botApiUrl = () => api?.url ?? null
 
-export function startBotApi(hostname: string): BotApi {
+export function startBotApi(hostname: string, deps: Deps): BotApi {
 	if (api) return api
 	const server = Bun.serve({
 		hostname,
@@ -190,6 +274,8 @@ export function startBotApi(hostname: string): BotApi {
 			const [, resource, id] = new URL(request.url).pathname.split("/")
 			if (resource === "schedule")
 				return handleSchedule(request, caller, id)
+			if (resource === "ado")
+				return handleAzureDevOps(request, caller, id, deps)
 			return reply(404, "Unknown endpoint.")
 		},
 	})
