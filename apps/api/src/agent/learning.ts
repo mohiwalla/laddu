@@ -7,6 +7,7 @@ import type { BotConfig } from "../config";
 import { paths } from "../config";
 import { readJson, writeJsonPrivate } from "../files";
 import { runTurn, type TurnUser } from "./codex";
+import { classify, pauseForUsageLimit, usagePause } from "./errors";
 import { runTool } from "./tools";
 
 export type TurnRecord = {
@@ -45,7 +46,8 @@ export async function afterTurn(config: BotConfig, user: TurnUser, record: TurnR
   const owner = `${user.teamId}-${user.userId}`;
   counts ??= (await readJson<Record<string, number>>(countsFile)) ?? {};
   counts[owner] = (counts[owner] ?? 0) + 1;
-  const due = counts[owner] >= config.memoryReviewEvery && !reviewing.has(owner);
+  // Not while the plan is out of quota; the count keeps, so it runs on the next turn after.
+  const due = counts[owner] >= config.memoryReviewEvery && !reviewing.has(owner) && !usagePause();
   if (due) counts[owner] = 0;
   await writeJsonPrivate(countsFile, counts).catch(() => {});
   if (due) void review(config, user, owner);
@@ -63,6 +65,8 @@ async function review(config: BotConfig, user: TurnUser, owner: string) {
     console.log(`[review] ${owner}: ${text.replace(/\s+/g, " ").slice(0, 200)}`);
   } catch (error) {
     console.warn(`[review] ${owner} failed:`, error);
+    const failure = classify(error);
+    if (failure.kind === "usage_limit") pauseForUsageLimit(failure);
   } finally {
     reviewing.delete(owner);
   }

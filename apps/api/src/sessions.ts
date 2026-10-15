@@ -10,6 +10,8 @@ export type Session = {
   codexThreadId: string;
   /** ts of the newest Slack message already included in a Codex turn. */
   lastSeenTs: string;
+  /** Linked Slack conversations already given to Codex in this thread ("channel:ts"). */
+  linked?: string[];
 };
 
 let sessions: Record<string, Session> | null = null;

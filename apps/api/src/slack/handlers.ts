@@ -3,11 +3,11 @@
  */
 import type { App } from "@slack/bolt";
 import type { BotConfig } from "../config";
-import { runTurn } from "../agent/codex";
+import { runTurn, type TurnResult } from "../agent/codex";
+import { classify, pauseForUsageLimit, usagePause, type Failure } from "../agent/errors";
 import { afterTurn } from "../agent/learning";
-import { AuthError } from "../auth/siwc";
 import { deleteSession, getSession, saveSession, serialize, sessionKey } from "../sessions";
-import { buildTurnInput, type Trigger } from "./context";
+import { buildTurnInput, type Trigger, type TurnInput } from "./context";
 import { downloadAttachments, uploadFiles } from "./attachments";
 import { closeInterrupted, openReply, type Reply } from "./reply";
 import { markDone, markReply, markStarted, takeInterrupted } from "../inflight";
@@ -17,6 +17,15 @@ type WebClient = App["client"];
 /** Interrupted turns younger than this are retried after a restart; older ones just get a note. */
 const RESUME_WITHIN_MS = 30 * 60 * 1000;
 const DEDUPE_MS = 10 * 60 * 1000;
+/** A turn is tried at most this many times when its failure is worth retrying (see errors.ts). */
+const MAX_ATTEMPTS = 2;
+
+/** A turn that failed for good, already classified and logged. */
+class TurnFailed extends Error {
+  constructor(readonly failure: Failure) {
+    super(failure.message);
+  }
+}
 
 /** Slack can deliver an event twice (e.g. after a socket reconnect); answer each message once. */
 const handled = new Map<string, number>();
@@ -49,24 +58,37 @@ async function handle(client: WebClient, config: BotConfig, botUserId: string, t
     try {
       reply = await openReply(client, { channel: trigger.channel, threadTs, userId: trigger.userId, teamId: trigger.teamId });
       await markReply(inflightKey, { ts: reply.ts, streaming: reply.streaming }).catch(() => {});
-      const session = await getSession(key);
-      const turn = await buildTurnInput({
-        client,
-        trigger,
-        session,
-        botUserId,
-        contextMessages: config.contextMessages,
+      const paused = usagePause();
+      if (paused) throw new TurnFailed({ ...classify(new Error("usage limit")), message: paused });
+
+      const user = { teamId: trigger.teamId, userId: trigger.userId };
+      let session = await getSession(key);
+      let turn: TurnInput;
+      let result: TurnResult;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          // Rebuilt each attempt: after a thread reset the fresh thread needs the whole conversation.
+          turn = await buildTurnInput({ client, trigger, session, botUserId, contextMessages: config.contextMessages });
+          const files = await downloadAttachments(config.slackBotToken, turn.attachments);
+          result = await runTurn({ config, user, threadId: session?.codexThreadId, input: turn.text, files, onStep: reply.step });
+          break;
+        } catch (error) {
+          const failure = classify(error, { utcClock: config.runtime === "docker" });
+          console.error(`[${key}] attempt ${attempt} failed (${failure.kind}):`, error);
+          if (failure.resetThread && session) {
+            await deleteSession(key);
+            session = undefined;
+          }
+          if (!failure.retry || attempt >= MAX_ATTEMPTS) throw new TurnFailed(failure);
+          reply.step({ id: `retry-${attempt}`, title: `${failure.message} Trying again…`, status: "error" });
+          await Bun.sleep(failure.retryAfterMs);
+        }
+      }
+      await saveSession(key, {
+        codexThreadId: result.threadId,
+        lastSeenTs: trigger.ts,
+        linked: [...new Set([...(session?.linked ?? []), ...turn.linked])],
       });
-      const files = await downloadAttachments(config.slackBotToken, turn.attachments);
-      const result = await runTurn({
-        config,
-        user: { teamId: trigger.teamId, userId: trigger.userId },
-        threadId: session?.codexThreadId,
-        input: turn.text,
-        files,
-        onStep: reply.step,
-      });
-      await saveSession(key, { codexThreadId: result.threadId, lastSeenTs: trigger.ts });
       await reply.finish(result.text);
       void afterTurn(config, { teamId: trigger.teamId, userId: trigger.userId }, {
         place: turn.place,
@@ -87,18 +109,11 @@ async function handle(client: WebClient, config: BotConfig, botUserId: string, t
       }
       await react(client, trigger.channel, trigger.ts, "white_check_mark", "eyes");
     } catch (error) {
-      console.error(`[${key}]`, error);
-      const text = error instanceof Error ? error.message : String(error);
-      // The plan route rejected something in the Codex history; resuming would fail forever.
-      const poisoned = text.includes("subscription_sharing_unsupported_capability");
-      if (poisoned) await deleteSession(key);
-      const message =
-        error instanceof AuthError
-          ? error.message
-          : poisoned
-            ? "That hit something the ChatGPT plan can't run, so I've reset our conversation in this thread. Please ask again."
-            : `Something went wrong: ${text}`;
-      await reply?.fail(message).catch((failure) => console.error(`[${key}] couldn't report the error`, failure));
+      const failure = error instanceof TurnFailed ? error.failure : classify(error, { utcClock: config.runtime === "docker" });
+      if (!(error instanceof TurnFailed)) console.error(`[${key}]`, error);
+      if (failure.kind === "usage_limit") pauseForUsageLimit(failure);
+      const message = failure.resetThread ? `${failure.message} I've started our conversation in this thread over; please ask again.` : failure.message;
+      await reply?.fail(message).catch((failed) => console.error(`[${key}] couldn't report the error`, failed));
       await react(client, trigger.channel, trigger.ts, "x", "eyes");
     } finally {
       await markDone(inflightKey).catch(() => {});

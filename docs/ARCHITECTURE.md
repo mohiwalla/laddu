@@ -26,6 +26,9 @@ apps/
       agent/model-proxy.ts keeps the ChatGPT token out of containers
       agent/codex-config.ts Codex provider config (direct, or via the proxy)
       agent/steps.ts   Codex items → plain-language progress steps
+      agent/errors.ts  failure classes → message + recovery (retry, fresh thread, quota pause)
+      agent/learning.ts turn log + background memory review
+      agent/tools.ts   runs runtime/ commands for a user (container or host)
       slack/context.ts Slack messages → transcript for Codex
       slack/attachments.ts Slack files in (downloads) and out (outbox uploads)
       slack/handlers.ts mention/DM handling
@@ -84,6 +87,8 @@ Everything Codex executes runs in a Docker container dedicated to the Slack user
   Bun server on the Docker bridge address (not reachable from the LAN). It requires a random
   per-process key, allows only `POST /v1/responses` and `GET /v1/models`, and adds the real token.
   Verified: no token in any process environment inside the container; other API paths get 403.
+- The image (~2.8 GB) carries tools for files people send and ask for: pandas, matplotlib,
+  python-docx, openpyxl, reportlab, pypdf, Pillow, pandoc, poppler, qpdf, ImageMagick, ffmpeg.
 - The image bundles the exact codex build the SDK ships (`node_modules/@openai/codex-linux-*`),
   and is rebuilt (containers recreated, volumes kept) when that version or the Dockerfile changes.
 
@@ -109,6 +114,11 @@ Adapted from [Hermes Agent](https://github.com/nousresearch/hermes-agent) (MIT, 
   and updates memory, catching facts the turns didn't save. It uses plan quota.
 - **Duplicate events.** Slack can redeliver an event (e.g. after a socket reconnect); each message
   is answered once (in-memory, 10 minutes).
+- **Failures.** `agent/errors.ts` sorts them: usage limit (message with the reset time; Codex is
+  skipped for 10 minutes, reviews too), context window full or a capability the plan rejects
+  (fresh Codex thread, one retry), dropped model connection (one retry after 15 s; Codex already
+  retried), Docker trouble (one retry), auth (log in again), anything else (the error's first line).
+  Retries show as a failed step in the reply.
 - **Restarts mid-answer.** Every turn is recorded in `.data/inflight.json` until it ends. On startup
   (after stopping orphaned Codex runs) the bot closes replies it left open, marking spinning steps
   failed, and answers turns younger than 30 minutes again; older ones get "please ask again".
@@ -171,7 +181,7 @@ scratch directory, no integrations.
   Outlook (Microsoft Graph), App Store Connect/TestFlight, issue tracker.
 - A context map: project names ("Ask AI") → repos, trackers and docs, so questions about progress
   land on the right sources.
-- Deeper Slack context: older history and linked threads when the tagged message needs them.
+- Deeper Slack context: older history when the tagged message needs it.
 - Coding tasks in per-task git worktrees, ending in a PR link in the thread.
 
 **Later.**
@@ -191,6 +201,9 @@ scratch directory, no integrations.
 - Files attached to messages new this turn (up to 100 MB each, 20 per turn) are saved in the user's
   workspace under `slack-files/` (host runtime: `.data/slack-files/<team>-<user>/`); PNG, JPEG,
   WebP and GIF up to 20 MB are also shown to the model. Codex reads other formats with its own tools.
+- Slack links in the new messages (typed, unfurled or forwarded; up to 3) are read through the API
+  and added to the transcript with their attachments, up to 100 messages each. Private channels and
+  DMs only if the person asking is a member, so a link can't expose what they couldn't read.
 - Each turn gets an outbox, `slack-outbox/<turn>/` (host runtime: `.data/slack-outbox/...`, added
   as a writable dir to the sandbox). Files Codex saves there (up to 10, 50 MB each) are uploaded to
   the thread after the reply. Codex can't generate images on the plan route; it can draw them with code.

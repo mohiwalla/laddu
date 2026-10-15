@@ -52,7 +52,8 @@ async function codexDistribution() {
  * Builds the runtime image if this Dockerfile + codex version hasn't been built yet, starts the
  * model proxy and points the containers' Codex config at it. Returns the image tag and proxy.
  */
-export async function prepareDocker(): Promise<{ tag: string; proxy: ModelProxy }> {
+/** Builds the runtime image unless this Dockerfile + codex version is already built; returns its tag. */
+export async function ensureImage(): Promise<string> {
   const dockerfile = await Bun.file(`${appRoot}docker/Dockerfile`).text();
   const { version, dir } = await codexDistribution();
   const tag = `dot-runtime:${version}-${Bun.hash(dockerfile).toString(16).slice(0, 8)}`;
@@ -68,6 +69,11 @@ export async function prepareDocker(): Promise<{ tag: string; proxy: ModelProxy 
     await Bun.$`rm -r ${context}`.quiet();
     console.log(`[containers] built ${tag}`);
   }
+  return tag;
+}
+
+export async function prepareDocker(): Promise<{ tag: string; proxy: ModelProxy }> {
+  const tag = await ensureImage();
 
   // Copied, not linked: the mount can't follow a symlink out of runtimeDir. Cleared first so
   // renamed or removed commands don't linger.
