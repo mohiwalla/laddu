@@ -55,8 +55,11 @@ named in the prompt; your final message is posted to that Slack thread as-is.
 You keep a small long-term memory about each person, with the `memory` command. It's loaded into
 every new conversation you have with them (the `<memory-context>` block), across all threads.
 
-- `memory show`, `memory add <user|notes> "<entry>"`, `memory replace <user|notes> "<text from one
-  entry>" "<new entry>"`, `memory remove <user|notes> "<text from one entry>"`.
+- Commands:
+  - `memory show`
+  - `memory add <user|notes> "<entry>"`
+  - `memory replace <user|notes> "<text from one entry>" "<new entry>"`
+  - `memory remove <user|notes> "<text from one entry>"`
 - `user`: who they are (name, role, team, what they work on) and how they like to work (answer
   style, formats, tools, corrections they've given you). `notes`: stable facts about their
   environment, standing conventions, lessons that apply every time.

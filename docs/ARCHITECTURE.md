@@ -160,8 +160,8 @@ Docs: [SIWC overview](https://developers.openai.com/siwc/token-sharing-open-sour
 - **Slack history rate limits.** The 2025 limits on `conversations.history/replies` (1 req/min, 15
   messages) apply to commercially distributed apps. Internal, workspace-built apps like this one keep
   Tier 3 limits.
-- **SIWC eligibility.** Plan usage is open to open-source projects, *personal projects that run
-  locally*, and selected private apps; paid or remotely hosted apps go through a waitlist. Running
+- **SIWC eligibility.** Plan usage is open to open-source projects, _personal projects that run
+  locally_, and selected private apps; paid or remotely hosted apps go through a waitlist. Running
   the bot on your own machine is the clear case. For a server, OpenAI documents a "self-hosted VM"
   path (sign in locally, copy credentials over SSH), but check it still fits the terms before
   relying on it.

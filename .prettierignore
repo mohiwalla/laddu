@@ -1,0 +1,15 @@
+# Prettier 3 also skips everything in .gitignore; listed here too for runs with --ignore-path.
+
+# Dependencies and lockfiles
+node_modules
+bun.lock
+
+# Written by tools, in their own format
+.turbo
+**/.slack/
+**/.data/
+
+# Build output
+dist
+build
+coverage

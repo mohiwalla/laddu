@@ -40,6 +40,7 @@ changes. You still need `OWNER_SLACK_USER_ID` (step 4 below) and the ChatGPT sig
    The manifest requests every scope a non-Enterprise workspace can grant (its header lists the
    few left out and why), so new features shouldn't need a reinstall. If Slack rejects one of the
    newer scopes (`code_channels:manage`, `mcp:connect`, `assistant:write`), delete that line and retry.
+
 4. Your Slack profile → ⋮ → **Copy member ID** → `OWNER_SLACK_USER_ID`.
 5. Invite the bot to the channels where you'll tag it (`/invite @codex`).
 
@@ -81,17 +82,17 @@ Codex works, then the answer, and ✅ on your message.
 
 ## Configuration
 
-| Var | Default | Notes |
-| --- | --- | --- |
-| `CODEX_MODEL` | required | Model slug from `bun run login` |
-| `ALLOWED_SLACK_USERS` | owner only | `"*"` for everyone, or comma-separated member IDs |
-| `CODEX_RUNTIME` | `docker` | `docker`: one container per Slack user; `host`: on this machine (owner-only use) |
-| `CODEX_REASONING_EFFORT` | `medium` | `minimal` … `xhigh` |
-| `CODEX_SANDBOX` | `workspace-write` | Host runtime only: `read-only`, `workspace-write`, `danger-full-access` |
-| `CODEX_NETWORK` | `true` | Host runtime only: internet for Codex's shell; containers are always networked |
-| `CODEX_WORKDIR` | `agent-home` | Codex's working directory; its `AGENTS.md` is the persona |
-| `CONTEXT_MESSAGES` | `20` | Channel messages read before a top-level tag |
-| `DATA_DIR` | `.data` | Credentials, sessions, the bot's `CODEX_HOME` |
-| `APP_NAME` | `slack-codex-bot` | Name shown on the ChatGPT consent screen at first registration |
+| Var                      | Default           | Notes                                                                            |
+| ------------------------ | ----------------- | -------------------------------------------------------------------------------- |
+| `CODEX_MODEL`            | required          | Model slug from `bun run login`                                                  |
+| `ALLOWED_SLACK_USERS`    | owner only        | `"*"` for everyone, or comma-separated member IDs                                |
+| `CODEX_RUNTIME`          | `docker`          | `docker`: one container per Slack user; `host`: on this machine (owner-only use) |
+| `CODEX_REASONING_EFFORT` | `medium`          | `minimal` … `xhigh`                                                              |
+| `CODEX_SANDBOX`          | `workspace-write` | Host runtime only: `read-only`, `workspace-write`, `danger-full-access`          |
+| `CODEX_NETWORK`          | `true`            | Host runtime only: internet for Codex's shell; containers are always networked   |
+| `CODEX_WORKDIR`          | `agent-home`      | Codex's working directory; its `AGENTS.md` is the persona                        |
+| `CONTEXT_MESSAGES`       | `20`              | Channel messages read before a top-level tag                                     |
+| `DATA_DIR`               | `.data`           | Credentials, sessions, the bot's `CODEX_HOME`                                    |
+| `APP_NAME`               | `slack-codex-bot` | Name shown on the ChatGPT consent screen at first registration                   |
 
 Relative paths resolve against `apps/api`.

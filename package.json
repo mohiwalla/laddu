@@ -1,14 +1,21 @@
 {
-  "name": "root",
-  "private": true,
-  "packageManager": "bun@1.4.2",
-  "workspaces": ["apps/*", "packages/*"],
-  "scripts": {
-    "dev": "turbo run dev",
-    "build": "turbo run build",
-    "typecheck": "turbo run typecheck"
-  },
-  "devDependencies": {
-    "turbo": "^2.11.8"
-  }
+	"name": "root",
+	"private": true,
+	"packageManager": "bun@1.4.2",
+	"workspaces": [
+		"apps/*",
+		"packages/*"
+	],
+	"scripts": {
+		"dev": "turbo run dev",
+		"build": "turbo run build",
+		"typecheck": "turbo run typecheck",
+		"format": "prettier --write .",
+		"format:check": "prettier --check ."
+	},
+	"devDependencies": {
+		"prettier": "^3.9.10",
+		"prettier-plugin-tailwindcss": "^0.8.1",
+		"turbo": "^2.11.8"
+	}
 }
