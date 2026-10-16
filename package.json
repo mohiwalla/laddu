@@ -1,5 +1,5 @@
 {
-	"name": "root",
+	"name": "slack-dot",
 	"private": true,
 	"packageManager": "bun@1.4.2",
 	"workspaces": [
