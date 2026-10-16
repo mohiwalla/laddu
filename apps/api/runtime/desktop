@@ -4,12 +4,17 @@ dot's own computer: an XFCE desktop on a virtual display (KasmVNC), started when
 Codex drives it through `desktop mcp`, an MCP server registered in its config; people watch it
 (and later take over) in the browser through KasmVNC's web viewer, which the bot proxies.
 
-  desktop link ["<why>"]  privately send the person links to watch your computer or take control
-                          (e.g. so they can sign in to a site themselves)
+  desktop link ["<why>"]  privately send the person a link to watch your computer, and take control
+                          from it (e.g. so they can sign in to a site themselves)
   desktop start     start the desktop if it isn't running
   desktop stop      stop it (apps close; files and the browser profile stay)
   desktop status    running or not, and how long since the last action
   desktop mcp       MCP server on stdin/stdout (used by Codex)
+  desktop control on|off  the person has taken control / handed it back (set by the bot's viewer)
+  desktop events    dot's pointer position and actions as JSON lines, for the viewer's dot cursor
+
+While the person is in control, the tools wait (up to HANDBACK_WAIT_S per call) instead of acting,
+and an action interrupted by a hand-back isn't done: the screen may have changed under it.
 
 Control borrows from computer-use-linux (agent-sh, MIT): one call returns a screenshot together
 with the on-screen controls from the accessibility tree (AT-SPI), so clicks can target a named
@@ -35,6 +40,15 @@ ENV_FILE = STATE / "env.json"
 VIEWER_FILE = STATE / "viewer.json"
 ACTIVITY = STATE / "last-action"
 LOG = STATE / "log"
+# Touched every 10 s while the person has control (their viewer page, through the bot); older than
+# CONTROL_STALE_S counts as returned, so a closed tab or a bot restart can't leave dot waiting.
+CONTROL = STATE / "person-in-control"
+CONTROL_STALE_S = 30
+HANDBACK_WAIT_S = 75  # under Codex's 90 s tool timeout
+# What dot does, for the viewer to show on its own cursor (a click ripple, "typing…"); the pointer
+# position itself is read from X by `desktop events`.
+EVENTS = STATE / "events"
+EVENTS_MAX_BYTES = 64_000
 
 # Controls worth listing; everything else is read from the screenshot.
 INTERACTIVE = {
@@ -107,6 +121,9 @@ def start():
             "-rfbport", "-1", "-KasmPasswordFile", str(passwd), "-AlwaysShared",
             # Fixed size, so coordinates in screenshots stay valid; viewers scale it.
             "-AcceptSetDesktopSize", "0", "-FrameRate", "24",
+            # No cursor of its own (in the picture or sent to viewers): the viewer draws dot's, always
+            # the same arrow, and people use their own cursor when they take control.
+            "-nocursor",
         ], os.environ, log)
         for _ in range(50):
             if x_running():
@@ -138,8 +155,29 @@ def start():
         if run("wmctrl", "-m", env=full, check=False).returncode == 0:
             break
         time.sleep(0.2)
+    set_fonts(full)
     touch()
     return True
+
+
+# XFCE's own font settings (the image's fontconfig covers pages and apps): Inter, JetBrains Mono,
+# grayscale antialiasing. Set on every start, since a person's saved settings can hold empty
+# values that would otherwise win over the image's defaults.
+XFCE_FONTS = [
+    ("xsettings", "/Gtk/FontName", "string", "Inter Variable 10"),
+    ("xsettings", "/Gtk/MonospaceFontName", "string", "JetBrains Mono 10"),
+    ("xsettings", "/Xft/Antialias", "int", "1"),
+    ("xsettings", "/Xft/Hinting", "int", "1"),
+    ("xsettings", "/Xft/HintStyle", "string", "hintslight"),
+    ("xsettings", "/Xft/RGBA", "string", "none"),
+    ("xfwm4", "/general/title_font", "string", "Inter Variable Semi-Bold 9"),
+]
+
+
+def set_fonts(env):
+    for channel, prop, kind, value in XFCE_FONTS:
+        run("xfconf-query", "-c", channel, "-p", prop, "-r", env=env, check=False)
+        run("xfconf-query", "-c", channel, "-p", prop, "-n", "-t", kind, "-s", value, env=env, check=False)
 
 
 def stop():
@@ -150,6 +188,67 @@ def stop():
 
 def touch():
     ACTIVITY.write_text(str(int(time.time())))
+
+
+def emit(kind, **fields):
+    try:
+        if EVENTS.exists() and EVENTS.stat().st_size > EVENTS_MAX_BYTES:
+            EVENTS.write_text("")
+        with open(EVENTS, "a") as f:
+            f.write(json.dumps({"t": kind, **fields}) + "\n")
+    except OSError:
+        pass
+
+
+def pointer_at(env):
+    out = run("xdotool", "getmouselocation", "--shell", env=env, check=False).stdout.decode()
+    found = dict(line.split("=", 1) for line in out.split() if "=" in line)
+    if "X" in found and "Y" in found:
+        return int(found["X"]), int(found["Y"])
+    return None
+
+
+def events():
+    """Streams {"t": "at", x, y} when the pointer moves, and what dot does, until stdout closes."""
+    STATE.mkdir(mode=0o700, exist_ok=True)
+    EVENTS.touch()
+    feed = open(EVENTS)
+    feed.seek(0, 2)
+    last = None
+    try:
+        while True:
+            lines = []
+            if x_running():
+                at = pointer_at(session_env())
+                if at and at != last:
+                    last = at
+                    lines.append(json.dumps({"t": "at", "x": at[0], "y": at[1]}))
+            if feed.tell() > EVENTS.stat().st_size:
+                feed.seek(0)  # emptied by emit()
+            lines += [line.strip() for line in feed.readlines() if line.strip()]
+            if lines:
+                sys.stdout.write("\n".join(lines) + "\n")
+                sys.stdout.flush()
+            time.sleep(0.12)
+    except (BrokenPipeError, KeyboardInterrupt):
+        pass
+
+
+def person_in_control():
+    try:
+        return time.time() - CONTROL.stat().st_mtime < CONTROL_STALE_S
+    except FileNotFoundError:
+        return False
+
+
+def control(state):
+    if state == "on":
+        STATE.mkdir(mode=0o700, exist_ok=True)
+        CONTROL.touch()
+    elif state == "off":
+        CONTROL.unlink(missing_ok=True)
+    else:
+        sys.exit("usage: desktop control on|off")
 
 
 def status():
@@ -283,6 +382,7 @@ def click(args):
     button = BUTTONS[args.get("button", "left")]
     xdo("mousemove", "--sync", x, y)
     xdo("click", "--repeat", int(args.get("clicks", 1)), "--delay", 80, button)
+    emit("click", x=x, y=y)
     return f"clicked ({x},{y})"
 
 
@@ -291,12 +391,14 @@ def type_text(args):
     xdo("type", "--delay", 12, "--", text)
     if args.get("enter"):
         xdo("key", "Return")
+    emit("type")
     return f"typed {len(text)} characters"
 
 
 def key(args):
     keys = args["keys"].split()
     xdo("key", "--delay", 60, *keys)
+    emit("type")
     return f"pressed {' '.join(keys)}"
 
 
@@ -429,9 +531,27 @@ SHOW_AFTER = {"click", "type", "key", "scroll", "drag", "launch", "focus", "wait
 def call_tool(name, args):
     if name not in TOOLS:
         raise ValueError(f"unknown tool {name}")
+    handed_back = False
+    if person_in_control():
+        deadline = time.monotonic() + HANDBACK_WAIT_S
+        while person_in_control() and time.monotonic() < deadline:
+            time.sleep(1)
+        if person_in_control():
+            return [{"type": "text", "text": (
+                "The person you're working for has taken control of your computer and is using it. "
+                "Don't act on it now: call `wait` to keep waiting for them to hand it back, or reply "
+                "to them with what's left to do."
+            )}]
+        handed_back = True
     started = start()
     touch()
     lines = ["(desktop started)"] if started else []
+    if handed_back:
+        lines.append(
+            "The person had taken control and has just handed it back. The screen may have changed, "
+            "so nothing was done for this call; here's the screen now, decide again."
+        )
+        name = "observe"
     if name not in ("observe", "screenshot"):
         lines.append(TOOLS[name][3](args))
         if name not in SHOW_AFTER:
@@ -520,6 +640,10 @@ def main(args):
         print("stopped")
     elif command == "status":
         print(status())
+    elif command == "events":
+        events()
+    elif command == "control":
+        control(args[1] if len(args) > 1 else "")
     elif command == "mcp":
         mcp()
     else:

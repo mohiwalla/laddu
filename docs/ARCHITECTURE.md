@@ -135,14 +135,26 @@ computer-use plugin of a Linux build of Codex Desktop) and Bytebot.
   `clipboard`, `wait`. Every action returns the new controls and screenshot, saving a call per step.
   Consecutive actions show as one "Using my computer" row in Slack, with a count.
 - **Watching and taking over** (`agent/desktop.ts`): the first desktop action of a turn sends the
-  person an ephemeral message (only they see it) with two signed links, valid 12 hours: watch and
-  take control. `desktop link "<why>"` sends them on request (e.g. to sign in to a site, so
-  passwords never go through Slack). The links open a gateway in the bot (`DESKTOP_VIEWER_HOST`/
-  `PORT`, local by default; `DESKTOP_PUBLIC_URL` is what links point to, e.g. a tunnel or HTTPS
-  domain) that sets a cookie and proxies KasmVNC's web viewer and websocket from that person's
-  container, logging in as `watch` (the VNC server refuses its input) or `drive`. The logins are
-  random per container (`~/.desktop/viewer.json`) and never leave the bot; no container port is
-  published. Taking control doesn't pause Codex yet: say so in the thread.
+  person an ephemeral message (only they see it) with one signed link, valid 12 hours; `desktop
+link "<why>"` sends it on request (e.g. to sign in to a site, so passwords never go through
+  Slack). It opens a gateway in the bot (`DESKTOP_VIEWER_HOST`/`PORT`, local by default;
+  `DESKTOP_PUBLIC_URL` is what links point to, e.g. a tunnel or HTTPS domain) that sets a cookie
+  and proxies KasmVNC's web viewer and websocket from that person's container, logged in on the
+  bot's side (the VNC login is random per container, `~/.desktop/viewer.json`, and never reaches
+  the browser; no container port is published).
+- **The page** (restyled as it's served, KasmVNC's files untouched): dot's picture and name, the
+  desktop at actual size in a rounded bezel, KasmVNC's toolbar, toasts and routine banners hidden
+  (errors still show). It starts view-only, on one connection: a click on the screen (or **Take
+  over**) turns view-only off and that click lands too; clicking outside the screen, leaving the
+  tab or window, or **Give back** turns it back on, like OpenAI's dots. While the person has
+  control the page tells the bot every 10 s (`/_dot/control` → `desktop control on`; 30 s without
+  word counts as given back), dot's actions wait up to 75 s per call, and an action interrupted by
+  a give-back returns the new screen instead of acting.
+- **Cursors.** The person always sees their own cursor, and it does nothing on the desktop until
+  they take control. The desktop has no cursor of its own (Xvnc `-nocursor`); dot's is drawn by
+  the page where dot's pointer really is (`desktop events` → `/_dot/events`, server-sent events,
+  one feed per container while someone watches): always the same coral arrow with its name,
+  gliding between positions, a ripple on clicks, "typing…" while it types.
 - Spike results (2026-10-16, on the plan's model): searching Wikipedia and reading an infobox (24
   actions, 83 s), saving a password in Chromium's own popup and logging back in with its autofill
   (16 actions, 67 s), writing a file through Mousepad's Save dialog (10 actions, 48 s); 150k–370k

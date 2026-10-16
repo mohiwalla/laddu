@@ -13,7 +13,7 @@ import type { BotConfig } from "../config"
 import * as azureDevOps from "../integrations/azure-devops"
 import * as graph from "../integrations/graph"
 import * as microsoft from "../integrations/microsoft"
-import { sendDesktopLinks } from "./desktop"
+import { sendDesktopLink } from "./desktop"
 import {
 	addJob,
 	cronProblem,
@@ -331,7 +331,7 @@ async function handleGraph(
 	}
 }
 
-/** `desktop link`: the person's watch / take-control links, privately in this conversation. */
+/** `desktop link`: the person's link to your computer, privately in this conversation. */
 async function handleDesktopLink(
 	request: Request,
 	caller: Caller,
@@ -349,7 +349,7 @@ async function handleDesktopLink(
 		reason?: string
 	}
 	try {
-		await sendDesktopLinks(
+		await sendDesktopLink(
 			deps.client,
 			deps.config,
 			{
@@ -365,7 +365,7 @@ async function handleDesktopLink(
 	}
 	return reply(
 		200,
-		"Sent them a private message with links to watch your computer or take control. Don't repeat or invent the links.",
+		"Sent them a private link to your computer: they can watch it and take control from there. Don't repeat or invent the link.",
 	)
 }
 

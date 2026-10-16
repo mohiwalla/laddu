@@ -49,6 +49,23 @@ RUN arch="$(dpkg --print-architecture)" \
 # accessibility tree, and saved passwords work without a desktop keyring.
 RUN printf '%s\n' 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --test-type --force-renderer-accessibility --password-store=basic --no-first-run --no-default-browser-check"' \
       > /etc/chromium.d/dot
+# Fonts for the desktop and the pages it shows: Inter for the interface and sans-serif text
+# (instead of DejaVu), also where pages ask for Apple, Windows or Android UI fonts by name;
+# JetBrains Mono for code; Noto CJK so Chinese, Japanese and Korean aren't boxes. Grayscale
+# antialiasing with slight hinting, which also streams better than subpixel colour fringes.
+# (runtime/desktop sets the same for XFCE's own settings when it starts.)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends fonts-inter-variable fonts-jetbrains-mono fonts-noto-cjk \
+ && rm -rf /var/lib/apt/lists/* \
+ && { printf '%s\n' '<?xml version="1.0"?>' '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">' '<fontconfig>' \
+      '<alias binding="strong"><family>sans-serif</family><prefer><family>Inter Variable</family></prefer></alias>' \
+      '<alias binding="strong"><family>system-ui</family><prefer><family>Inter Variable</family></prefer></alias>' \
+      '<alias binding="strong"><family>monospace</family><prefer><family>JetBrains Mono</family></prefer></alias>'; \
+      for ui in -apple-system BlinkMacSystemFont "SF Pro Text" "SF Pro Display" "Helvetica Neue" "Segoe UI" Roboto Ubuntu Cantarell; do \
+        printf '<alias binding="same"><family>%s</family><prefer><family>Inter Variable</family></prefer></alias>\n' "$ui"; done; \
+      printf '%s\n' '<match target="font"><edit name="antialias" mode="assign"><bool>true</bool></edit><edit name="hinting" mode="assign"><bool>true</bool></edit><edit name="hintstyle" mode="assign"><const>hintslight</const></edit><edit name="rgba" mode="assign"><const>none</const></edit></match>' \
+      '</fontconfig>'; } > /etc/fonts/local.conf \
+ && fc-cache -f >/dev/null
 
 USER dot
 WORKDIR /home/dot/workspace
