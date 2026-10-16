@@ -13,9 +13,10 @@
 display_information:
   name: dot
   description: Personal assistant backed by Codex.
-  background_color: "#2C2D30"
+  background_color: "#000000"
 features:
   app_home:
+    home_tab_enabled: true
     messages_tab_enabled: true
     messages_tab_read_only_enabled: false
   bot_user:
@@ -171,6 +172,7 @@ oauth_config:
 settings:
   event_subscriptions:
     bot_events:
+      - app_home_opened
       - app_mention
       - message.im
       - message.mpim

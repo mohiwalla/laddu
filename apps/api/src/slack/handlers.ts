@@ -27,7 +27,7 @@ import {
 } from "./context"
 import { downloadAttachments, uploadFiles } from "./attachments"
 import { closeInterrupted, openReply, type Reply } from "./reply"
-import { sendDesktopLink } from "../agent/desktop"
+import { computerInUse, publishHome } from "../agent/desktop"
 import type { Step } from "../agent/steps"
 import { markDone, markReply, markStarted, takeInterrupted } from "../inflight"
 import { chunkMarkdown } from "./reply"
@@ -118,13 +118,14 @@ async function handle(
 				})
 
 			const user = { teamId: trigger.teamId, userId: trigger.userId }
-			// The first time this turn uses dot's computer, the person gets their link to it.
+			// The first time this turn uses dot's computer: a fresh link in their Home tab (and, the very
+			// first time ever, a note saying where it is).
 			let linkSent = false
 			const onStep = (step: Step) => {
 				reply!.step(step)
 				if (!step.computer || linkSent) return
 				linkSent = true
-				sendDesktopLink(client, config, {
+				computerInUse(client, config, {
 					...user,
 					channel: trigger.channel,
 					threadTs,
@@ -343,6 +344,17 @@ export function registerHandlers(
 		userId !== undefined &&
 		userId !== botUserId &&
 		(config.allowedUsers === "*" || config.allowedUsers.has(userId))
+
+	// dot's Home tab: their computer, with a fresh link every time they open it.
+	app.event("app_home_opened", async ({ event, client, context }) => {
+		if (event.tab !== "home" || !isAllowed(event.user)) return
+		await publishHome(client, config, {
+			teamId: context.teamId!,
+			userId: event.user,
+		}).catch(error => console.warn("[home] couldn't publish", error))
+	})
+	// The Home tab's button is a link; Slack still sends the click, which needs an answer.
+	app.action("open_computer", async ({ ack }) => ack())
 
 	// @mentions in channels (and in threads inside channels).
 	app.event("app_mention", async ({ event, client, context }) => {

@@ -134,11 +134,16 @@ computer-use plugin of a Linux build of Codex Desktop) and Bytebot.
   browser UI, extensions and native dialogs work like anything else; `launch`, `windows`, `focus`,
   `clipboard`, `wait`. Every action returns the new controls and screenshot, saving a call per step.
   Consecutive actions show as one "Using my computer" row in Slack, with a count.
-- **Watching and taking over** (`agent/desktop.ts`): the first desktop action of a turn sends the
-  person an ephemeral message (only they see it) with one signed link, valid 12 hours; `desktop
-link "<why>"` sends it on request (e.g. to sign in to a site, so passwords never go through
-  Slack). It opens a gateway in the bot (`DESKTOP_VIEWER_HOST`/`PORT`, local by default;
-  `DESKTOP_PUBLIC_URL` is what links point to, e.g. a tunnel or HTTPS domain) that sets a cookie
+- **Watching and taking over** (`agent/desktop.ts`): each person's link lives in dot's **Home tab**
+  in Slack (private to them): a banner, the computer's status (on / asleep / not set up), an
+  **Open dot's computer** button and how taking over works. It's redrawn with a fresh signed link
+  (valid 12 hours) whenever they open the tab (`app_home_opened`) and whenever dot starts using the
+  computer for them. Threads stay clean: only the first time someone's dot uses its computer
+  does the thread get a note, visible only to them, saying where to find it
+  (`.data/…/desktop-introduced.json`). `desktop link "<why>"` still sends the link privately on
+  request (e.g. to sign in to a site, so passwords never go through Slack). The link opens a
+  gateway in the bot (`DESKTOP_VIEWER_HOST`/`PORT`, local by default; `DESKTOP_PUBLIC_URL` is what
+  links point to, e.g. a tunnel or HTTPS domain) that sets a cookie
   and proxies KasmVNC's web viewer and websocket from that person's container, logged in on the
   bot's side (the VNC login is random per container, `~/.desktop/viewer.json`, and never reaches
   the browser; no container port is published).
