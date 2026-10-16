@@ -33,6 +33,9 @@ features:
       callback_id: ask_dot
       description: Ask dot about this message
 oauth_config:
+  # Where Slack sends people back after connecting their account (DESKTOP_PUBLIC_URL + /slack/oauth).
+  redirect_urls:
+    - https://dot.example.com/slack/oauth
   scopes:
     bot:
       - app_mentions:read

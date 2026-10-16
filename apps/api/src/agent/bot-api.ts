@@ -1,6 +1,7 @@
 /**
  * A small API for dot's commands inside a container that need the bot itself: `schedule`, `ado`
- * (Azure DevOps) and `ms` (Microsoft 365), whose tokens stay here, and `desktop link`.
+ * (Azure DevOps) and `ms` (Microsoft 365), whose tokens stay here, `slack` (find people, DM
+ * them as the person or from dot) and `desktop link`.
  *
  * Each Codex turn gets a caller credential signed by this process: who the turn runs for and the
  * Slack thread it came from. The command sends it back, so a request can only act as that person,
@@ -13,6 +14,8 @@ import type { BotConfig } from "../config"
 import * as azureDevOps from "../integrations/azure-devops"
 import * as graph from "../integrations/graph"
 import * as microsoft from "../integrations/microsoft"
+import { findPeople, sendOnBehalf } from "../slack/messaging"
+import * as slackSignIn from "../slack/user-tokens"
 import { sendDesktopLink } from "./desktop"
 import {
 	addJob,
@@ -369,6 +372,82 @@ async function handleDesktopLink(
 	)
 }
 
+/** `slack`: look people up, DM them (as the person once they've connected Slack, or from dot). */
+async function handleSlack(
+	request: Request,
+	caller: Caller,
+	action: string | undefined,
+	deps: Deps,
+): Promise<Response> {
+	const person = { teamId: caller.teamId, userId: caller.userId }
+	if (action === "status" && request.method === "GET")
+		return reply(200, await slackSignIn.status(person))
+	if (action === "connect" && request.method === "DELETE")
+		return reply(
+			200,
+			(await slackSignIn.disconnect(deps.client, person))
+				? "Disconnected; dot no longer keeps their Slack sign-in, and DMs come from dot."
+				: "They weren't connected.",
+		)
+	if (request.method !== "POST") return reply(405, "Use POST.")
+	const body = (await request.json().catch(() => ({}))) as {
+		query?: string
+		to?: string
+		text?: string
+		fromDot?: boolean
+	}
+	try {
+		if (action === "connect") {
+			if (!deps.config.slackSignIn)
+				return reply(
+					501,
+					"Sending as people isn't set up on this bot (the person running it needs to add SLACK_CLIENT_ID and SLACK_CLIENT_SECRET; see docs/SETUP.md). DMs can still come from dot.",
+				)
+			if (caller.scheduled)
+				return reply(403, "A scheduled run can't start a sign-in.")
+			return reply(
+				200,
+				await slackSignIn.connect(
+					deps.config.slackSignIn,
+					deps.client,
+					person,
+				),
+			)
+		}
+		if (action === "find")
+			return reply(
+				200,
+				await findPeople(deps.client, caller.teamId, body.query ?? ""),
+			)
+		if (action === "dm") {
+			const { slackSignIn: signIn } = deps.config
+			const result = await sendOnBehalf(
+				deps.client,
+				{ teamId: caller.teamId, userId: caller.userId },
+				body.to ?? "",
+				body.text ?? "",
+				// Without sign-in set up on this bot, DMs can only come from dot.
+				body.fromDot === true || !signIn,
+			)
+			// Not connected yet is a step, not a failure: send them the link and say so.
+			if (
+				!result.ok &&
+				result.notConnected &&
+				signIn &&
+				!caller.scheduled
+			)
+				return reply(
+					200,
+					`Not sent yet: their Slack account isn't connected, so it can't come from them. ${await slackSignIn.connect(signIn, deps.client, person)} (Or send it from dot now with \`slack dm --from-dot\`.)`,
+				)
+			return reply(result.ok ? 200 : 400, result.text)
+		}
+		return reply(404, "Use find, dm, status or connect.")
+	} catch (error) {
+		return failed(error, "Slack")
+	}
+}
+
 type Deps = { config: BotConfig; client: App["client"] }
 
 export type BotApi = { url: string }
@@ -395,6 +474,8 @@ export function startBotApi(hostname: string, deps: Deps): BotApi {
 			if (resource === "ado")
 				return handleAzureDevOps(request, caller, id, deps)
 			if (resource === "ms") return handleGraph(request, caller, id, deps)
+			if (resource === "slack")
+				return handleSlack(request, caller, id, deps)
 			if (resource === "desktop" && id === "link")
 				return handleDesktopLink(request, caller, deps)
 			return reply(404, "Unknown endpoint.")

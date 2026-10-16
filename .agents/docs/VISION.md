@@ -93,6 +93,8 @@ in `docs/ARCHITECTURE.md` and `docs/SETUP.md`; this is the why and the where-nex
   OneDrive, SharePoint, Teams, Planner) as each person, once they've connected with a Microsoft
   sign-in it DMs them: read and act, as them.
 - Run scheduled tasks: reminders and recurring work ("every Monday 9am, summarize #sales").
+- DM people for someone: as them once they've connected their Slack account, otherwise from dot,
+  saying who asked it to send it.
 - Be asked by @mention, DM, group DM, `/dot`, the "Ask dot" message shortcut, or reacting with 🤖.
   It reacts instead of replying when a message needs no answer, and adds no status reactions
   except ❌ on failure.
@@ -102,8 +104,6 @@ plan route doesn't offer it), or search the web through a built-in tool (it uses
 
 ### Next
 
-- **More integrations:** GitHub/repos, Google Workspace, App Store Connect/TestFlight, so the original
-  examples work ("issues reported on TestFlight last week").
 - **A context map:** project names → the repos, trackers and docs that describe them.
 - **Real work:** "finish the search feature" runs in an isolated checkout and ends with a PR link
   in the thread.
@@ -113,8 +113,14 @@ plan route doesn't offer it), or search the web through a built-in tool (it uses
 Low priority for now (decided 15 Oct):
 
 - **Per-person usage limits** on the ChatGPT plan.
-- **Acting in Slack:** search Slack, react, create canvases, lists and reminders, message people,
-  with guardrails.
+- **Acting in Slack:** search Slack, react, create canvases, lists and reminders, with guardrails.
+  (Messaging people is done.)
+
+Not planned (decided 16 Oct):
+
+- **GitHub and Google Workspace:** the organization doesn't use them.
+- **An App Store Connect/TestFlight integration:** TestFlight is checked once or twice a week, so
+  dot's computer use covers it ("issues reported on TestFlight last week").
 
 Further out:
 

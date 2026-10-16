@@ -99,15 +99,6 @@ Then tag the bot in a channel or DM it. A "Working on it" panel appears in the t
 Codex is doing with a running clock, and the answer lands under it. The first start builds the
 `dot-runtime` image (a few minutes) before the bot connects.
 
-### Several workspaces
-
-Shared settings go in `.env`; each extra workspace gets its own `.env.<name>` (git-ignored) with
-its Slack tokens, `OWNER_SLACK_USER_ID` and a separate `DATA_DIR`, loaded on top:
-
-```sh
-bun --env-file=.env --env-file=.env.<name> run src/index.ts
-```
-
 ### Private instructions
 
 `agent-home/AGENTS.local.md` (git-ignored) is appended to the persona every turn: use it for
@@ -197,9 +188,31 @@ DESKTOP_PUBLIC_URL="https://dot.example.com"
 To try it without a domain, `cloudflared tunnel --url http://localhost:6900` prints a
 `https://<random>.trycloudflare.com` address; it changes on every restart, and old links stop working.
 
-With several workspaces, give each its own `DESKTOP_VIEWER_PORT` (and `DESKTOP_PUBLIC_URL`) in its
-`.env.<name>`. Keep `DESKTOP_VIEWER_HOST` on `127.0.0.1`: every request needs a signed link, but the tunnel or
+Keep `DESKTOP_VIEWER_HOST` on `127.0.0.1`: every request needs a signed link, but the tunnel or
 proxy is what should face the network. `DESKTOP="false"` turns the computer off.
+
+### Slack DMs as people (optional)
+
+Without this, DMs dot sends for someone come from dot ("<them> asked me to send you this:"). With
+it, each person can connect their own Slack account once, and their DMs go out as them.
+
+1. The public address from "dot's computer" above has to be set up: Slack sends people back to
+   `DESKTOP_PUBLIC_URL/slack/oauth` (HTTPS). The gateway runs for this even with `DESKTOP="false"`.
+2. In the Slack app's settings, **OAuth & Permissions → Redirect URLs**: add
+   `https://dot.example.com/slack/oauth` (your address) and save. Or put it under
+   `oauth_config.redirect_urls` in the manifest.
+3. **Basic Information → App Credentials**: copy the Client ID and Client Secret into `.env` and
+   restart:
+
+   ```sh
+   SLACK_CLIENT_ID="1234567890.1234567890"
+   SLACK_CLIENT_SECRET="..."
+   ```
+
+People connect by asking dot to DM someone (or "connect my Slack"): dot DMs them a link, they
+allow `chat:write` and `im:write` as themselves, and dot keeps the token in
+`.data/slack-users.json`. It's only accepted from the Slack account that asked. "Disconnect my
+Slack" revokes it.
 
 ### Run as a service (Linux, systemd)
 
@@ -265,6 +278,8 @@ offline).
 | `MICROSOFT_CLIENT_ID`    | unset (off)             | Entra app for Azure DevOps and Microsoft 365 sign-in; see "Microsoft" above                                      |
 | `MICROSOFT_TENANT`       | `organizations`         | Directory (tenant) ID of that app                                                                                |
 | `MICROSOFT_GRAPH_SCOPES` | all of them             | Graph permissions asked for at sign-in; trim when the tenant needs admin approval for some                       |
+| `SLACK_CLIENT_ID`        | unset (off)             | With `SLACK_CLIENT_SECRET`: people can connect Slack so DMs dot sends go out as them; see above                  |
+| `SLACK_CLIENT_SECRET`    | unset                   | The Slack app's Client Secret                                                                                    |
 | `DESKTOP`                | `true`                  | Docker: a desktop per person that Codex drives and they can watch (see ARCHITECTURE.md, "dot's computer")        |
 | `DESKTOP_VIEWER_HOST`    | `127.0.0.1`             | Where the viewer gateway listens                                                                                 |
 | `DESKTOP_VIEWER_PORT`    | `6900`                  |                                                                                                                  |

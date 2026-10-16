@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""
+Slack, for the person you're working for: find people in the workspace and DM them. Once they've
+connected their Slack account, a DM goes out as them, in their own DM with that person, exactly as
+if they typed it. Otherwise (or with --from-dot) it comes from dot, headed "<person> asked me to
+send you this:".
+
+  slack status | connect | disconnect      their Slack connection (connect DMs them a link)
+  slack find "<name or email>"             people in the workspace: Slack ID, name, title, email
+  slack dm <@U123 | U123 | email> "text" [--from-dot]
+
+Use IDs from "People here" or `slack find`; never guess one. At most 20 DMs an hour per person.
+"""
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+API = os.environ.get("DOT_API")
+CALLER = os.environ.get("DOT_CALLER")
+
+
+def call(path, body=None, method="POST"):
+    if not API or not CALLER:
+        sys.exit("error: Slack isn't available here (no connection to the bot in this turn).")
+    request = urllib.request.Request(
+        f"{API}{path}",
+        method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"x-dot-caller": CALLER, "content-type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            print(json.load(response)["text"])
+    except urllib.error.HTTPError as error:
+        try:
+            message = json.load(error)["text"]
+        except Exception:
+            message = f"HTTP {error.code}"
+        sys.exit(f"error: {message}")
+    except urllib.error.URLError as error:
+        sys.exit(f"error: couldn't reach the bot ({error.reason}).")
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="slack", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = parser.add_subparsers(dest="command", required=True)
+    for name in ("status", "connect", "disconnect"):
+        commands.add_parser(name)
+    find = commands.add_parser("find")
+    find.add_argument("query")
+    dm = commands.add_parser("dm")
+    dm.add_argument("to")
+    dm.add_argument("text")
+    dm.add_argument("--from-dot", action="store_true", help="send from dot instead of as them")
+    args = parser.parse_args()
+
+    if args.command == "status":
+        call("/slack/status", method="GET")
+    elif args.command == "connect":
+        call("/slack/connect", {})
+    elif args.command == "disconnect":
+        call("/slack/connect", method="DELETE")
+    elif args.command == "find":
+        call("/slack/find", {"query": args.query})
+    else:
+        call("/slack/dm", {"to": args.to, "text": args.text, "fromDot": args.from_dot})
+
+
+if __name__ == "__main__":
+    main()

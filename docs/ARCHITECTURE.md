@@ -29,7 +29,8 @@ apps/
       agent/errors.ts  failure classes → message + recovery (retry, fresh thread, quota pause)
       agent/learning.ts turn log + background review (memory, personal skills)
       agent/tools.ts   runs runtime/ commands for a user (container or host)
-      agent/bot-api.ts API for container commands that need the bot (`schedule`), signed per turn
+      agent/bot-api.ts API for container commands that need the bot (`schedule`, `ado`, `ms`,
+                       `slack`, `desktop link`), signed per turn
       agent/desktop.ts dot's computer, bot side: signed watch/control links, viewer gateway, idle stop
       scheduler.ts     scheduled tasks: store, cron/time-zone maths, 30-second check
       integrations/microsoft.ts one Microsoft sign-in per person: device code, tokens per API
@@ -38,6 +39,8 @@ apps/
       slack/context.ts Slack messages → transcript for Codex
       slack/attachments.ts Slack files in (downloads) and out (outbox uploads)
       slack/handlers.ts mention/DM handling
+      slack/messaging.ts `slack find` / `slack dm`: dot DMs people for the person
+      slack/user-tokens.ts each person's Slack sign-in (user token), so DMs can go out as them
       slack/reply.ts   streamed reply: steps as Slack task cards, then the answer
       slack/socket-mode.ts Socket Mode receiver on Bun's WebSocket (Bolt's built-in one
                        needs undici's `ping`, which Bun's undici lacks)
@@ -47,7 +50,8 @@ apps/
                        skills.local/ (git-ignored) = the deployment's team skills
     runtime/           commands for Codex (Python, stdlib): `memory` (per-user memory),
                        `recall` (search past conversations), `schedule` (scheduled tasks),
-                       `ado` (Azure DevOps), `ms` (Microsoft 365), `desktop` (dot's computer:
+                       `ado` (Azure DevOps), `ms` (Microsoft 365), `slack` (find people, DM
+                       them for the person), `desktop` (dot's computer:
                        starts it, and serves Codex the tools that drive it, over MCP)
     docker/Dockerfile  per-user runtime image (Debian + the SDK's own codex build)
     scripts/codex-docker.sh stand-in `codex` that runs the real one via `docker exec`
@@ -221,6 +225,28 @@ Azure DevOps profile API at sign-in.
   (plans, tasks, create, done with the ETag). `ms get/post/patch/put/delete` reach the rest.
 - **Permissions** are delegated Graph scopes on the app registration (see docs/SETUP.md); the
   persona has dot show a draft before sending email or Teams messages it worded itself.
+
+## Messaging people
+
+`runtime/slack` posts to the bot API's `/slack/*` (`slack/messaging.ts`, `slack/user-tokens.ts`).
+
+- **Find.** `slack find` searches the workspace directory (users.list, cached 10 minutes; no bots
+  or deactivated accounts) by name or email.
+- **As the person.** `slack connect` DMs them a Slack OAuth link (user scopes `chat:write` and
+  `im:write` only, a one-time `state` that lasts 15 minutes). Slack sends them back to
+  `/slack/oauth` on the gateway (`DESKTOP_PUBLIC_URL`; it runs for this even without the desktop),
+  where the code becomes a user token, kept in `.data/slack-users.json` on the host, never in a
+  container. It's refused (and revoked) unless the account that allowed it is the one that asked,
+  in this workspace. Then `slack dm` opens their own DM with the recipient and posts the text as
+  them. A token Slack stops accepting (revoked, deactivated) is dropped and dot says to reconnect.
+  `slack disconnect` revokes it.
+- **From dot.** Not connected, or `--from-dot`: dot's DM with the recipient, headed
+  "<@sender> asked me to send you this:" and signed "Sent by dot for <@sender>. To answer, message
+  them directly."
+- **Guardrails.** No bots, deactivated accounts, people outside the workspace or the sender; 20 DMs
+  an hour per sender (in memory); every send logged (sender, recipient, how, length). Replies
+  aren't relayed. The persona has dot show a draft first when it worded the message itself, and
+  send only what the person asked for. Scheduled runs can send, but can't start a sign-in.
 
 ## Ways in
 

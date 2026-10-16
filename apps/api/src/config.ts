@@ -36,6 +36,17 @@ export const appName = optional("APP_NAME", "slack-codex-bot")
 export function loadBotConfig() {
 	const ownerUserId = required("OWNER_SLACK_USER_ID")
 	const allowed = optional("ALLOWED_SLACK_USERS", ownerUserId)
+	/** Where the desktop viewer gateway listens; keep it local and put a tunnel or proxy in front. */
+	const desktopViewer = (() => {
+		const host = optional("DESKTOP_VIEWER_HOST", "127.0.0.1")
+		const port = Number(optional("DESKTOP_VIEWER_PORT", "6900"))
+		/** The address people open (a tunnel or HTTPS domain on a server). */
+		const publicUrl = optional(
+			"DESKTOP_PUBLIC_URL",
+			`http://localhost:${port}`,
+		).replace(/\/$/, "")
+		return { host, port, publicUrl }
+	})()
 	return {
 		slackBotToken: required("SLACK_BOT_TOKEN"),
 		slackAppToken: required("SLACK_APP_TOKEN"),
@@ -67,17 +78,7 @@ export function loadBotConfig() {
 		desktop:
 			optional("DESKTOP", "true") === "true" &&
 			optional("CODEX_RUNTIME", "docker") === "docker",
-		/** Where the desktop viewer gateway listens; keep it local and put a tunnel or proxy in front. */
-		desktopViewer: (() => {
-			const host = optional("DESKTOP_VIEWER_HOST", "127.0.0.1")
-			const port = Number(optional("DESKTOP_VIEWER_PORT", "6900"))
-			/** The address people open (a tunnel or HTTPS domain on a server). */
-			const publicUrl = optional(
-				"DESKTOP_PUBLIC_URL",
-				`http://localhost:${port}`,
-			).replace(/\/$/, "")
-			return { host, port, publicUrl }
-		})(),
+		desktopViewer,
 		/** Minutes without actions or viewers before a desktop is stopped (files and logins stay). */
 		desktopIdleMinutes: Number(optional("DESKTOP_IDLE_MINUTES", "10")),
 		/** Host runtime only; in Docker the container is the boundary. */
@@ -113,6 +114,21 @@ export function loadBotConfig() {
 				.split(/[\s,]+/)
 				.filter(Boolean)
 			return { clientId, tenant, graphScopes }
+		})(),
+		/**
+		 * Sending Slack DMs as people: the Slack app's client ID and secret (Basic Information), for
+		 * each person's own sign-in. Slack sends them back to /slack/oauth on DESKTOP_PUBLIC_URL,
+		 * which must be listed as a Redirect URL. Unset: DMs only come from dot.
+		 */
+		slackSignIn: (() => {
+			const clientId = Bun.env.SLACK_CLIENT_ID?.trim()
+			const clientSecret = Bun.env.SLACK_CLIENT_SECRET?.trim()
+			if (!clientId || !clientSecret) return null
+			return {
+				clientId,
+				clientSecret,
+				redirectUrl: `${desktopViewer.publicUrl}/slack/oauth`,
+			}
 		})(),
 		/** Reacting with this emoji (name without colons) to a message asks dot to handle it. */
 		triggerEmoji: optional("TRIGGER_EMOJI", "robot_face"),

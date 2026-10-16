@@ -18,6 +18,7 @@ import { startBotApi } from "./agent/bot-api"
 import { startModelProxy } from "./agent/model-proxy"
 import { startScheduler } from "./scheduler"
 import { BunSocketModeReceiver } from "./slack/socket-mode"
+import { oauthCallback } from "./slack/user-tokens"
 
 const config = loadBotConfig()
 
@@ -46,10 +47,15 @@ startBotApi(
 )
 // Container names carry the person's first name, for whoever looks at `docker ps`.
 nameContainersWith(userId => userFirstName(app.client, userId))
-if (config.desktop) {
-	startDesktopGateway(config)
-	startDesktopReaper(config)
-}
+const { slackSignIn } = config
+if (config.desktop || slackSignIn)
+	startDesktopGateway(
+		config,
+		slackSignIn
+			? request => oauthCallback(request, slackSignIn, app.client)
+			: undefined,
+	)
+if (config.desktop) startDesktopReaper(config)
 registerHandlers(app, config, auth.user_id!)
 // A previous bot process may have left Codex runs going in containers (they hold thread locks).
 if (config.runtime === "docker") await stopOrphanedRuns(auth.team_id!)

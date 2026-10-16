@@ -643,7 +643,14 @@ function cookie(request: Request, name: string): string | undefined {
 	}
 }
 
-export function startDesktopGateway(config: BotConfig): void {
+/**
+ * dot's web address: the desktop viewer, and `slackOAuth` (Slack's redirect back after someone
+ * connects their Slack account) at /slack/oauth. Started for either.
+ */
+export function startDesktopGateway(
+	config: BotConfig,
+	slackOAuth?: (request: Request) => Promise<Response>,
+): void {
 	const { host, port, publicUrl } = config.desktopViewer
 	const secure = publicUrl.startsWith("https:")
 
@@ -655,6 +662,10 @@ export function startDesktopGateway(config: BotConfig): void {
 			idleTimeout: 0,
 			async fetch(request, server) {
 				const url = new URL(request.url)
+				if (url.pathname === "/slack/oauth" && slackOAuth)
+					return slackOAuth(request)
+				if (!config.desktop)
+					return new Response("not found", { status: 404 })
 				const asset = url.pathname.match(/^\/_dot\/([^/]+)$/)?.[1]
 				if (asset && ASSET_NAMES.has(asset))
 					return new Response(Bun.file(`${ASSETS}${asset}`), {
