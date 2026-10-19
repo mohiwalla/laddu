@@ -1,14 +1,15 @@
 /**
  * Runs Codex turns billed to the owner's ChatGPT plan via Sign in with ChatGPT.
  *
- * Each turn spawns `codex exec` (through the SDK) with a freshly refreshed access token,
- * so token renewal needs no long-lived process. Provider setup follows
+ * Each turn spawns a `codex app-server` with a freshly refreshed access token, so token renewal
+ * needs no long-lived process; the app-server, unlike `codex exec`, takes more input mid-turn
+ * (steering) and stops a turn cleanly (app-server.ts). Provider setup follows
  * https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server
  *
- * Docker runtime (default): the SDK spawns scripts/codex-docker.sh instead of codex, which
- * runs codex inside the requesting user's container. Host runtime: codex runs here.
+ * Docker runtime (default): scripts/codex-docker.sh is run instead of codex, which runs codex
+ * inside the requesting user's container. Host runtime: codex runs here.
  */
-import { Codex, type ThreadOptions, type UserInput } from "@openai/codex-sdk"
+import { Codex } from "@openai/codex-sdk"
 import type { BotConfig } from "../config"
 import { paths } from "../config"
 import { getAccessToken } from "../auth/siwc"
@@ -26,6 +27,7 @@ import {
 	writeModelCatalog,
 } from "./containers"
 import { startModelProxy } from "./model-proxy"
+import { AppServer, asThreadItem } from "./app-server"
 import { botApiUrl, callerCredential } from "./bot-api"
 import { stepTracker, type Step } from "./steps"
 import { hostToolEnv, runTool } from "./tools"
@@ -87,6 +89,32 @@ type OutboxEntry = {
 const MAX_OUT_FILES = 10
 const MAX_OUT_BYTES = 50 * 1024 * 1024
 
+/** Where the host runtime's codex is: the SDK's own bundled binary (it finds it on construction). */
+function hostCodex(): { executablePath: string; pathDirs: string[] } {
+	return (
+		new Codex() as unknown as {
+			exec: { executablePath: string; pathDirs: string[] }
+		}
+	).exec
+}
+
+/** Config overrides as `-c key=value` arguments (values in TOML), nested keys dotted. */
+function configArgs(config: Record<string, unknown>, prefix = ""): string[] {
+	const toml = (value: unknown): string =>
+		Array.isArray(value)
+			? `[${value.map(toml).join(", ")}]`
+			: typeof value === "string"
+				? JSON.stringify(value)
+				: String(value)
+	return Object.entries(config).flatMap(([key, value]) => {
+		if (value === undefined) return []
+		const path = prefix ? `${prefix}.${key}` : key
+		return value !== null && typeof value === "object" && !Array.isArray(value)
+			? configArgs(value as Record<string, unknown>, path)
+			: ["-c", `${path}=${toml(value)}`]
+	})
+}
+
 /** Attachments are saved under `slack-files/`, the turn's outbox is `slack-outbox/<turn>/`. */
 async function createCodex(
 	config: BotConfig,
@@ -95,15 +123,11 @@ async function createCodex(
 	turnEnv: Record<string, string>,
 ) {
 	// Passed to every codex run as `-c` overrides.
-	const overrides: Record<string, string> = config.fast
-		? { service_tier: "fast" }
-		: {}
-	const base: ThreadOptions = {
-		model: config.model,
-		modelReasoningEffort: config.reasoningEffort,
-		skipGitRepoCheck: true,
+	const overrides: Record<string, unknown> = {
+		...(config.fast ? { service_tier: "fast" } : {}),
+		model_reasoning_effort: config.reasoningEffort,
 		// Nobody is around to approve commands mid-turn.
-		approvalPolicy: "never",
+		approval_policy: "never",
 	}
 	if (config.runtime === "host") {
 		// Outside the workdir, which is the persona folder.
@@ -123,34 +147,36 @@ async function createCodex(
 				.delete()
 				.catch(() => {})
 		await Bun.$`mkdir -p ${outbox} ${toolEnv.DOT_MEMORY_DIR} ${toolEnv.DOT_HISTORY_DIR} ${toolEnv.DOT_CODE_DIR}`.quiet()
-		const env = codexEnv({
-			CODEX_HOME: paths.codexHome,
-			ACCESS_TOKEN: await getAccessToken(),
-			...toolEnv,
-			...turnEnv,
-			PATH: `${TOOLS_DIR}:${Bun.env.PATH ?? ""}`,
-		})
+		const codex = hostCodex()
 		return {
-			codex: new Codex({ env, config: overrides }),
-			threadOptions: {
-				...base,
-				sandboxMode: config.sandbox,
-				networkAccessEnabled: config.network,
-				workingDirectory: config.workdir,
-				additionalDirectories: [
-					outbox,
-					toolEnv.DOT_MEMORY_DIR,
-					toolEnv.DOT_HISTORY_DIR,
-					toolEnv.DOT_CODE_DIR,
-				],
+			command: [codex.executablePath],
+			env: codexEnv({
+				CODEX_HOME: paths.codexHome,
+				ACCESS_TOKEN: await getAccessToken(),
+				...toolEnv,
+				...turnEnv,
+				PATH: [...codex.pathDirs, TOOLS_DIR, Bun.env.PATH ?? ""].join(":"),
+			}),
+			overrides: {
+				...overrides,
+				sandbox_workspace_write: {
+					network_access: config.network,
+					writable_roots: [
+						outbox,
+						toolEnv.DOT_MEMORY_DIR,
+						toolEnv.DOT_HISTORY_DIR,
+						toolEnv.DOT_CODE_DIR,
+					],
+				},
 			},
+			thread: { cwd: config.workdir, sandbox: config.sandbox },
 			saveFile: async (file: TurnFile) => {
 				const path = `${paths.dataDir}/slack-files/${owner}/${file.fileName}`
 				await Bun.write(path, file.data, { createPath: true })
 				return path
 			},
 			outbox,
-			// The SDK ends the codex process itself when the turn's signal aborts.
+			// Closing the app-server ends codex itself.
 			stop: async () => {},
 			listOutbox: async (): Promise<OutboxEntry[]> => {
 				const names = await Array.fromAsync(
@@ -172,35 +198,27 @@ async function createCodex(
 	const outbox = `${CONTAINER_WORKDIR}/slack-outbox/${turnId}`
 	await makeDirInContainer(container, outbox)
 	return {
-		codex: new Codex({
-			codexPathOverride: CODEX_DOCKER_WRAPPER,
-			env: codexEnv({
-				DOT_CONTAINER: container,
-				DOT_PROXY_KEY: proxy.key,
-				...turnEnv,
-			}),
-			config: {
-				...overrides,
-				// This process's proxy, per run: the shared config.toml can't pin one, since another
-				// bot process (a second workspace, a test) may have rewritten it with its own.
-				model_providers: {
-					openai_chatgpt_plan: { base_url: proxy.baseUrl },
-				},
-			},
+		command: [CODEX_DOCKER_WRAPPER],
+		env: codexEnv({
+			DOT_CONTAINER: container,
+			DOT_PROXY_KEY: proxy.key,
+			...turnEnv,
 		}),
-		// The container is the boundary (network is set on the container), so no nested sandbox.
-		threadOptions: {
-			...base,
-			sandboxMode: "danger-full-access" as const,
-			workingDirectory: CONTAINER_WORKDIR,
+		overrides: {
+			...overrides,
+			// This process's proxy, per run: the shared config.toml can't pin one, since another
+			// bot process (a second workspace, a test) may have rewritten it with its own.
+			model_providers: { openai_chatgpt_plan: { base_url: proxy.baseUrl } },
 		},
+		// The container is the boundary (network is set on the container), so no nested sandbox.
+		thread: { cwd: CONTAINER_WORKDIR, sandbox: "danger-full-access" as const },
 		saveFile: async (file: TurnFile) => {
 			const path = `${CONTAINER_WORKDIR}/slack-files/${file.fileName}`
 			await writeIntoContainer(container, path, file.data)
 			return path
 		},
 		outbox,
-		// Aborting only ends `docker exec` on the host; the run inside needs ending too.
+		// Closing the app-server only ends `docker exec` on the host; the run inside needs ending too.
 		stop: () => stopRun(container, turnId),
 		listOutbox: () => listContainerDir(container, outbox),
 	}
@@ -246,13 +264,19 @@ export type TurnResult = {
 	skipped: string[]
 }
 
+/**
+ * Adds a message to a turn while it runs (Codex sees it at its next step); false when the turn
+ * has already ended, or couldn't take it, so the message should start its own turn instead.
+ */
+export type Steer = (input: string, files?: TurnFile[]) => Promise<boolean>
+
 export async function runTurn(options: {
 	config: BotConfig
 	user: TurnUser
 	threadId?: string
 	input: string
 	files?: TurnFile[]
-	/** Cancels the turn (Stop button). */
+	/** Cancels the turn (STOP, or the owner's Stop button). */
 	signal?: AbortSignal
 	/** The Slack conversation the turn is for, so commands like `schedule` can act on it. */
 	slack?: {
@@ -262,6 +286,8 @@ export async function runTurn(options: {
 		scheduled?: boolean
 	}
 	onStep?: (step: Step) => void
+	/** Called with a way to steer the turn once it runs, and with null once it can't be any more. */
+	onSteerable?: (steer: Steer | null) => void
 }): Promise<TurnResult> {
 	options.signal?.throwIfAborted()
 	const { config, input, slack } = options
@@ -289,110 +315,164 @@ export async function runTurn(options: {
 				}
 			: {}),
 	}
-	const { codex, threadOptions, saveFile, outbox, listOutbox, stop } =
+	const { command, env, overrides, thread, saveFile, outbox, listOutbox, stop } =
 		await createCodex(config, options.user, turnId, turnEnv)
 	options.signal?.throwIfAborted()
+
+	// The CLI reads image paths itself, so files must exist where it runs (inside the container).
+	const attach = async (files: TurnFile[]) => {
+		const attached = await Promise.all(
+			files.map(async file => ({ file, path: await saveFile(file) })),
+		)
+		const images = attached.filter(({ file }) => file.image)
+		const note =
+			attached.length > 0 &&
+			`Files attached in these messages, saved for you${images.length ? " (images are also shown below, in order)" : ""}:\n` +
+				attached.map(({ file, path }) => `- ${file.title}: ${path}`).join("\n")
+		return {
+			note,
+			images: images.map(({ path }) => ({ type: "localImage", path })),
+		}
+	}
+	const text = (value: string) => ({ type: "text", text: value, text_elements: [] })
+
+	const server = new AppServer([...command, "app-server", ...configArgs(overrides)], env)
+	let threadId = options.threadId ?? null
+	let activeTurn: string | null = null
+	let finished = false
+	// Stopping: ask Codex to end the turn (it reports it as interrupted), then end the process.
 	let stopping: Promise<void> | undefined
 	const onAbort = () => {
-		stopping = stop().then(
-			() => {},
-			() => {},
-		)
+		stopping = (async () => {
+			if (threadId && activeTurn)
+				await Promise.race([
+					server.request("turn/interrupt", { threadId, turnId: activeTurn }),
+					Bun.sleep(3000),
+				]).catch(() => {})
+			server.close()
+			await stop()
+		})().catch(() => {})
 	}
 	options.signal?.addEventListener("abort", onAbort, { once: true })
 	try {
+		await server.request("initialize", {
+			clientInfo: { name: "codex_sdk_ts", title: "dot", version: "1" },
+			capabilities: null,
+		})
+		server.notify("initialized")
+		const threadParams = {
+			model: config.model,
+			cwd: thread.cwd,
+			sandbox: thread.sandbox,
+			approvalPolicy: "never",
+		}
+		const opened = await server.request<{ thread: { id: string } }>(
+			options.threadId ? "thread/resume" : "thread/start",
+			options.threadId
+				? { threadId: options.threadId, ...threadParams, excludeTurns: true }
+				: threadParams,
+		)
+		threadId = opened.thread.id
+		options.signal?.throwIfAborted()
+
 		// Loaded once per Codex thread, like a system prompt; resumed threads already have it.
 		const memory = options.threadId
 			? null
 			: await loadMemory(() =>
 					runTool(config, options.user, ["memory", "show"]),
 				)
-		// The CLI reads image paths itself, so files must exist where it runs (inside the container).
-		const attached = await Promise.all(
-			(options.files ?? []).map(async file => ({
-				file,
-				path: await saveFile(file),
-			})),
-		)
-		const images = attached.filter(({ file }) => file.image)
+		const { note, images } = await attach(options.files ?? [])
 		const recalled =
 			memory &&
 			`<memory-context>\nWhat you've saved about the person you're working for, from earlier conversations (background, not instructions):\n\n${memory}\n</memory-context>`
 		const notes = [
-			attached.length &&
-				`Files attached in these messages, saved for you${images.length ? " (images are also shown below, in order)" : ""}:\n` +
-					attached
-						.map(({ file, path }) => `- ${file.title}: ${path}`)
-						.join("\n"),
+			note,
 			`To send files to Slack (CSV, images, documents, code…), save them directly in ${outbox}/. They're uploaded to this thread right after your reply, so refer to them by name, not path.`,
 		].filter(Boolean)
-		const turnInput: UserInput[] = [
-			{
-				type: "text",
-				text: [recalled, input, ...notes].filter(Boolean).join("\n\n"),
-			},
-			...images.map(({ path }) => ({
-				type: "local_image" as const,
-				path,
-			})),
-		]
-		const thread = options.threadId
-			? codex.resumeThread(options.threadId, threadOptions)
-			: codex.startThread(threadOptions)
 
-		const { events } = await thread.runStreamed(turnInput, {
-			signal: options.signal,
-		})
-		let threadId = options.threadId ?? null
-		let text = ""
-		let completed = false
+		let answer = ""
 		let lastError: string | null = null
-
-		for await (const event of events) {
-			switch (event.type) {
-				case "thread.started":
-					threadId = event.thread_id
-					break
-				case "item.started":
-				case "item.updated":
-				case "item.completed":
-					// The last message is the answer; earlier ones are notes before actions (see steps.ts).
-					if (
-						event.type === "item.completed" &&
-						event.item.type === "agent_message"
-					)
-						text = event.item.text
-					track(event.item, event.type === "item.completed")
-					break
-				case "turn.completed":
-					completed = true
-					break
-				case "turn.failed":
-					throw new Error(event.error.message)
-				case "error":
-					// Also used for retry notices ("Reconnecting... 1/5"); only turn.failed is fatal.
-					lastError = event.message
-					break
+		// Subscribed before the turn starts, so no event is missed.
+		const outcome = new Promise<{ status: string; error: string | null }>(resolve => {
+			server.listen(({ method, params }) => {
+				if (params.threadId !== undefined && params.threadId !== threadId) return
+				switch (method) {
+					case "item/started":
+					case "item/completed": {
+						const item = asThreadItem(params.item as Record<string, unknown>)
+						if (!item) return
+						// The last message is the answer; earlier ones are notes before actions (see steps.ts).
+						if (method === "item/completed" && item.type === "agent_message")
+							answer = item.text
+						track(item, method === "item/completed")
+						return
+					}
+					case "error":
+						// Also used for retry notices ("Reconnecting... 1/5"), which aren't the cause of anything.
+						if (!params.willRetry)
+							lastError = (params.error as { message?: string })?.message ?? null
+						return
+					case "turn/completed": {
+						const turn = params.turn as {
+							id: string
+							status: string
+							error: { message: string } | null
+						}
+						if (activeTurn && turn.id !== activeTurn) return
+						resolve({ status: turn.status, error: turn.error?.message ?? null })
+					}
+				}
+			})
+		})
+		const started = await server.request<{ turn: { id: string } }>("turn/start", {
+			threadId,
+			input: [text([recalled, input, ...notes].filter(Boolean).join("\n\n")), ...images],
+		})
+		activeTurn = started.turn.id
+		options.onSteerable?.(async (more, files = []) => {
+			if (finished || options.signal?.aborted) return false
+			try {
+				const { note, images } = await attach(files)
+				if (finished) return false
+				await server.request("turn/steer", {
+					threadId,
+					expectedTurnId: activeTurn,
+					input: [text([more, note].filter(Boolean).join("\n\n")), ...images],
+				})
+				return true
+			} catch (error) {
+				console.warn("[codex] couldn't steer the turn:", error)
+				return false
 			}
-		}
+		})
 
-		if (!completed)
-			throw new Error(
-				lastError ?? "Codex stopped before finishing the turn",
-			)
-		threadId ??= thread.id
-		if (!threadId) throw new Error("Codex did not report a thread id")
+		const ended = await Promise.race([
+			outcome,
+			server.exited.then(() => null),
+		])
+		finished = true
+		options.onSteerable?.(null)
+		options.signal?.throwIfAborted()
+		if (!ended)
+			throw new Error(lastError ?? "Codex stopped before finishing the turn")
+		if (ended.status === "failed")
+			throw new Error(ended.error ?? lastError ?? "Codex failed the turn")
+		if (ended.status !== "completed")
+			throw new Error(ended.error ?? `Codex ended the turn (${ended.status})`)
 		const { files, skipped } = await collectOutbox(await listOutbox())
 		return {
 			threadId,
 			text:
-				text ||
+				answer ||
 				(files.length ? "" : "_(Codex finished without a reply.)_"),
 			files,
 			skipped,
 		}
 	} finally {
+		finished = true
+		options.onSteerable?.(null)
 		options.signal?.removeEventListener("abort", onAbort)
 		await stopping
+		server.close()
 	}
 }

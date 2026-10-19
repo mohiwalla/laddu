@@ -1,7 +1,7 @@
 import type { App } from "@slack/bolt"
 import type { ReplyTarget } from "./reply"
 
-type Run = { controller: AbortController; started: boolean }
+type Run = { controller: AbortController; started: boolean; userId: string }
 type Session = { runs: Set<Run>; updates: Promise<void> }
 
 /** Slack has one agent status per thread, even when several people ask dot at once. */
@@ -16,7 +16,11 @@ export class AgentSessions {
 			this.sessions.set(key, session)
 		}
 		const current = session
-		const run: Run = { controller: new AbortController(), started: false }
+		const run: Run = {
+			controller: new AbortController(),
+			started: false,
+			userId: target.userId,
+		}
 		current.runs.add(run)
 		const update = (status: "processing" | "active") => {
 			current.updates = current.updates.then(async () => {
@@ -63,10 +67,17 @@ export class AgentSessions {
 		}
 	}
 
-	/** Cancel active and already queued requests for this thread, leaving other threads alone. */
-	stop(channel: string, threadTs: string) {
-		for (const run of this.sessions.get(`${channel}:${threadTs}`)?.runs ??
-			[])
-			run.controller.abort()
+	/**
+	 * Cancels one person's active and already queued requests in this thread, leaving everyone
+	 * else's (and other threads) alone. Returns how many there were.
+	 */
+	stop(channel: string, threadTs: string, userId: string): number {
+		let stopped = 0
+		for (const run of this.sessions.get(`${channel}:${threadTs}`)?.runs ?? [])
+			if (run.userId === userId && !run.controller.signal.aborted) {
+				run.controller.abort()
+				stopped++
+			}
+		return stopped
 	}
 }

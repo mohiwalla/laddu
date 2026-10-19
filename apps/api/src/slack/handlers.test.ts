@@ -256,3 +256,51 @@ test.each(["success", "failure", "stop"] as const)(
 		}
 	},
 )
+
+async function dm(text: string) {
+	const ts = `1792300000.${String(++sequence).padStart(6, "0")}`
+	let onMessage!: (args: unknown) => Promise<void>
+	const app = {
+		event: () => {},
+		action: () => {},
+		message: (handler: typeof onMessage) => {
+			onMessage = handler
+		},
+		command: () => {},
+		shortcut: () => {},
+		view: () => {},
+	} as unknown as App
+	registerHandlers(app, { allowedUsers: "*" } as BotConfig, botUserId)
+	const postMessage = mock(async () => ({ ok: true }))
+	await onMessage({
+		message: {
+			channel: "D_PERSON",
+			channel_type: "im",
+			ts,
+			thread_ts: "1792300000.000000",
+			user: userId,
+			text,
+		},
+		client: { chat: { postMessage } },
+		context: { teamId: "T_TEAM" },
+	})
+	await Bun.sleep(0)
+	return postMessage
+}
+
+test("STOP with nothing running says so, and starts no turn", async () => {
+	const postMessage = await dm("STOP")
+	expect(started).not.toHaveBeenCalled()
+	expect(serialized).not.toHaveBeenCalled()
+	expect(postMessage).toHaveBeenCalledWith(
+		expect.objectContaining({ markdown_text: "_Nothing to stop._" }),
+	)
+})
+
+test.each(["stop", "Stop", "STOP please", "please STOP"])(
+	"%s is an ordinary message",
+	async text => {
+		await dm(text)
+		expect(serialized).toHaveBeenCalled()
+	},
+)

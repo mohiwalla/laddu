@@ -17,6 +17,11 @@ Codex drives it through `desktop mcp`, an MCP server registered in its config; p
 While the person is in control, the tools wait (up to HANDBACK_WAIT_S per call) instead of acting,
 and an action interrupted by a hand-back isn't done: the screen may have changed under it.
 
+The screen is the size of the person's browser window while they watch (the viewer asks for it),
+and keeps that size after. Codex sees it at most MODEL_BOX: screenshots are scaled down to fit and
+its coordinates scaled back up, so a large window doesn't cost more or shrink what Codex reads.
+An action aimed at a screen that has changed size since Codex last saw it isn't done either.
+
 Control borrows from computer-use-linux (agent-sh, MIT): one call returns a screenshot together
 with the on-screen controls from the accessibility tree (AT-SPI), so clicks can target a named
 button instead of guessing pixels; input goes through the X server (xdotool) like a real mouse
@@ -35,7 +40,8 @@ import urllib.request
 from pathlib import Path
 
 DISPLAY = ":1"
-WIDTH, HEIGHT = 1280, 800
+START_SIZE = (1280, 800)  # until a viewer asks for its own
+MODEL_BOX = (1280, 800)  # the largest screenshot Codex is sent
 VIEWER_PORT = 6901
 STATE = Path.home() / ".desktop"
 ENV_FILE = STATE / "env.json"
@@ -120,12 +126,12 @@ def start():
         Path(f"/tmp/.X11-unix/X{DISPLAY[1:]}").unlink(missing_ok=True)
         Path(f"/tmp/.X{DISPLAY[1:]}-lock").unlink(missing_ok=True)
         spawn([
-            "Xvnc", DISPLAY, "-geometry", f"{WIDTH}x{HEIGHT}", "-depth", "24",
+            "Xvnc", DISPLAY, "-geometry", "{}x{}".format(*START_SIZE), "-depth", "24",
             "-websocketPort", str(VIEWER_PORT), "-interface", "0.0.0.0",
             "-httpd", "/usr/share/kasmvnc/www", "-sslOnly", "0", "-SecurityTypes", "None",
             "-rfbport", "-1", "-KasmPasswordFile", str(passwd), "-AlwaysShared",
-            # Fixed size, so coordinates in screenshots stay valid; viewers scale it.
-            "-AcceptSetDesktopSize", "0", "-FrameRate", "24",
+            # The viewer sizes the screen to its window (see the module docstring for coordinates).
+            "-AcceptSetDesktopSize", "1", "-FrameRate", "24",
             # No cursor of its own (in the picture or sent to viewers): the viewer draws dot's, always
             # the same arrow, and people use their own cursor when they take control.
             "-nocursor",
@@ -265,11 +271,40 @@ def status():
 
 # ---- observing ----------------------------------------------------------------------------
 
+def screen_size():
+    out = run("xdotool", "getdisplaygeometry", env=session_env()).stdout.decode().split()
+    return int(out[0]), int(out[1])
+
+
+# The screen as Codex last saw it: its real size, and the scale of Codex's coordinates to it.
+VIEW = None
+
+
+def look():
+    """Takes the screen's current size as what Codex sees next."""
+    global VIEW
+    width, height = screen_size()
+    scale = min(1, MODEL_BOX[0] / width, MODEL_BOX[1] / height)
+    VIEW = {"size": (width, height), "scale": scale}
+    return VIEW
+
+
+def shown_size():
+    width, height = VIEW["size"]
+    return round(width * VIEW["scale"]), round(height * VIEW["scale"])
+
+
+def shown(x, y):
+    """Screen coordinates as Codex sees them."""
+    return round(x * VIEW["scale"]), round(y * VIEW["scale"])
+
+
 def screenshot():
     # ImageMagick otherwise sizes its worker pool from host CPUs, which can exhaust a
     # container's thread allowance even though the container only has two CPUs.
     env = {**session_env(), "MAGICK_THREAD_LIMIT": "2", "OMP_NUM_THREADS": "2"}
-    return run("import", "-limit", "thread", "2", "-window", "root", "png:-", env=env).stdout
+    fit = [] if VIEW["scale"] == 1 else ["-resize", "{}x{}!".format(*shown_size())]
+    return run("import", "-limit", "thread", "2", "-window", "root", *fit, "png:-", env=env).stdout
 
 
 def active_window():
@@ -293,6 +328,7 @@ def accessible_elements(all_windows=False):
         import pyatspi
     except ImportError:
         return [], "accessibility tree unavailable"
+    width, height = VIEW["size"]
     deadline = time.monotonic() + TREE_BUDGET_S
     visited = 0
     found = []
@@ -315,7 +351,7 @@ def accessible_elements(all_windows=False):
             footnote = role == "link" and name.startswith("[") and name.endswith("]")
             if role in INTERACTIVE and not footnote and (name or role in ("entry", "password text", "text")):
                 box = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
-                if box.width > 0 and box.height > 0 and 0 <= box.x < WIDTH and 0 <= box.y < HEIGHT:
+                if box.width > 0 and box.height > 0 and 0 <= box.x < width and 0 <= box.y < height:
                     if role == "text" and not states.contains(pyatspi.STATE_EDITABLE):
                         pass  # plain text: the screenshot covers it
                     else:
@@ -374,18 +410,23 @@ def accessible_elements(all_windows=False):
     return found, note
 
 
-ELEMENTS = []  # from the last observe, so actions can say element=N
+ELEMENTS = []  # from the last observe, so actions can say element=N (real screen coordinates)
+
+
+def screen_line():
+    return "Screen {}x{}. Active window: {}.".format(*shown_size(), active_window() or "(none)")
 
 
 def observe(all_windows=False):
     global ELEMENTS
     ELEMENTS, note = accessible_elements(all_windows)
-    lines = [f"Screen {WIDTH}x{HEIGHT}. Active window: {active_window() or '(none)'}."]
+    lines = [screen_line()]
     if ELEMENTS:
         lines.append(f"Controls{note} — [n] role \"name\" (x,y):")
         for i, e in enumerate(ELEMENTS, 1):
             state = f" [{', '.join(e['state'])}]" if e["state"] else ""
-            lines.append(f"[{i}] {e['role']} \"{e['name']}\" ({e['x']},{e['y']}){state}")
+            x, y = shown(e["x"], e["y"])
+            lines.append(f"[{i}] {e['role']} \"{e['name']}\" ({x},{y}){state}")
     else:
         lines.append(f"No controls listed{note}; use the screenshot's coordinates.")
     return "\n".join(lines)
@@ -406,9 +447,13 @@ def point(args):
     if args.get("x") is None or args.get("y") is None:
         raise ValueError("give element (from observe) or x and y")
     x, y = int(args["x"]), int(args["y"])
-    if not (0 <= x < WIDTH and 0 <= y < HEIGHT):
-        raise ValueError(f"({x},{y}) is off the {WIDTH}x{HEIGHT} screen")
-    return x, y
+    width, height = shown_size()
+    if not (0 <= x < width and 0 <= y < height):
+        raise ValueError(f"({x},{y}) is off the {width}x{height} screen")
+    # Codex's coordinates to the real screen's, kept on it.
+    real_width, real_height = VIEW["size"]
+    scale = VIEW["scale"]
+    return min(round(x / scale), real_width - 1), min(round(y / scale), real_height - 1)
 
 
 BUTTONS = {"left": 1, "middle": 2, "right": 3}
@@ -420,7 +465,7 @@ def click(args):
     xdo("mousemove", "--sync", x, y)
     xdo("click", "--repeat", int(args.get("clicks", 1)), "--delay", 80, button)
     emit("click", x=x, y=y)
-    return f"clicked ({x},{y})"
+    return "clicked ({},{})".format(*shown(x, y))
 
 
 def type_text(args):
@@ -440,12 +485,12 @@ def key(args):
 
 
 def scroll(args):
-    x, y = point(args) if args.get("element") is not None or args.get("x") is not None else (WIDTH // 2, HEIGHT // 2)
+    x, y = point(args) if args.get("element") is not None or args.get("x") is not None else (VIEW["size"][0] // 2, VIEW["size"][1] // 2)
     direction = args.get("direction", "down")
     button = {"up": 4, "down": 5, "left": 6, "right": 7}[direction]
     xdo("mousemove", "--sync", x, y)
     xdo("click", "--repeat", int(args.get("amount", 5)), "--delay", 30, button)
-    return f"scrolled {direction} at ({x},{y})"
+    return "scrolled {} at ({},{})".format(direction, *shown(x, y))
 
 
 def drag(args):
@@ -459,7 +504,7 @@ def drag(args):
         moves += ["mousemove", x1 + (x2 - x1) * i // steps, y1 + (y2 - y1) * i // steps, "sleep", 0.02]
     moves += ["sleep", 0.25, "mouseup", 1]
     xdo(*moves)
-    return f"dragged ({x1},{y1}) → ({x2},{y2})"
+    return "dragged ({},{}) → ({},{})".format(*shown(x1, y1), *shown(x2, y2))
 
 
 def launch(args):
@@ -566,6 +611,8 @@ TOOLS = {
 # Actions that change the screen return what observe would (controls + screenshot), so the next
 # step can see the result without another call: each call re-sends the whole conversation.
 SHOW_AFTER = {"click", "type", "key", "scroll", "drag", "launch", "focus", "wait"}
+# Actions at a point on the screen, as Codex last saw it.
+AIMED = {"click", "scroll", "drag"}
 
 
 def call_tool(name, args):
@@ -592,13 +639,22 @@ def call_tool(name, args):
             "so nothing was done for this call; here's the screen now, decide again."
         )
         name = "observe"
+    if VIEW is None:  # this process hasn't sent a screenshot yet
+        look()
+    if name in AIMED and screen_size() != VIEW["size"]:
+        lines.append(
+            "The screen changed size (the person's browser window did) since your last screenshot, "
+            "so nothing was done for this call; here's the screen now, decide again."
+        )
+        name = "observe"
     if name not in ("observe", "screenshot"):
         lines.append(TOOLS[name][3](args))
         if name not in SHOW_AFTER:
             return [{"type": "text", "text": "\n".join(lines)}]
         time.sleep(0.6)  # let the screen settle
+    look()
     if name == "screenshot":
-        lines.append(f"Screen {WIDTH}x{HEIGHT}. Active window: {active_window() or '(none)'}.")
+        lines.append(screen_line())
     else:
         lines.append(observe(bool(args.get("all_windows"))))
     data = base64.b64encode(screenshot()).decode()

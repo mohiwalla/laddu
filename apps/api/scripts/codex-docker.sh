@@ -1,7 +1,7 @@
 #!/bin/sh
-# Stand-in for the `codex` binary, handed to the Codex SDK as codexPathOverride.
+# Stand-in for the `codex` binary (run as `codex-docker.sh app-server …` for each turn).
 # Runs the real codex inside the requesting user's container ($DOT_CONTAINER), forwarding the
-# model proxy key (never the ChatGPT token) and this turn's caller, bot API address and time zone. Prompt on stdin, JSON events on stdout.
+# model proxy key (never the ChatGPT token) and this turn's caller, bot API address and time zone. JSON-RPC on stdin and stdout.
 # Persona (AGENTS.md, plus the git-ignored AGENTS.local.md if present) is written into CODEX_HOME
 # each run; config comes from a read-only directory mount, linked in, and
 # its commands (memory, recall, schedule) into ~/.local/bin, which is on PATH in Codex's login

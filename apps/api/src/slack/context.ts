@@ -79,6 +79,8 @@ export type Trigger = {
 	via?: "reaction" | "command" | "shortcut"
 	/** For `command`/`shortcut`: what they typed. For `reaction`: the emoji's name. */
 	request?: string
+	/** The message's own text, for a mention or DM (to spot STOP). */
+	text?: string
 }
 
 const profiles = new Map<
@@ -455,6 +457,37 @@ async function resolveLink(
 				? `I'm not in ${label}; someone can add me with /invite @dot.`
 				: `I couldn't read it (${code ?? error}).`
 		return { link, note }
+	}
+}
+
+/**
+ * A message sent in the thread while dot works on an earlier one there, for the same person: added
+ * to the running turn as-is, with its files. Linked conversations and mentioned channels in it
+ * wait for the next turn.
+ */
+export async function steerInput(options: {
+	client: WebClient
+	trigger: Trigger
+	botUserId: string
+}): Promise<{ text: string; attachments: SlackAttachment[]; line: string } | null> {
+	const { client, trigger, botUserId } = options
+	if (!trigger.threadTs) return null
+	const message = (
+		await threadMessages(client, trigger.channel, trigger.threadTs, {
+			oldest: trigger.ts,
+			latest: trigger.ts,
+		})
+	).find(candidate => candidate.ts === trigger.ts)
+	if (!message) return null
+	const line = await formatMessage(client, message, botUserId, new Set([trigger.userId]))
+	const attachments = (message.files ?? [])
+		.map(asAttachment)
+		.filter(attachment => attachment !== null)
+		.slice(-MAX_ATTACHMENTS)
+	return {
+		text: `New message from ${await userName(client, trigger.userId)} in this thread, sent while you were working. It updates their request; where it conflicts with what they asked before, follow this one:\n${line}`,
+		attachments,
+		line,
 	}
 }
 

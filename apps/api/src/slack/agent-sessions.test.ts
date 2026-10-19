@@ -39,21 +39,26 @@ test("native status stays processing until everyone's work in the thread ends", 
 	})
 })
 
-test("Stop cancels active and queued requests only in the selected thread", async () => {
+test("Stop cancels one person's active and queued requests, only in the selected thread", async () => {
 	const apiCall = mock(async () => ({ ok: true }))
 	const client = clientWith(apiCall)
 	const sessions = new AgentSessions()
 	const running = sessions.track(client, target)
 	const queued = sessions.track(client, target)
+	const someoneElse = sessions.track(client, { ...target, userId: "U_TWO" })
 	const other = sessions.track(client, { ...target, threadTs: "2.002" })
 	await running.start()
-	sessions.stop(target.channel, target.threadTs)
+	expect(sessions.stop(target.channel, target.threadTs, target.userId)).toBe(2)
 	expect(running.signal.aborted).toBe(true)
 	expect(queued.signal.aborted).toBe(true)
+	expect(someoneElse.signal.aborted).toBe(false)
 	expect(other.signal.aborted).toBe(false)
+	// Nothing left of theirs to stop.
+	expect(sessions.stop(target.channel, target.threadTs, target.userId)).toBe(0)
 	await expect(queued.start()).rejects.toThrow()
 	await queued.finish()
 	await running.finish()
+	await someoneElse.finish()
 	await other.finish()
 	expect(apiCall).toHaveBeenCalledTimes(2)
 	// A new request after Stop can run normally.

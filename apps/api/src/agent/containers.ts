@@ -402,7 +402,7 @@ export async function stopOrphanedRuns(teamId: string): Promise<void> {
 		await Bun.$`docker ps --filter label=dot.bot=1 --filter ${`label=dot.team=${teamId}`} --format ${"{{.Names}}"}`.text()
 	for (const name of listing.split("\n").filter(Boolean)) {
 		const killed =
-			await Bun.$`docker exec ${name} pkill -f ${"^codex(\\[turn=[^]]*\\])? exec"}`
+			await Bun.$`docker exec ${name} pkill -f ${"^codex(\\[turn=[^]]*\\])? (exec|app-server)"}`
 				.quiet()
 				.nothrow()
 		if (killed.exitCode === 0)

@@ -5,7 +5,7 @@ import type { App } from "@slack/bolt"
 import { ruleEvents, type SlackAutomations } from "./automations"
 import type { SlackForms } from "./forms"
 import type { BotConfig } from "../config"
-import { runTurn, type TurnResult } from "../agent/codex"
+import { runTurn, type Steer, type TurnResult } from "../agent/codex"
 import {
 	classify,
 	pauseForUsageLimit,
@@ -22,6 +22,7 @@ import {
 } from "../sessions"
 import {
 	buildTurnInput,
+	steerInput,
 	userName,
 	userTimezone,
 	type Trigger,
@@ -74,6 +75,18 @@ function firstDelivery(trigger: Trigger): boolean {
 	return true
 }
 
+/** Messages added to a running turn: the newest one's ts, and each as Codex got it. */
+type Steered = { seen: string; lines: string[] }
+/**
+ * Turns running now that can take more input, by session (channel:thread:user): what the person
+ * says in the thread meanwhile goes into the turn instead of waiting for it to end.
+ */
+const steering = new Map<string, { steer: Steer; steered: Steered }>()
+
+/** "STOP" on its own, in capitals (a mention of dot around it is fine). */
+const isStop = (trigger: Trigger) =>
+	!trigger.via && trigger.text?.replace(/<@[A-Z0-9]+(?:\|[^>]*)?>/g, "").trim() === "STOP"
+
 /** Adds a reaction; false if Slack refused it (unknown emoji, no access). */
 async function react(
 	client: WebClient,
@@ -97,6 +110,24 @@ async function handle(
 	const threadTs = trigger.threadTs ?? trigger.ts
 	// Per user: each person in a shared thread has their own Codex thread, in their own container.
 	const key = sessionKey(trigger.channel, threadTs, trigger.userId)
+	// STOP ends this person's work in this thread (running and queued), nobody else's; their reply
+	// there says Stopped.
+	if (isStop(trigger)) {
+		if (agentSessions.stop(trigger.channel, threadTs, trigger.userId))
+			await react(client, trigger.channel, trigger.ts, "white_check_mark")
+		else
+			await client.chat
+				.postMessage({
+					channel: trigger.channel,
+					thread_ts: threadTs,
+					markdown_text: "_Nothing to stop._",
+				})
+				.catch(() => {})
+		return
+	}
+	// dot is already working on something of theirs here: this message goes into that turn.
+	if (steering.has(key) && (await steerInto(client, config, botUserId, trigger, key)))
+		return
 	// Keyed by request, not session: several can be queued for one thread.
 	const inflightKey = triggerKey(trigger)
 	const agent = agentSessions.track(client, {
@@ -149,6 +180,8 @@ async function handle(
 			}
 			let session = await getSession(key)
 			let turn: TurnInput
+			// Messages added to this turn while it runs (steerInto).
+			const steered: Steered = { seen: trigger.ts, lines: [] }
 			let result: TurnResult
 			for (let attempt = 1; ; attempt++) {
 				try {
@@ -181,6 +214,11 @@ async function handle(
 							),
 						},
 						onStep,
+						onSteerable: steer => {
+							if (steer) steering.set(key, { steer, steered })
+							else if (steering.get(key)?.steered === steered)
+								steering.delete(key)
+						},
 					})
 					break
 				} catch (error) {
@@ -204,7 +242,7 @@ async function handle(
 			agent.signal.throwIfAborted()
 			await saveSession(key, {
 				codexThreadId: result.threadId,
-				lastSeenTs: trigger.ts,
+				lastSeenTs: steered.seen,
 				linked: [
 					...new Set([...(session?.linked ?? []), ...turn.linked]),
 				],
@@ -231,7 +269,7 @@ async function handle(
 				{
 					place: turn.place,
 					thread: `${trigger.channel}:${threadTs}`,
-					messages: turn.transcript,
+					messages: [turn.transcript, ...steered.lines].join("\n"),
 					reply: reaction
 						? `(reacted :${reaction}:)`
 						: result.text ||
@@ -306,6 +344,36 @@ async function handle(
 	})
 }
 
+/**
+ * Adds the message to this person's running turn in the thread, if there is one that takes it;
+ * dot reacts with :eyes: so they know it got through. False: it starts its own turn as usual.
+ */
+async function steerInto(
+	client: WebClient,
+	config: BotConfig,
+	botUserId: string,
+	trigger: Trigger,
+	key: string,
+): Promise<boolean> {
+	const running = steering.get(key)
+	if (!running || trigger.via) return false
+	try {
+		const input = await steerInput({ client, trigger, botUserId })
+		if (!input) return false
+		const files = await downloadAttachments(config.slackBotToken, input.attachments)
+		// It may have ended while the message was read.
+		if (steering.get(key) !== running || !(await running.steer(input.text, files)))
+			return false
+		running.steered.seen = trigger.ts
+		running.steered.lines.push(input.line)
+		await react(client, trigger.channel, trigger.ts, "eyes")
+		return true
+	} catch (error) {
+		console.warn(`[${key}] couldn't add the message to the running turn`, error)
+		return false
+	}
+}
+
 async function notifyDirectly(
 	client: WebClient,
 	trigger: Trigger,
@@ -369,9 +437,10 @@ export function registerHandlers(
 		userId !== botUserId &&
 		(config.allowedUsers === "*" || config.allowedUsers.has(userId))
 
+	// Slack's Stop button: anyone in the thread sees it, so it only stops the clicker's own work.
 	app.event("agent_session_stopped", async ({ event }) => {
 		if (!isAllowed(event.user)) return
-		agentSessions.stop(event.channel, event.thread_ts)
+		agentSessions.stop(event.channel, event.thread_ts, event.user)
 	})
 
 	if (features) {
@@ -425,6 +494,7 @@ export function registerHandlers(
 			isDm: false,
 			teamId: context.teamId!,
 			userId: event.user,
+			text: event.text,
 		})
 	})
 
@@ -446,6 +516,7 @@ export function registerHandlers(
 			isDm: message.channel_type === "im",
 			teamId: context.teamId!,
 			userId: message.user,
+			text: message.text,
 		})
 	})
 

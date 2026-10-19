@@ -58,13 +58,22 @@ startBotApi(
 // Container names carry the person's first name, for whoever looks at `docker ps`.
 nameContainersWith(userId => userFirstName(app.client, userId))
 const { slackSignIn } = config
-if (config.desktop || slackSignIn)
+if (config.desktop || slackSignIn) {
+	// dot's Home tab in the Slack app, for the gateway's pages to send people back to.
+	const appId = await app.client.bots
+		.info({ bot: auth.bot_id! })
+		.then(info => info.bot?.app_id)
+		.catch(() => undefined)
 	startDesktopGateway(
 		config,
 		slackSignIn
 			? request => oauthCallback(request, slackSignIn, app.client)
 			: undefined,
+		appId
+			? `slack://app?team=${auth.team_id}&id=${appId}&tab=home`
+			: undefined,
 	)
+}
 if (config.desktop) startDesktopReaper(config)
 registerHandlers(app, config, auth.user_id!, slack)
 // A previous bot process may have left Codex runs going in containers (they hold thread locks).
