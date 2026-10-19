@@ -14,6 +14,7 @@ import type { App } from "@slack/bolt"
 import type { BotConfig } from "../config"
 import { paths } from "../config"
 import { readJson, writeJsonPrivate, writePrivate } from "../files"
+import { refreshHome } from "../slack/home"
 import {
 	CONTAINER_HOME,
 	CONTAINER_TOOLS_DIR,
@@ -113,7 +114,11 @@ const VIEWER_FONT =
 
 /** dot's picture for the viewer (tab icon, loading screen), served without a link: nothing private. */
 const ASSETS = Bun.fileURLToPath(new URL("../../assets/", import.meta.url))
-const ASSET_NAMES = new Set(["dot-mark.webp", "dot-mark-64.png", "home-banner.png"])
+const ASSET_NAMES = new Set([
+	"dot-mark.webp",
+	"dot-mark-64.png",
+	"home-banner.png",
+])
 
 /** The viewer retitles the tab once connected ("x11 - KasmVNC"); this puts it back. */
 const VIEWER_TITLE = `<script>new MutationObserver(() => { if (document.title !== "dot's computer") document.title = "dot's computer" }).observe(document.querySelector("title"), { childList: true, characterData: true, subtree: true })</script>`
@@ -544,158 +549,10 @@ export async function desktopLink(
 // ---- where people find their link ---------------------------------------------------------
 
 /**
- * dot's Home tab in Slack (private to each person) is where the link lives: redrawn with a fresh
- * one every time they open it, and whenever dot uses the computer for them. Threads only get a
- * note the first time someone's dot uses its computer, so links don't pile up in every thread.
+ * dot's Home tab in Slack (private to each person, slack/home.ts) is where the link lives: redrawn
+ * with a fresh one every time they open it, and whenever dot uses the computer for them. Threads
+ * only get a note the first time someone's dot uses its computer, so links don't pile up.
  */
-/** Whether their computer is on, without creating a container for someone who never used dot. */
-async function computerStatus(owner: Owner): Promise<string> {
-	const container = (
-		await Bun.$`docker ps --filter label=dot.bot=1 --filter ${`label=dot.team=${owner.teamId}`} --filter ${`label=dot.user=${owner.userId}`} --format ${"{{.Names}}"}`
-			.quiet()
-			.nothrow()
-			.text()
-	).trim()
-	if (!container)
-		return ":white_circle:  Not set up yet: it starts the first time I need it"
-	const status = await Bun.$`docker exec ${container} ${desktop()} status`
-		.quiet()
-		.nothrow()
-		.text()
-	const idle = Number(status.match(/idle (\d+)s/)?.[1] ?? -1)
-	if (!status.startsWith("running"))
-		return ":zzz:  Asleep: it wakes up when I need it"
-	if (idle < 0 || idle < 60)
-		return ":large_green_circle:  On, in use right now"
-	const minutes = Math.round(idle / 60)
-	return `:large_green_circle:  On, last used ${minutes < 60 ? `${minutes} min` : `${Math.round(minutes / 60)} h`} ago`
-}
-
-export async function publishHome(
-	client: WebClient,
-	config: BotConfig,
-	owner: Owner,
-): Promise<void> {
-	if (!config.desktop) {
-		await client.views.publish({
-			user_id: owner.userId,
-			view: {
-				type: "home",
-				blocks: [
-					{
-						type: "section",
-						text: {
-							type: "mrkdwn",
-							text: "Ask me anything in a DM, or tag me in a channel.",
-						},
-					},
-				],
-			},
-		})
-		return
-	}
-	const [link, status] = await Promise.all([
-		desktopLink(config, owner),
-		computerStatus(owner),
-	])
-	// Slack fetches images itself, so only with a public address: a banner with the title larger
-	// than any Slack text (assets/home-banner.png; bump ?v when it changes, Slack caches it).
-	const banner = config.desktopViewer.publicUrl.startsWith("https:")
-		? `${config.desktopViewer.publicUrl}/_dot/home-banner.png?v=1`
-		: null
-	// Three levels: large headings, bold step titles with a number emoji, small grey details.
-	const step = (number: number, title: string, detail: string) => [
-		{
-			type: "section" as const,
-			text: {
-				type: "mrkdwn" as const,
-				text: `${[":one:", ":two:", ":three:"][number - 1]}  *${title}*`,
-			},
-		},
-		{
-			type: "context" as const,
-			elements: [{ type: "mrkdwn" as const, text: detail }],
-		},
-	]
-	await client.views.publish({
-		user_id: owner.userId,
-		view: {
-			type: "home",
-			blocks: [
-				banner
-					? {
-							type: "image",
-							image_url: banner,
-							alt_text:
-								"dot's computer: your own desktop, where I work for you",
-						}
-					: {
-							type: "header",
-							text: {
-								type: "plain_text",
-								text: "dot's computer",
-							},
-						},
-				{
-					type: "section",
-					text: {
-						type: "mrkdwn",
-						text: `I browse, fill in forms and use apps here for you, and you can watch or step in at any time.\n\n${status}`,
-					},
-				},
-				{
-					type: "actions",
-					elements: [
-						{
-							type: "button",
-							action_id: "open_computer",
-							text: {
-								type: "plain_text",
-								text: ":desktop_computer:  Open dot's computer",
-								emoji: true,
-							},
-							url: link,
-						},
-					],
-				},
-				{ type: "divider" },
-				{
-					type: "header",
-					text: { type: "plain_text", text: "How it works" },
-				},
-				...step(
-					1,
-					"Watch",
-					"Open your computer and see what I'm doing, live.",
-				),
-				...step(
-					2,
-					"Take over",
-					"Click the screen. I pause until you're done.",
-				),
-				...step(
-					3,
-					"Give back",
-					"Click outside the screen, or press *Give back*.",
-				),
-				{ type: "divider" },
-				{
-					type: "context",
-					elements: [
-						{
-							type: "mrkdwn",
-							text: ":lock:  Only you can open it",
-						},
-						{
-							type: "mrkdwn",
-							text: `:zzz:  Sleeps after ${config.desktopIdleMinutes} min unused; files and logins stay`,
-						},
-					],
-				},
-			],
-		},
-	})
-}
 
 /** People who've had the note about their computer: `{ "team/user": ISO date }`. */
 const introducedFile = `${paths.dataDir}/desktop-introduced.json`
@@ -709,7 +566,7 @@ export async function computerInUse(
 	config: BotConfig,
 	target: Owner & { channel: string; threadTs?: string },
 ): Promise<void> {
-	await publishHome(client, config, target).catch(error =>
+	await refreshHome(client, target).catch(error =>
 		console.warn("[desktop] couldn't update the Home tab", error),
 	)
 	const key = `${target.teamId}/${target.userId}`

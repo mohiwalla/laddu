@@ -98,6 +98,90 @@ function hostCodex(): { executablePath: string; pathDirs: string[] } {
 	).exec
 }
 
+export type ModelOption = {
+	id: string
+	name: string
+	description: string
+	efforts: { id: string; description: string }[]
+	defaultEffort: string
+	/** Offers Codex's fast tier (quicker, uses more of the plan). */
+	fast: boolean
+}
+
+let catalog: { models: Promise<ModelOption[]>; at: number } | null = null
+const CATALOG_MS = 6 * 3600_000
+
+/**
+ * The models Codex offers, as `model/list` reports them (its built-in catalog, the same version
+ * as the containers'), cached for a few hours. Empty if it can't be read.
+ */
+export function listModels(): Promise<ModelOption[]> {
+	if (catalog && Date.now() - catalog.at < CATALOG_MS) return catalog.models
+	const models = (async () => {
+		const home = (await Bun.$`mktemp -d`.text()).trim()
+		const codex = hostCodex()
+		const server = new AppServer(
+			[codex.executablePath, "app-server"],
+			codexEnv({
+				CODEX_HOME: home,
+				PATH: [...codex.pathDirs, Bun.env.PATH ?? ""].join(":"),
+			}),
+		)
+		try {
+			await server.request("initialize", {
+				clientInfo: {
+					name: "codex_sdk_ts",
+					title: "dot",
+					version: "1",
+				},
+				capabilities: null,
+			})
+			server.notify("initialized")
+			const listed = await Promise.race([
+				server.request<{ data: Record<string, unknown>[] }>(
+					"model/list",
+					{},
+				),
+				Bun.sleep(15_000).then(() => {
+					throw new Error("model/list timed out")
+				}),
+			])
+			return listed.data
+				.filter(model => !model.hidden)
+				.map(model => ({
+					id: String(model.model ?? model.id),
+					name: String(model.displayName ?? model.id),
+					description: String(model.description ?? ""),
+					efforts: (
+						(model.supportedReasoningEfforts as {
+							reasoningEffort: string
+							description: string
+						}[]) ?? []
+					)
+						// "ultra" hands work to sub-agents, which dot switches off (writeModelCatalog).
+						.filter(effort => effort.reasoningEffort !== "ultra")
+						.map(effort => ({
+							id: effort.reasoningEffort,
+							description: effort.description,
+						})),
+					defaultEffort: String(
+						model.defaultReasoningEffort ?? "medium",
+					),
+					fast: ((model.serviceTiers as unknown[]) ?? []).length > 0,
+				}))
+		} finally {
+			server.close()
+			await Bun.$`rm -rf ${home}`.quiet().nothrow()
+		}
+	})().catch(error => {
+		console.warn("[codex] couldn't list models:", error)
+		catalog = null
+		return []
+	})
+	catalog = { models, at: Date.now() }
+	return models
+}
+
 /** Config overrides as `-c key=value` arguments (values in TOML), nested keys dotted. */
 function configArgs(config: Record<string, unknown>, prefix = ""): string[] {
 	const toml = (value: unknown): string =>
@@ -109,7 +193,9 @@ function configArgs(config: Record<string, unknown>, prefix = ""): string[] {
 	return Object.entries(config).flatMap(([key, value]) => {
 		if (value === undefined) return []
 		const path = prefix ? `${prefix}.${key}` : key
-		return value !== null && typeof value === "object" && !Array.isArray(value)
+		return value !== null &&
+			typeof value === "object" &&
+			!Array.isArray(value)
 			? configArgs(value as Record<string, unknown>, path)
 			: ["-c", `${path}=${toml(value)}`]
 	})
@@ -155,7 +241,9 @@ async function createCodex(
 				ACCESS_TOKEN: await getAccessToken(),
 				...toolEnv,
 				...turnEnv,
-				PATH: [...codex.pathDirs, TOOLS_DIR, Bun.env.PATH ?? ""].join(":"),
+				PATH: [...codex.pathDirs, TOOLS_DIR, Bun.env.PATH ?? ""].join(
+					":",
+				),
 			}),
 			overrides: {
 				...overrides,
@@ -208,10 +296,15 @@ async function createCodex(
 			...overrides,
 			// This process's proxy, per run: the shared config.toml can't pin one, since another
 			// bot process (a second workspace, a test) may have rewritten it with its own.
-			model_providers: { openai_chatgpt_plan: { base_url: proxy.baseUrl } },
+			model_providers: {
+				openai_chatgpt_plan: { base_url: proxy.baseUrl },
+			},
 		},
 		// The container is the boundary (network is set on the container), so no nested sandbox.
-		thread: { cwd: CONTAINER_WORKDIR, sandbox: "danger-full-access" as const },
+		thread: {
+			cwd: CONTAINER_WORKDIR,
+			sandbox: "danger-full-access" as const,
+		},
 		saveFile: async (file: TurnFile) => {
 			const path = `${CONTAINER_WORKDIR}/slack-files/${file.fileName}`
 			await writeIntoContainer(container, path, file.data)
@@ -315,8 +408,16 @@ export async function runTurn(options: {
 				}
 			: {}),
 	}
-	const { command, env, overrides, thread, saveFile, outbox, listOutbox, stop } =
-		await createCodex(config, options.user, turnId, turnEnv)
+	const {
+		command,
+		env,
+		overrides,
+		thread,
+		saveFile,
+		outbox,
+		listOutbox,
+		stop,
+	} = await createCodex(config, options.user, turnId, turnEnv)
 	options.signal?.throwIfAborted()
 
 	// The CLI reads image paths itself, so files must exist where it runs (inside the container).
@@ -328,15 +429,24 @@ export async function runTurn(options: {
 		const note =
 			attached.length > 0 &&
 			`Files attached in these messages, saved for you${images.length ? " (images are also shown below, in order)" : ""}:\n` +
-				attached.map(({ file, path }) => `- ${file.title}: ${path}`).join("\n")
+				attached
+					.map(({ file, path }) => `- ${file.title}: ${path}`)
+					.join("\n")
 		return {
 			note,
 			images: images.map(({ path }) => ({ type: "localImage", path })),
 		}
 	}
-	const text = (value: string) => ({ type: "text", text: value, text_elements: [] })
+	const text = (value: string) => ({
+		type: "text",
+		text: value,
+		text_elements: [],
+	})
 
-	const server = new AppServer([...command, "app-server", ...configArgs(overrides)], env)
+	const server = new AppServer(
+		[...command, "app-server", ...configArgs(overrides)],
+		env,
+	)
 	let threadId = options.threadId ?? null
 	let activeTurn: string | null = null
 	let finished = false
@@ -346,7 +456,10 @@ export async function runTurn(options: {
 		stopping = (async () => {
 			if (threadId && activeTurn)
 				await Promise.race([
-					server.request("turn/interrupt", { threadId, turnId: activeTurn }),
+					server.request("turn/interrupt", {
+						threadId,
+						turnId: activeTurn,
+					}),
 					Bun.sleep(3000),
 				]).catch(() => {})
 			server.close()
@@ -369,7 +482,11 @@ export async function runTurn(options: {
 		const opened = await server.request<{ thread: { id: string } }>(
 			options.threadId ? "thread/resume" : "thread/start",
 			options.threadId
-				? { threadId: options.threadId, ...threadParams, excludeTurns: true }
+				? {
+						threadId: options.threadId,
+						...threadParams,
+						excludeTurns: true,
+					}
 				: threadParams,
 		)
 		threadId = opened.thread.id
@@ -393,41 +510,67 @@ export async function runTurn(options: {
 		let answer = ""
 		let lastError: string | null = null
 		// Subscribed before the turn starts, so no event is missed.
-		const outcome = new Promise<{ status: string; error: string | null }>(resolve => {
-			server.listen(({ method, params }) => {
-				if (params.threadId !== undefined && params.threadId !== threadId) return
-				switch (method) {
-					case "item/started":
-					case "item/completed": {
-						const item = asThreadItem(params.item as Record<string, unknown>)
-						if (!item) return
-						// The last message is the answer; earlier ones are notes before actions (see steps.ts).
-						if (method === "item/completed" && item.type === "agent_message")
-							answer = item.text
-						track(item, method === "item/completed")
+		const outcome = new Promise<{ status: string; error: string | null }>(
+			resolve => {
+				server.listen(({ method, params }) => {
+					if (
+						params.threadId !== undefined &&
+						params.threadId !== threadId
+					)
 						return
-					}
-					case "error":
-						// Also used for retry notices ("Reconnecting... 1/5"), which aren't the cause of anything.
-						if (!params.willRetry)
-							lastError = (params.error as { message?: string })?.message ?? null
-						return
-					case "turn/completed": {
-						const turn = params.turn as {
-							id: string
-							status: string
-							error: { message: string } | null
+					switch (method) {
+						case "item/started":
+						case "item/completed": {
+							const item = asThreadItem(
+								params.item as Record<string, unknown>,
+							)
+							if (!item) return
+							// The last message is the answer; earlier ones are notes before actions (see steps.ts).
+							if (
+								method === "item/completed" &&
+								item.type === "agent_message"
+							)
+								answer = item.text
+							track(item, method === "item/completed")
+							return
 						}
-						if (activeTurn && turn.id !== activeTurn) return
-						resolve({ status: turn.status, error: turn.error?.message ?? null })
+						case "error":
+							// Also used for retry notices ("Reconnecting... 1/5"), which aren't the cause of anything.
+							if (!params.willRetry)
+								lastError =
+									(params.error as { message?: string })
+										?.message ?? null
+							return
+						case "turn/completed": {
+							const turn = params.turn as {
+								id: string
+								status: string
+								error: { message: string } | null
+							}
+							if (activeTurn && turn.id !== activeTurn) return
+							resolve({
+								status: turn.status,
+								error: turn.error?.message ?? null,
+							})
+						}
 					}
-				}
-			})
-		})
-		const started = await server.request<{ turn: { id: string } }>("turn/start", {
-			threadId,
-			input: [text([recalled, input, ...notes].filter(Boolean).join("\n\n")), ...images],
-		})
+				})
+			},
+		)
+		const started = await server.request<{ turn: { id: string } }>(
+			"turn/start",
+			{
+				threadId,
+				input: [
+					text(
+						[recalled, input, ...notes]
+							.filter(Boolean)
+							.join("\n\n"),
+					),
+					...images,
+				],
+			},
+		)
 		activeTurn = started.turn.id
 		options.onSteerable?.(async (more, files = []) => {
 			if (finished || options.signal?.aborted) return false
@@ -437,7 +580,10 @@ export async function runTurn(options: {
 				await server.request("turn/steer", {
 					threadId,
 					expectedTurnId: activeTurn,
-					input: [text([more, note].filter(Boolean).join("\n\n")), ...images],
+					input: [
+						text([more, note].filter(Boolean).join("\n\n")),
+						...images,
+					],
 				})
 				return true
 			} catch (error) {
@@ -454,11 +600,15 @@ export async function runTurn(options: {
 		options.onSteerable?.(null)
 		options.signal?.throwIfAborted()
 		if (!ended)
-			throw new Error(lastError ?? "Codex stopped before finishing the turn")
+			throw new Error(
+				lastError ?? "Codex stopped before finishing the turn",
+			)
 		if (ended.status === "failed")
 			throw new Error(ended.error ?? lastError ?? "Codex failed the turn")
 		if (ended.status !== "completed")
-			throw new Error(ended.error ?? `Codex ended the turn (${ended.status})`)
+			throw new Error(
+				ended.error ?? `Codex ended the turn (${ended.status})`,
+			)
 		const { files, skipped } = await collectOutbox(await listOutbox())
 		return {
 			threadId,

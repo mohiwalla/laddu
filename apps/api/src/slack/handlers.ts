@@ -31,8 +31,10 @@ import {
 import { downloadAttachments, uploadFiles } from "./attachments"
 import { closeInterrupted, openReply, type Reply } from "./reply"
 import { AgentSessions } from "./agent-sessions"
+import { configFor } from "../preferences"
 import { answerWithMessage, registerQuestions, turnEnded } from "./questions"
-import { computerInUse, publishHome } from "../agent/desktop"
+import { computerInUse } from "../agent/desktop"
+import { registerHome } from "./home"
 import type { Step } from "../agent/steps"
 import { markDone, markReply, markStarted, takeInterrupted } from "../inflight"
 import { chunkMarkdown } from "./reply"
@@ -215,7 +217,7 @@ async function handle(
 					)
 					result = await runTurn({
 						signal: agent.signal,
-						config,
+						config: await configFor(config, user),
 						user,
 						threadId: session?.codexThreadId,
 						input: turn.text,
@@ -512,16 +514,13 @@ export function registerHandlers(
 		)
 	}
 
-	// dot's Home tab: their computer, with a fresh link every time they open it.
-	app.event("app_home_opened", async ({ event, client, context }) => {
-		if (event.tab !== "home" || !isAllowed(event.user)) return
-		await publishHome(client, config, {
-			teamId: context.teamId!,
-			userId: event.user,
-		}).catch(error => console.warn("[home] couldn't publish", error))
+	// dot's Home tab: their settings page (home.ts).
+	registerHome(app, {
+		config,
+		agentSessions,
+		automations: features?.automations,
+		isAllowed,
 	})
-	// The Home tab's button is a link; Slack still sends the click, which needs an answer.
-	app.action("open_computer", async ({ ack }) => ack())
 
 	// @mentions in channels (and in threads inside channels).
 	app.event("app_mention", async ({ event, client, context }) => {
@@ -758,7 +757,7 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 					message: usage,
 				})
 			const result = await runTurn({
-				config,
+				config: await configFor(config, user),
 				user,
 				input,
 				slack: {

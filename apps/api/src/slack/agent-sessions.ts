@@ -1,7 +1,13 @@
 import type { App } from "@slack/bolt"
 import type { ReplyTarget } from "./reply"
 
-type Run = { controller: AbortController; started: boolean; userId: string }
+type Run = {
+	controller: AbortController
+	started: boolean
+	userId: string
+	/** When it began running (not while queued behind another). */
+	startedAt?: number
+}
 type Session = { runs: Set<Run>; updates: Promise<void> }
 
 /** Slack has one agent status per thread, even when several people ask dot at once. */
@@ -49,6 +55,7 @@ export class AgentSessions {
 			async start() {
 				run.controller.signal.throwIfAborted()
 				run.started = true
+				run.startedAt = Date.now()
 				await update("processing")
 				run.controller.signal.throwIfAborted()
 			},
@@ -67,13 +74,32 @@ export class AgentSessions {
 		}
 	}
 
+	/** One person's requests running now, oldest first, by thread. */
+	running(
+		userId: string,
+	): { channel: string; threadTs: string; startedAt: number }[] {
+		const found = []
+		for (const [key, session] of this.sessions) {
+			const [channel, threadTs] = key.split(/:(.*)/) as [string, string]
+			for (const run of session.runs)
+				if (
+					run.userId === userId &&
+					run.startedAt &&
+					!run.controller.signal.aborted
+				)
+					found.push({ channel, threadTs, startedAt: run.startedAt })
+		}
+		return found.sort((a, b) => a.startedAt - b.startedAt)
+	}
+
 	/**
 	 * Cancels one person's active and already queued requests in this thread, leaving everyone
 	 * else's (and other threads) alone. Returns how many there were.
 	 */
 	stop(channel: string, threadTs: string, userId: string): number {
 		let stopped = 0
-		for (const run of this.sessions.get(`${channel}:${threadTs}`)?.runs ?? [])
+		for (const run of this.sessions.get(`${channel}:${threadTs}`)?.runs ??
+			[])
 			if (run.userId === userId && !run.controller.signal.aborted) {
 				run.controller.abort()
 				stopped++

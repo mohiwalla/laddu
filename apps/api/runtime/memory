@@ -10,6 +10,9 @@ prompt injection, since memory is fed back into future prompts.
   memory replace <user|notes> "<text from one entry>" "<new entry>"
   memory remove <user|notes> "<text from one entry>"
 
+For dot's Home tab (the person's own controls, not for you to use): memory json, memory forget
+<user|notes> <number>, memory clear.
+
 user  = who the person is: name, role, team, preferences, how they like answers.
 notes = your own notes: their environment, standing conventions, lessons learned.
 """
@@ -115,6 +118,22 @@ def main(args):
     if args[:1] == ["show"]:
         blocks = [render(store, entries) for store in STORES if (entries := load(store))]
         print("\n\n".join(blocks) if blocks else "(memory is empty)")
+        return
+    if args[:1] == ["json"]:
+        import json
+        print(json.dumps({store: load(store) for store in STORES}))
+        return
+    if args[:1] == ["clear"]:
+        for store in STORES:
+            save(store, [])
+        return
+    if args[:1] == ["forget"] and len(args) == 3 and args[1] in STORES and args[2].isdigit():
+        entries = load(args[1])
+        index = int(args[2]) - 1
+        if not 0 <= index < len(entries):
+            fail(f"no entry {args[2]} in {args[1]} memory")
+        del entries[index]
+        save(args[1], entries)
         return
     if len(args) < 3 or args[0] not in ("add", "replace", "remove") or args[1] not in STORES:
         fail(__doc__.split("\n\n")[1].strip())
