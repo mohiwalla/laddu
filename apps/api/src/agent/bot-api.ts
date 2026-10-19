@@ -13,9 +13,14 @@ import type { App } from "@slack/bolt"
 import type { BotConfig } from "../config"
 import * as azureDevOps from "../integrations/azure-devops"
 import * as graph from "../integrations/graph"
+import * as codecommit from "../integrations/codecommit"
 import * as microsoft from "../integrations/microsoft"
 import { findPeople, sendOnBehalf } from "../slack/messaging"
 import * as slackSignIn from "../slack/user-tokens"
+import { callSlack, capabilities, object, slackFailure } from "../slack/api"
+import { transfer } from "../slack/transfers"
+import type { SlackAutomations } from "../slack/automations"
+import type { SlackForms } from "../slack/forms"
 import { sendDesktopLink } from "./desktop"
 import {
 	addJob,
@@ -233,8 +238,19 @@ async function handleAzureDevOps(
 	if (!settings) return notSetUp()
 	const person = { teamId: caller.teamId, userId: caller.userId }
 	try {
+		if (action === "git")
+			return await azureDevOps.gitRequest(settings, person, request)
 		if (action === "status" && request.method === "GET")
 			return reply(200, await azureDevOps.status(settings, person))
+		if (action === "identity" && request.method === "GET") {
+			if (!(await microsoft.accessToken(settings, person, "devops")))
+				return reply(409, microsoft.notConnected("devops"))
+			const account = await microsoft.account(person)
+			return reply(
+				200,
+				JSON.stringify({ name: account!.name, email: account!.email }),
+			)
+		}
 		if (action === "connect") {
 			const response = await handleConnection(
 				request,
@@ -380,6 +396,84 @@ async function handleSlack(
 	deps: Deps,
 ): Promise<Response> {
 	const person = { teamId: caller.teamId, userId: caller.userId }
+	try {
+		if (
+			["methods", "capabilities"].includes(action ?? "") &&
+			request.method === "GET"
+		)
+			return reply(
+				200,
+				JSON.stringify(
+					await capabilities(
+						deps.client,
+						person,
+						new URL(request.url).searchParams.get("method") ??
+							undefined,
+					),
+				),
+			)
+		if (
+			(action === "upload" && request.method === "PUT") ||
+			(action === "download" && request.method === "GET")
+		)
+			return await transfer(deps.client, person, request, action)
+		if (
+			["api", "automate", "form"].includes(action ?? "") &&
+			request.method === "POST"
+		) {
+			const input = await request.json().catch(() => null)
+			if (!object(input)) return reply(400, "Give a JSON object.")
+			if (action === "api") {
+				if (
+					typeof input.method !== "string" ||
+					(input.as !== undefined && typeof input.as !== "string")
+				)
+					return reply(
+						400,
+						"Give a method and optional identity (auto, user, dot).",
+					)
+				const result = JSON.stringify(
+					await callSlack(deps.client, person, {
+						method: input.method,
+						args: input.args,
+						as: input.as as string | undefined,
+					}),
+				)
+				if (result.length > 400_000)
+					return reply(
+						413,
+						"Slack result exceeds 400 KB. Request a smaller page with limit/count and continue with its cursor/page.",
+					)
+				return reply(200, result)
+			}
+			if (!deps.slack)
+				return reply(503, "Slack events and forms aren't configured.")
+			if (action === "form")
+				return reply(
+					200,
+					JSON.stringify(
+						await deps.slack.forms.create(person, input),
+					),
+				)
+			if (
+				caller.scheduled &&
+				!["list", "history"].includes(String(input.operation))
+			)
+				return reply(
+					403,
+					"Background tasks can't create or modify event automations.",
+				)
+			return reply(
+				200,
+				JSON.stringify(
+					await deps.slack.automations.manage(person, input),
+				),
+			)
+		}
+	} catch (error) {
+		const failure = slackFailure(error)
+		return reply(failure.status, failure.message)
+	}
 	if (action === "status" && request.method === "GET")
 		return reply(200, await slackSignIn.status(person))
 	if (action === "connect" && request.method === "DELETE")
@@ -448,7 +542,62 @@ async function handleSlack(
 	}
 }
 
-type Deps = { config: BotConfig; client: App["client"] }
+type Deps = {
+	config: BotConfig
+	client: App["client"]
+	slack?: { automations: SlackAutomations; forms: SlackForms }
+}
+
+async function handleCodeCommit(
+	request: Request,
+	caller: Caller,
+	action: string | undefined,
+	deps: Deps,
+): Promise<Response> {
+	const settings = deps.config.codeCommit
+	if (!settings)
+		return reply(
+			501,
+			"CodeCommit isn't set up. The operator needs to assign host AWS profiles in CODECOMMIT_PROFILES; see docs/SETUP.md.",
+		)
+	const person = { teamId: caller.teamId, userId: caller.userId }
+	try {
+		if (action === "git")
+			return await codecommit.gitRequest(settings, person, request)
+		if (request.method !== "POST") return reply(405, "Use POST.")
+		const input = (await request.json()) as codecommit.PullRequest
+		if (action === "repository") {
+			const repo = await codecommit.repository(settings, person, input)
+			const { user } = await deps.client.users.info({
+				user: caller.userId,
+			})
+			return reply(
+				200,
+				JSON.stringify({
+					...repo,
+					identity: {
+						name: user?.real_name || user?.name,
+						email: user?.profile?.email,
+					},
+				}),
+			)
+		}
+		if (action === "check") {
+			await codecommit.check(settings, person, input)
+			return reply(200, "Ready to push this task branch.")
+		}
+		if (action === "pr")
+			return reply(
+				200,
+				JSON.stringify(
+					await codecommit.pullRequest(settings, person, input),
+				),
+			)
+		return reply(404, "Use repository, check or pr.")
+	} catch (error) {
+		return failed(error, "CodeCommit")
+	}
+}
 
 export type BotApi = { url: string }
 let api: BotApi | null = null
@@ -461,6 +610,9 @@ export function startBotApi(hostname: string, deps: Deps): BotApi {
 	const server = Bun.serve({
 		hostname,
 		port: 0,
+		// Repository transfers can be quiet while Azure prepares a pack.
+		idleTimeout: 255,
+		maxRequestBodySize: 52 * 1024 * 1024,
 		async fetch(request) {
 			const caller = verify(request.headers.get("x-dot-caller"))
 			if (!caller)
@@ -474,6 +626,8 @@ export function startBotApi(hostname: string, deps: Deps): BotApi {
 			if (resource === "ado")
 				return handleAzureDevOps(request, caller, id, deps)
 			if (resource === "ms") return handleGraph(request, caller, id, deps)
+			if (resource === "codecommit")
+				return handleCodeCommit(request, caller, id, deps)
 			if (resource === "slack")
 				return handleSlack(request, caller, id, deps)
 			if (resource === "desktop" && id === "link")

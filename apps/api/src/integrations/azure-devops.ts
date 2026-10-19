@@ -3,6 +3,7 @@
  * Microsoft connection (microsoft.ts). The `ado` command in their container asks the bot API to
  * make requests, signed with the turn's caller credential, so it can only act as the person asking.
  */
+import { relayGit } from "./git-http"
 import * as microsoft from "./microsoft"
 
 type Settings = microsoft.Settings
@@ -195,18 +196,23 @@ export async function write(
 	if (result.status >= 200 && result.status < 300) {
 		const link = (() => {
 			try {
-				return (
-					JSON.parse(result.text) as {
-						_links?: { html?: { href?: string } }
-					}
-				)._links?.html?.href
+				return JSON.parse(result.text) as {
+					_links?: { html?: { href?: string } }
+					pullRequestId?: number
+					repository?: { webUrl?: string }
+				}
 			} catch {
 				return undefined
 			}
 		})()
+		const open =
+			link?._links?.html?.href ??
+			(link?.pullRequestId
+				? `${link.repository?.webUrl ?? `${url.origin}${url.pathname.replace(/\/_apis\/git\/repositories\/([^/]+)\/pullrequests$/i, "/_git/$1")}`}/pullrequest/${link.pullRequestId}`
+				: undefined)
 		return {
 			status: 200,
-			text: `Done: ${label}${link ? `\nOpen: ${link}` : ""}`,
+			text: `Done: ${label}${open ? `\nOpen: ${open}` : ""}`,
 		}
 	}
 	const reason = (() => {
@@ -220,4 +226,55 @@ export async function write(
 		status: result.status >= 400 ? result.status : 502,
 		text: `Azure DevOps refused it (HTTP ${result.status}): ${reason?.replace(/\.+$/, "")}. Nothing changed.`,
 	}
+}
+
+/**
+ * Git smart HTTP, using the same per-person sign-in as REST. The container sends its signed
+ * caller to /ado/git/<org>/<project>/_git/<repo>/<service>; only this host adds the bearer token.
+ * Reads stream back unchanged. Pushes can only create/update this person's dot/* branches.
+ */
+export async function gitRequest(
+	settings: Settings,
+	person: Person,
+	request: Request,
+): Promise<Response> {
+	const url = new URL(request.url)
+	const match =
+		/^\/ado\/git\/([^/]+)\/([^/]+)\/_git\/([^/]+)\/(info\/refs|git-upload-pack|git-receive-pack)$/.exec(
+			url.pathname,
+		)
+	const problem = (status: number, text: string) =>
+		new Response(text, { status })
+	if (!match) return problem(404, "Not an Azure Repos Git endpoint.")
+	const [, org, project, repo, service] = match
+	// Decode once and re-encode each component: no alternate host, path traversal or embedded URL.
+	let parts: string[]
+	try {
+		parts = [org!, project!, repo!].map(part => decodeURIComponent(part))
+	} catch {
+		return problem(400, "Invalid repository path.")
+	}
+	if (
+		parts.some(
+			part =>
+				!part ||
+				/[\x00-\x1f\x7f/\\]/.test(part) ||
+				part === "." ||
+				part === "..",
+		)
+	)
+		return problem(400, "Invalid repository path.")
+	const found = await session(settings, person)
+	if (!found) return problem(notConnected.status, notConnected.text)
+	const [organization, projectName, repositoryName] =
+		parts.map(encodeURIComponent)
+	const upstream = new URL(
+		`https://dev.azure.com/${organization}/${projectName}/_git/${repositoryName}/${service}`,
+	)
+	return relayGit(
+		request,
+		upstream,
+		person.userId,
+		`Bearer ${found.accessToken}`,
+	)
 }

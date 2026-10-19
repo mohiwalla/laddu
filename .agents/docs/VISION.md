@@ -95,6 +95,8 @@ in `docs/ARCHITECTURE.md` and `docs/SETUP.md`; this is the why and the where-nex
 - Run scheduled tasks: reminders and recurring work ("every Monday 9am, summarize #sales").
 - DM people for someone: as them once they've connected their Slack account, otherwise from dot,
   saying who asked it to send it.
+- Implement coding tasks in a Git worktree from a per-person Azure Repos or AWS CodeCommit cache,
+  run the repo's checks and open a review PR as the person; follow-up requests can update that PR.
 - Be asked by @mention, DM, group DM, `/dot`, the "Ask dot" message shortcut, or reacting with 🤖.
   It reacts instead of replying when a message needs no answer, and adds no status reactions
   except ❌ on failure.
@@ -105,8 +107,6 @@ plan route doesn't offer it), or search the web through a built-in tool (it uses
 ### Next
 
 - **A context map:** project names → the repos, trackers and docs that describe them.
-- **Real work:** "finish the search feature" runs in an isolated checkout and ends with a PR link
-  in the thread.
 
 ### Later
 

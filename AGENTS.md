@@ -4,3 +4,4 @@
 - Env files: always quote values, `ABC="xyz"`.
 - Turborepo monorepo (Bun workspaces): deployables in `apps/*`, shared code in `packages/*`. Architecture docs live in `docs/`.
 - Commits: no `Co-Authored-By` trailers or other AI attribution in commit messages.
+- After every fix, restart the running bot service automatically and verify it starts successfully. This deployment uses `systemctl --user restart dot-srafis.service`.

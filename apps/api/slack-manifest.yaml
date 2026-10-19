@@ -180,6 +180,17 @@ settings:
       - message.im
       - message.mpim
       - reaction_added
+      - reaction_removed
+      - member_joined_channel
+      - member_left_channel
+      - team_join
+      - message.channels
+      - message.groups
+      - file_shared
+      - channel_created
+      - channel_rename
+      - channel_archive
+      - link_shared
   interactivity:
     is_enabled: true
   org_deploy_enabled: false

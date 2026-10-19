@@ -191,10 +191,10 @@ To try it without a domain, `cloudflared tunnel --url http://localhost:6900` pri
 Keep `DESKTOP_VIEWER_HOST` on `127.0.0.1`: every request needs a signed link, but the tunnel or
 proxy is what should face the network. `DESKTOP="false"` turns the computer off.
 
-### Slack DMs as people (optional)
+### Slack Free tools and sending as people (optional)
 
 Without this, DMs dot sends for someone come from dot ("<them> asked me to send you this:"). With
-it, each person can connect their own Slack account once, and their DMs go out as them.
+it, each person can connect their own Slack account to search and manage Slack, and their DMs go out as them.
 
 1. The public address from "dot's computer" above has to be set up: Slack sends people back to
    `DESKTOP_PUBLIC_URL/slack/oauth` (HTTPS). The gateway runs for this even with `DESKTOP="false"`.
@@ -210,9 +210,82 @@ it, each person can connect their own Slack account once, and their DMs go out a
    ```
 
 People connect by asking dot to DM someone (or "connect my Slack"): dot DMs them a link, they
-allow `chat:write` and `im:write` as themselves, and dot keeps the token in
+allow the Free-tool scopes listed in `slack/user-tokens.ts` as themselves, and dot keeps the token in
 `.data/slack-users.json`. It's only accepted from the Slack account that asked. "Disconnect my
 Slack" revokes it.
+
+Existing DM-only connections must reconnect to grant search, history, channel/file management,
+profiles/status, reminders and channel canvas access. The manifest already declares these scopes;
+an installer may need to reinstall dot if the installed app has an older grant. No Slack Pro
+subscription is needed for these core tools. Free history is limited to 90 days and dot counts
+as one of the workspace's ten apps. Lists, Workflow Builder, standalone canvases, custom user
+groups, Enterprise APIs and paid agent surfaces are excluded.
+
+Enable the saved event-rule subscriptions on an existing app without overwriting its OAuth URLs:
+
+```sh
+cd apps/api
+bun run scripts/slack-sync-events.ts --app <APP_ID> --team <WORKSPACE>
+systemctl --user restart dot-srafis.service
+```
+
+The operator must already be signed in through `slack-cli auth`. Invite dot to channels where
+rules or forms should run. Nothing posts automatically until someone creates a rule or form.
+Ask dot "welcome everyone joining #general" to save a welcome rule; `slack automate list` and
+`slack automate history` show configuration and results. Link-preview rules additionally require
+registering the relevant unfurl domains in the Slack app's settings. Forms use ordinary Slack
+buttons and modals, and event rules run in our service rather than paid Workflow Builder.
+
+### Azure Repos coding tasks
+
+Uses the existing per-person Microsoft connection above; no PAT or new env settings. The person
+needs permission to read the repository, create a branch, contribute code and create PRs.
+
+Ask dot: "In `https://dev.azure.com/<org>/<project>/_git/<repo>`, fix <specific bug> and open a PR."
+It creates a separate Git worktree, follows the repo's instructions, runs its checks, and returns a
+draft PR with the change and validation. The default target is the repo's default branch; name
+another branch in the request when needed. Follow-ups in the same thread can update that PR.
+It doesn't merge the PR.
+
+The underlying commands are `code checkout <url> [--base <branch>]` and, from its directory,
+`code pr --title "…" --body-file /tmp/pr-description.md`. PR publication needs committed changes
+and a clean checkout. Task files persist inside the person's container, under `~/workspace/code/`.
+One clone per repo is cached privately under `~/workspace/code/.repos/`; new tasks fetch the latest
+target branch and share the cached history through separate worktrees. Their files and indexes
+remain independent. Follow-ups reuse the task directory. Existing task clones remain supported.
+The helper uses the connected Microsoft account's name and email for commits; its tokens stay
+on the host.
+
+Build tools must be available inside the Linux container or installable by its non-root user.
+Tasks needing macOS/Xcode, a physical device or unavailable private services report which checks
+couldn't run. Private submodules and Git LFS need additional support. Restart the bot after
+updating its backend and runtime commands, once no turns are in progress.
+
+### AWS CodeCommit coding tasks
+
+Install AWS CLI v2 on the bot host and sign each person into their own named profile (`aws login
+--profile <name>` or `aws sso login --profile <name>` for an IAM Identity Center profile). Keep its
+AWS configuration and credentials on the host. The profile needs repository read, Git push,
+repository metadata, PR list/read/create and PR title/description update permissions.
+
+Assign profiles explicitly in the same `.env` (comma-separated `SlackID=profile` pairs):
+
+```sh
+CODECOMMIT_PROFILES="U0123456789=default,U0987654321=teammate"
+AWS_CLI_PATH="/absolute/path/to/aws"
+```
+
+`AWS_CLI_PATH` defaults to `aws`; set an absolute path if the service's PATH doesn't include it.
+An unassigned Slack user cannot use the host's default profile. Sessions must be renewed on the
+host when they expire; no AWS keys or login codes go through Slack.
+
+Ask dot to make a specific change in
+`https://git-codecommit.<region>.amazonaws.com/v1/repos/<repo>`, naming the target branch when
+needed. `code checkout <url> [--base <branch>]` and `code pr --title "…" --body-file /tmp/pr.md`
+use the same cached-repo and per-task worktree workflow. CodeCommit creates an open review PR,
+since it has no draft state.
+Repeated publication updates that PR; closed PRs need a fresh task. Azure's `ado checkout` and
+`ado pr` remain aliases for the unified commands.
 
 ### Run as a service (Linux, systemd)
 
@@ -278,7 +351,7 @@ offline).
 | `MICROSOFT_CLIENT_ID`    | unset (off)             | Entra app for Azure DevOps and Microsoft 365 sign-in; see "Microsoft" above                                      |
 | `MICROSOFT_TENANT`       | `organizations`         | Directory (tenant) ID of that app                                                                                |
 | `MICROSOFT_GRAPH_SCOPES` | all of them             | Graph permissions asked for at sign-in; trim when the tenant needs admin approval for some                       |
-| `SLACK_CLIENT_ID`        | unset (off)             | With `SLACK_CLIENT_SECRET`: people can connect Slack so DMs dot sends go out as them; see above                  |
+| `SLACK_CLIENT_ID`        | unset (off)             | With `SLACK_CLIENT_SECRET`: per-person Slack Free tools and sending messages as them; see above                  |
 | `SLACK_CLIENT_SECRET`    | unset                   | The Slack app's Client Secret                                                                                    |
 | `DESKTOP`                | `true`                  | Docker: a desktop per person that Codex drives and they can watch (see ARCHITECTURE.md, "dot's computer")        |
 | `DESKTOP_VIEWER_HOST`    | `127.0.0.1`             | Where the viewer gateway listens                                                                                 |

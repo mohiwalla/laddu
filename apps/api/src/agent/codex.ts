@@ -122,7 +122,7 @@ async function createCodex(
 			await Bun.file(`${paths.codexHome}/AGENTS.md`)
 				.delete()
 				.catch(() => {})
-		await Bun.$`mkdir -p ${outbox} ${toolEnv.DOT_MEMORY_DIR} ${toolEnv.DOT_HISTORY_DIR}`.quiet()
+		await Bun.$`mkdir -p ${outbox} ${toolEnv.DOT_MEMORY_DIR} ${toolEnv.DOT_HISTORY_DIR} ${toolEnv.DOT_CODE_DIR}`.quiet()
 		const env = codexEnv({
 			CODEX_HOME: paths.codexHome,
 			ACCESS_TOKEN: await getAccessToken(),
@@ -141,6 +141,7 @@ async function createCodex(
 					outbox,
 					toolEnv.DOT_MEMORY_DIR,
 					toolEnv.DOT_HISTORY_DIR,
+					toolEnv.DOT_CODE_DIR,
 				],
 			},
 			saveFile: async (file: TurnFile) => {

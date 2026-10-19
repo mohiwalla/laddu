@@ -130,6 +130,27 @@ export function loadBotConfig() {
 				redirectUrl: `${desktopViewer.publicUrl}/slack/oauth`,
 			}
 		})(),
+		/** Host AWS CLI profiles explicitly assigned to Slack users; no shared default credentials. */
+		codeCommit: (() => {
+			const raw = Bun.env.CODECOMMIT_PROFILES?.trim()
+			if (!raw) return null
+			const pairs = raw.split(",").map(pair => pair.trim().split("="))
+			if (
+				pairs.some(
+					pair =>
+						pair.length !== 2 ||
+						!/^[UW][A-Z0-9]+$/.test(pair[0]!) ||
+						!pair[1]?.trim(),
+				)
+			)
+				throw new Error(
+					"CODECOMMIT_PROFILES must map Slack user IDs to host AWS CLI profile names.",
+				)
+			return {
+				profiles: Object.fromEntries(pairs) as Record<string, string>,
+				cli: optional("AWS_CLI_PATH", "aws"),
+			}
+		})(),
 		/** Reacting with this emoji (name without colons) to a message asks dot to handle it. */
 		triggerEmoji: optional("TRIGGER_EMOJI", "robot_face"),
 	}

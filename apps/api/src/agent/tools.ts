@@ -13,6 +13,7 @@ export function hostToolEnv(user: TurnUser) {
 	return {
 		DOT_MEMORY_DIR: `${paths.dataDir}/memory/${owner}`,
 		DOT_HISTORY_DIR: `${paths.dataDir}/history/${owner}`,
+		DOT_CODE_DIR: `${paths.dataDir}/code/${owner}`,
 	}
 }
 

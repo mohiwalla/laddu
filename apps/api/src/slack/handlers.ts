@@ -2,6 +2,8 @@
  * Slack → Codex → Slack. Every Slack thread maps to one Codex thread; replies always go in-thread.
  */
 import type { App } from "@slack/bolt"
+import { ruleEvents, type SlackAutomations } from "./automations"
+import type { SlackForms } from "./forms"
 import type { BotConfig } from "../config"
 import { runTurn, type TurnResult } from "../agent/codex"
 import {
@@ -339,11 +341,42 @@ export function registerHandlers(
 	app: App,
 	config: BotConfig,
 	botUserId: string,
+	features?: { automations: SlackAutomations; forms: SlackForms },
 ) {
 	const isAllowed = (userId: string | undefined): userId is string =>
 		userId !== undefined &&
 		userId !== botUserId &&
 		(config.allowedUsers === "*" || config.allowedUsers.has(userId))
+
+	if (features) {
+		for (const name of ruleEvents)
+			app.event(name, async ({ event, body, context }) => {
+				try {
+					await features.automations.receive(
+						context.teamId!,
+						body.event_id,
+						event as unknown as Record<string, unknown>,
+					)
+				} catch (error) {
+					console.error(`[slack rules] ${name} failed`, error)
+				}
+			})
+		features.forms.register(
+			app,
+			isAllowed,
+			(person, channel, ts, threadTs, request) => {
+				void handle(app.client, config, botUserId, {
+					...person,
+					channel,
+					ts,
+					threadTs,
+					request,
+					via: "shortcut",
+					isDm: channel.startsWith("D"),
+				})
+			},
+		)
+	}
 
 	// dot's Home tab: their computer, with a fresh link every time they open it.
 	app.event("app_home_opened", async ({ event, client, context }) => {
@@ -390,7 +423,7 @@ export function registerHandlers(
 		})
 	})
 
-	// Reacting with the trigger emoji to any message asks dot to handle that message.
+	// Reacting with the trigger emoji to a user message asks dot to handle that message.
 	app.event("reaction_added", async ({ event, client, context }) => {
 		if (
 			event.reaction !== config.triggerEmoji ||
@@ -404,8 +437,17 @@ export function registerHandlers(
 			.replies({ channel, ts, limit: 1 })
 			.catch(() => null)
 		const message = found?.messages?.find(candidate => candidate.ts === ts)
+		// Only user-authored messages can trigger a turn; bot replies would allow endless loops.
+		if (
+			!message?.user ||
+			message.user === botUserId ||
+			message.bot_id ||
+			message.bot_profile ||
+			("subtype" in message && message.subtype === "bot_message")
+		)
+			return
 		const threadTs =
-			message?.thread_ts && message.thread_ts !== ts
+			message.thread_ts && message.thread_ts !== ts
 				? message.thread_ts
 				: undefined
 		void handle(client, config, botUserId, {

@@ -4,7 +4,8 @@ A personal Slack assistant. You tag it in a channel (or DM it); it reads the con
 tag, hands the job to Codex, and replies in the thread. Codex is the brain for every request; the
 bot itself only moves messages between Slack and Codex.
 
-Status: **V0**, which listens and responds. No integrations yet. See [Roadmap](#roadmap).
+Status: **V0**, with per-person integrations, computer use and Azure Repos coding tasks.
+See [Roadmap](#roadmap).
 
 ## Repository layout
 
@@ -35,11 +36,17 @@ apps/
       scheduler.ts     scheduled tasks: store, cron/time-zone maths, 30-second check
       integrations/microsoft.ts one Microsoft sign-in per person: device code, tokens per API
       integrations/azure-devops.ts Azure DevOps requests as the person
+      integrations/codecommit.ts CodeCommit Git + PRs using each person's assigned host AWS profile
+      integrations/git-http.ts shared Git smart HTTP relay and task branch validation
       integrations/graph.ts Microsoft 365 (Graph) requests, downloads and uploads as the person
       slack/context.ts Slack messages → transcript for Codex
       slack/attachments.ts Slack files in (downloads) and out (outbox uploads)
       slack/handlers.ts mention/DM handling
       slack/messaging.ts `slack find` / `slack dm`: dot DMs people for the person
+      slack/api.ts      Slack Free method catalog + bot/user identity and channel access checks
+      slack/transfers.ts user-authorized file downloads and external uploads
+      slack/automations.ts persisted event rules, delivery queue, retries and history
+      slack/forms.ts    persistent button/modal forms; submissions run as their submitter
       slack/user-tokens.ts each person's Slack sign-in (user token), so DMs can go out as them
       slack/reply.ts   streamed reply: steps as Slack task cards, then the answer
       slack/socket-mode.ts Socket Mode receiver on Bun's WebSocket (Bolt's built-in one
@@ -50,8 +57,8 @@ apps/
                        skills.local/ (git-ignored) = the deployment's team skills
     runtime/           commands for Codex (Python, stdlib): `memory` (per-user memory),
                        `recall` (search past conversations), `schedule` (scheduled tasks),
-                       `ado` (Azure DevOps), `ms` (Microsoft 365), `slack` (find people, DM
-                       them for the person), `desktop` (dot's computer:
+                       `ado` (Azure DevOps), `code` (Azure Repos / CodeCommit coding tasks),
+                       `ms` (Microsoft 365), `slack` (Slack Free tools and event rules), `desktop` (dot's computer:
                        starts it, and serves Codex the tools that drive it, over MCP)
     docker/Dockerfile  per-user runtime image (Debian + the SDK's own codex build)
     scripts/codex-docker.sh stand-in `codex` that runs the real one via `docker exec`
@@ -112,7 +119,10 @@ labels and renamed in place when the name changes):
   Verified: no token in any process environment inside the container; other API paths get 403.
 - The image (~3.8 GB) carries tools for files people send and ask for: pandas, matplotlib,
   python-docx, openpyxl, reportlab, pypdf, Pillow, pandoc, poppler, qpdf, ImageMagick, ffmpeg; and
-  dot's computer (below, about 1 GB of it).
+  dot's computer (below, about 1 GB of it). Local speech-to-text uses faster-whisper in
+  `/opt/dot/audio`, with compatible pinned PyAV and CTranslate2 versions and a bundled multilingual
+  base model. Audio attachments (including Slack recorder `.m4a` files) need no per-turn installs
+  or model downloads; the persona gives the exact transcription recipe.
 - The image bundles the exact codex build the SDK ships (`node_modules/@openai/codex-linux-*`),
   and is rebuilt (containers recreated, volumes kept) when that version or the Dockerfile changes.
 
@@ -209,6 +219,60 @@ Azure DevOps profile API at sign-in.
 --comments`, and `ado get`/`ado post` for the rest of the REST API. Scheduled runs can read
   ("every Monday, summarize my open bugs") but can't start a sign-in.
 
+### Coding tasks
+
+The same Codex turn can implement a requested change and return a PR in the Slack thread:
+
+- `code checkout <HTTPS clone URL> [--base <branch>]` reads repo metadata and the connected person's
+  commit identity, then creates a Git worktree under `~/workspace/code/<task>/` (host runtime:
+  `.data/code/<team>-<user>/<task>/`). Each person caches one clone per canonical repo URL in
+  `code/.repos/<hash>/`; the hash also includes the caller's team/user identity. The first clone
+  has no checked-out files. Later tasks fetch the latest default or requested branch into the
+  cache, then create their own `dot/<slack-user>/<task>` branch at that exact commit. A per-repo
+  file lock serializes initialization, fetch and worktree creation, and a completed clone is
+  moved into the cache atomically.
+- Worktrees share Git objects and refs; working files, indexes, HEADs, commit identities and task
+  metadata are separate. `extensions.worktreeConfig` and `git config --worktree` keep identities
+  local to each task. `git rev-parse --git-path dot-task.json` locates each worktree's repo/target,
+  starting commit and owner in its private Git admin directory. Follow-ups reuse the same worktree.
+  Existing standalone task clones still work with `code pr`. There is no automatic task deletion;
+  use `git worktree remove` when a task is explicitly discarded, preserving the shared cache.
+- Git uses the bot API's `/ado/git/<org>/<project>/_git/<repo>/…` smart HTTP relay. Only the host
+  adds the person's Microsoft bearer token; the cached repo's origin stays the canonical Azure URL.
+  The signed caller and URL rewrite are passed in the Git process environment, never saved to
+  Git config. The relay accepts discovery, fetch and push on `dev.azure.com`, never follows a
+  redirect, and streams Git data without the REST response cap. Push requests are limited to
+  64 MB; only the caller's `dot/<slack-user>/…` branches may be created or updated. Deletions,
+  other refs and compressed pushes are refused.
+- Codex reads the repo's instructions, makes the requested change, runs its checks, reviews the
+  diff and commits the intended files. `code pr --title "…" --body-file /tmp/pr.md` requires a clean
+  checkout with commits after the starting commit, pushes only its task branch without force,
+  and opens a draft PR through `/ado/write`. A retry finds the existing active PR and updates
+  its branch, title and description. A closed PR requires a new task. No merge or auto-complete
+  is configured.
+- The persona reports what changed, the PR link, checks that passed and checks it couldn't run.
+  A toolchain or service unavailable in the Linux container is reported as a limitation, rather
+  than treating a partial check as successful. Private submodules and Git LFS aren't handled by
+  these helpers yet.
+
+**AWS CodeCommit.** `code checkout https://git-codecommit.<region>.amazonaws.com/v1/repos/<repo>`
+uses the same task directories and Git relay, through `/codecommit/*`. `CODECOMMIT_PROFILES` maps
+each Slack user to their own AWS CLI profile on the host; an unassigned user is refused instead
+of falling back to the host's default. The CLI's CodeCommit credential helper signs Git access
+on the host, and only the relay receives its short-lived credentials. No AWS config, SSH keys,
+access keys or signed Git credentials enter a container.
+
+Repository metadata and PR operations use the host CLI. Commit identity comes from the person's
+Slack profile. PRs target the recorded branch; source branches must be under the caller's task
+namespace. CodeCommit PRs are open for review (there is no draft state); no merge or approval is
+requested. The task records the returned PR ID. Retries check that PR's source/target and open
+state, then update its title and description. Creation also supplies a stable idempotency token
+for a lost response. An expired AWS session tells the operator to renew the assigned profile on
+the host. CodeCommit authentication uses the [AWS CLI credential helper](https://docs.aws.amazon.com/cli/latest/reference/codecommit/credential-helper/).
+
+Protocol and authentication: [Git smart HTTP](https://git-scm.com/docs/http-protocol),
+[Microsoft Entra authentication for Azure Repos](https://learn.microsoft.com/en-us/azure/devops/repos/git/auth-overview?view=azure-devops).
+
 **Microsoft 365** (`integrations/graph.ts`, `runtime/ms`), through Microsoft Graph v1.0:
 
 - **Requests.** `ms` posts to `/ms/request` (any method; only `graph.microsoft.com` over https;
@@ -232,8 +296,9 @@ Azure DevOps profile API at sign-in.
 
 - **Find.** `slack find` searches the workspace directory (users.list, cached 10 minutes; no bots
   or deactivated accounts) by name or email.
-- **As the person.** `slack connect` DMs them a Slack OAuth link (user scopes `chat:write` and
-  `im:write` only, a one-time `state` that lasts 15 minutes). Slack sends them back to
+- **As the person.** `slack connect` DMs them a Slack OAuth link with scopes for the Free tools
+  (search, conversation/message/file management, profiles, reminders and channel canvases;
+  a one-time `state` that lasts 15 minutes). Older DM-only grants need reconnecting. Slack sends them back to
   `/slack/oauth` on the gateway (`DESKTOP_PUBLIC_URL`; it runs for this even without the desktop),
   where the code becomes a user token, kept in `.data/slack-users.json` on the host, never in a
   container. It's refused (and revoked) unless the account that allowed it is the one that asked,
@@ -247,6 +312,43 @@ Azure DevOps profile API at sign-in.
   an hour per sender (in memory); every send logged (sender, recipient, how, length). Replies
   aren't relayed. The persona has dot show a draft first when it worded the message itself, and
   send only what the person asked for. Scheduled runs can send, but can't start a sign-in.
+
+## Slack Free tools and event rules
+
+`slack/api.ts` is an explicit method catalog, exposed through signed `/slack/api` requests and
+`runtime/slack`. `slack methods [method]` describes arguments and scopes; `slack capabilities`
+reports the grant and Free-plan exclusions. The catalog covers search, channel/history/thread
+access, messaging/scheduling, reactions, pins, bookmarks, directory/profile/status/DND, files,
+reminders and channel canvases. It rejects unknown methods and arguments, caller-supplied tokens,
+other-person profile writes, standalone canvas creation, Lists, Workflow Builder and Enterprise
+methods. Each call reports the identity used. Auto uses the connected person's token where
+supported; an explicit `--as dot` uses the bot. User-only methods never fall back to bot access.
+Bot channel access requires the requester to be a member, including public-channel writes.
+Private channels in bot directory results are filtered by the requester's membership. Pagination
+is explicit and returned results are capped at 400 KB. Slack enforces actual scopes, API method
+availability and the Free plan's 90-day history limit.
+
+Uploads/downloads use the person's token through `/slack/upload` and `/slack/download`, capped
+at 50 MB. Download hosts and every redirect are checked before sending credentials. Uploads use
+Slack's current external-upload protocol. Ordinary reply attachments still use the outbox.
+
+`slack automate welcome <channel> 'Welcome <@{user}>!'` creates a persisted rule, not a memory
+note. General rules accept an event, channel, optional text/emoji/domain filters, and a message,
+reaction or task action. Task actions run as the owner using the existing scheduled-turn runner;
+event content is explicitly untrusted. Rules and deliveries live in `.data/slack-automations.json`,
+written atomically with mode 600. A five-second worker rechecks owner access, deduplicates event
+IDs, retries deterministic actions up to three times with a stable message ID, and records
+results. Interrupted model tasks are marked failed rather than repeating unknown external
+effects. Limits: 20 rules per person, 20 deliveries per rule per hour, seven days of terminal
+delivery history. Owners can list, inspect history, enable, disable or remove their own rules.
+Rules require dot to be in the channel. Link events additionally require matching unfurl domains
+in Slack app settings. No rules are enabled merely by installing this feature.
+
+`slack form <JSON>` creates a channel button backed by a stored form definition. The button opens
+a modal with text, select and date fields; it displays the instruction and where responses will
+be shared. Submission runs as the submitter after rechecking channel membership and the bot's
+allow-list. Duplicate view submissions are suppressed. Definitions survive restarts and expire
+after 30 days. Slack Free supports these ordinary interactions without Workflow Builder.
 
 ## Ways in
 
@@ -364,17 +466,14 @@ Docs: [SIWC overview](https://developers.openai.com/siwc/token-sharing-open-sour
 
 ## Roadmap
 
-**V0 (now).** Listen to mentions and DMs, read surrounding context, answer via Codex. Shell in a
-scratch directory, no integrations.
+**V0 (now).** Slack context, per-person Azure DevOps and Microsoft 365, computer use, scheduled
+tasks, Slack DMs and coding tasks in isolated checkouts ending in a draft Azure Repos PR.
 
 **V1.**
 
-- More integrations, per person like Azure DevOps: GitHub/repos, Outlook (Microsoft Graph), App
-  Store Connect/TestFlight.
 - A context map: project names → repos, trackers and docs, so questions about progress
   land on the right sources.
 - Deeper Slack context: older history when the tagged message needs it.
-- Coding tasks in per-task git worktrees, ending in a PR link in the thread.
 
 **Later.**
 

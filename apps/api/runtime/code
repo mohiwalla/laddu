@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""Coding tasks in Azure Repos or AWS CodeCommit, using cached repos and task worktrees.
+
+  code checkout <HTTPS clone URL> [--base <branch>]
+  code pr --title "..." --body-file /tmp/pr.md
+"""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+
+API = os.environ.get("DOT_API")
+CALLER = os.environ.get("DOT_CALLER")
+RESOURCE = "ado"
+
+
+def call(method, path, body=None, quiet=False):
+    """The bot's reply text, or exits with its error."""
+    if not API or not CALLER:
+        sys.exit("error: Azure DevOps isn't available here (no connection to the bot in this turn).")
+    request = urllib.request.Request(
+        f"{API}/{RESOURCE}/{path}",
+        method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"x-dot-caller": CALLER, "content-type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=90) as response:
+            return json.load(response)["text"]
+    except urllib.error.HTTPError as error:
+        try:
+            message = json.load(error)["text"]
+        except Exception:
+            message = f"HTTP {error.code}"
+        sys.exit(f"error: {message}")
+    except urllib.error.URLError as error:
+        sys.exit(f"error: couldn't reach the bot ({error.reason}).")
+
+
+def api(method, path, org=None, body=None):
+    text = call("POST", "request", {"method": method, "path": path, "organization": org, "body": body})
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        sys.exit(f"error: unexpected reply from Azure DevOps: {text[:500]}")
+
+
+
+def git(args, cwd=None, env=None):
+    result = subprocess.run(["git", *args], cwd=cwd, env=env, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode:
+        sys.exit(f"error: git {' '.join(args[:2])}: {result.stderr.strip() or result.stdout.strip()}")
+    return result.stdout.strip()
+
+
+def repo_address(value):
+    """Accept Azure Repos HTTPS clone URLs, including the older visualstudio.com form."""
+    url = urllib.parse.urlsplit(value)
+    if url.scheme != "https" or url.password or url.port not in (None, 443) or url.query or url.fragment:
+        sys.exit("error: give an Azure Repos HTTPS clone URL without a password, query or fragment.")
+    parts = [urllib.parse.unquote(part) for part in url.path.strip("/").split("/")]
+    if url.hostname == "dev.azure.com" and len(parts) == 4 and parts[2] == "_git":
+        org, project, _, repo = parts
+    elif url.hostname and re.fullmatch(r"[a-zA-Z0-9-]+\.visualstudio\.com", url.hostname) and len(parts) == 3 and parts[1] == "_git":
+        org, project, repo = url.hostname.split(".")[0], parts[0], parts[2]
+    else:
+        sys.exit("error: expected https://dev.azure.com/<org>/<project>/_git/<repo>.")
+    if any(not part or part in (".", "..") or re.search(r"[\x00-\x1f\x7f/\\]", part) for part in (org, project, repo)):
+        sys.exit("error: invalid repository path.")
+    return org, project, repo
+
+
+def transport(remote):
+    """Rewrite only this repo, only for this git process. Never persist a caller or token."""
+    if not API or not CALLER:
+        sys.exit("error: Azure DevOps isn't available here (no connection to the bot in this turn).")
+    aws = codecommit_address(remote)
+    if aws:
+        region, repo = aws
+        proxy = f"{API}/codecommit/git/{region}/{urllib.parse.quote(repo, safe='')}"
+    else:
+        org, project, repo = repo_address(remote)
+        suffix = "/".join(urllib.parse.quote(part, safe="") for part in (org, project, "_git", repo))
+        proxy = f"{API}/ado/git/{suffix}"
+    env = os.environ.copy()
+    values = [(f"url.{proxy}.insteadOf", remote),
+              (f"http.{proxy}.extraHeader", f"x-dot-caller: {CALLER}"),
+              ("http.followRedirects", "false"), ("credential.helper", "")]
+    env["GIT_CONFIG_COUNT"] = str(len(values))
+    for index, (key, value) in enumerate(values):
+        env[f"GIT_CONFIG_KEY_{index}"] = key
+        env[f"GIT_CONFIG_VALUE_{index}"] = value
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
+
+
+def caller_owner():
+    if not CALLER:
+        sys.exit("error: no signed caller for this turn.")
+    return "-".join(CALLER.split(".")[:2])
+
+
+def codecommit_address(value):
+    url = urllib.parse.urlsplit(value)
+    host = re.fullmatch(r"git-codecommit\.([a-z]{2}(?:-[a-z]+)+-\d)\.amazonaws\.com", url.hostname or "")
+    if not host:
+        return None
+    if url.scheme != "https" or url.username or url.port not in (None, 443) or url.query or url.fragment:
+        sys.exit("error: use a CodeCommit HTTPS clone URL without credentials, query or fragment.")
+    repo = urllib.parse.unquote(url.path.removeprefix("/v1/repos/"))
+    if not url.path.startswith("/v1/repos/") or not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", repo) or repo in (".", ".."):
+        sys.exit("error: invalid CodeCommit repository URL.")
+    return host[1], repo
+
+
+def task_worktree(root, remote, target, branch, path):
+    """Serialize cache initialization/fetch; each task gets its own branch and Git index."""
+    caches = os.path.join(root, ".repos")
+    os.makedirs(caches, mode=0o700, exist_ok=True)
+    cache_id = hashlib.sha256(f"{caller_owner()}\0{remote}".encode()).hexdigest()
+    cache = os.path.join(caches, cache_id)
+    with open(f"{cache}.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not os.path.isdir(cache):
+            # Publish a complete cache atomically; an interrupted clone can't poison later tasks.
+            with tempfile.TemporaryDirectory(dir=caches) as temporary:
+                staging = os.path.join(temporary, "repo")
+                git(["clone", "--no-checkout", "--single-branch", "--branch", target, "--", remote, staging], env=transport(remote))
+                os.rename(staging, cache)
+        else:
+            git(["fetch", "--no-tags", "--", remote,
+                 f"+refs/heads/{target}:refs/remotes/origin/{target}"], cwd=cache, env=transport(remote))
+        git(["config", "extensions.worktreeConfig", "true"], cwd=cache)
+        start = git(["rev-parse", f"refs/remotes/origin/{target}"], cwd=cache)
+        git(["worktree", "add", "--no-track", "-b", branch, path, start], cwd=cache)
+    return start
+
+
+def task_metadata(path):
+    # Linked worktrees have a .git file; their private metadata is in the shared repo's admin dir.
+    # This also resolves the original .git/dot-task.json for existing standalone task clones.
+    return git(["rev-parse", "--path-format=absolute", "--git-path", "dot-task.json"], cwd=path)
+
+
+def checkout(args):
+    global RESOURCE
+    aws = codecommit_address(args.url)
+    if aws:
+        RESOURCE = "codecommit"
+        region, repo = aws
+        found = json.loads(call("POST", "repository", {"region": region, "repository": repo}))
+        identity = found["identity"]
+        remote = f"https://git-codecommit.{region}.amazonaws.com/v1/repos/{urllib.parse.quote(repo, safe='')}"
+        provider = {"provider": "codecommit", "region": region, "repository": repo}
+    else:
+        org, project, repo = repo_address(args.url)
+        encoded_project, encoded_repo = (urllib.parse.quote(part, safe="") for part in (project, repo))
+        found = api("GET", f"{encoded_project}/_apis/git/repositories/{encoded_repo}", org)
+        identity = json.loads(call("GET", "identity"))
+        remote = f"https://dev.azure.com/{urllib.parse.quote(org, safe='')}/{encoded_project}/_git/{encoded_repo}"
+        provider = {"provider": "azure", "organization": org, "project": project, "repositoryId": found["id"]}
+    target = args.base or found.get("defaultBranch", "").removeprefix("refs/heads/")
+    if not target:
+        sys.exit("error: this repository has no default branch; give --base for an existing branch.")
+    target = target.removeprefix("refs/heads/")
+    git(["check-ref-format", "--branch", target])
+    if not identity.get("email"):
+        sys.exit("error: the connected account has no email for commits.")
+    task_id = uuid.uuid4().hex[:12]
+    branch = f"dot/{CALLER.split('.')[1].lower()}/{task_id}"
+    root = os.path.abspath(os.environ.get("DOT_CODE_DIR", os.path.expanduser("~/workspace/code")))
+    os.makedirs(root, exist_ok=True)
+    path = os.path.join(root, task_id)
+    start = task_worktree(root, remote, target, branch, path)
+    git(["config", "--worktree", "user.name", identity.get("name") or identity["email"]], cwd=path)
+    git(["config", "--worktree", "user.email", identity["email"]], cwd=path)
+    task = {**provider, "owner": caller_owner(), "remote": remote, "branch": branch,
+            "target": target, "start": start}
+    with open(task_metadata(path), "w") as file:
+        json.dump(task, file, indent=2)
+    print(f"Checkout: {path}\nBranch: {branch}\nTarget: {target}\n"
+          "Read this repository's instructions, make the change, run its checks, review the diff, "
+          "and commit only the intended files. Then run code pr from this checkout.")
+
+
+def pull_request(args):
+    global RESOURCE
+    path = git(["rev-parse", "--show-toplevel"])
+    task_file = task_metadata(path)
+    if not os.path.isfile(task_file):
+        sys.exit("error: this isn't a dot coding task; start with code checkout.")
+    with open(task_file) as file:
+        task = json.load(file)
+    if task["owner"] != caller_owner():
+        sys.exit("error: this checkout belongs to a different person.")
+    if git(["branch", "--show-current"], cwd=path) != task["branch"]:
+        sys.exit("error: switch back to this task's branch before publishing.")
+    if git(["status", "--porcelain"], cwd=path):
+        sys.exit("error: review and commit the intended changes first; the checkout must be clean.")
+    git(["merge-base", "--is-ancestor", task["start"], "HEAD"], cwd=path)
+    if git(["rev-parse", "HEAD"], cwd=path) == task["start"]:
+        sys.exit("error: there are no committed changes for a PR.")
+    title = args.title.strip()
+    with open(args.body_file) as file:
+        description = file.read().strip()
+    if not title or not description:
+        sys.exit("error: give a title and a description covering the change and its validation.")
+    title_limit = 150 if task.get("provider") == "codecommit" else 400
+    if len(title) > title_limit or len(description) > 4000:
+        sys.exit(f"error: keep the PR title under {title_limit} characters and description under 4000.")
+    if task.get("provider") == "codecommit":
+        RESOURCE = "codecommit"
+        # Preflight before pushing catches expired sessions and closed PRs.
+        request = {"region": task["region"], "repository": task["repository"],
+                   "source": task["branch"], "target": task["target"], "id": task.get("prId"),
+                   "title": title, "description": description}
+        call("POST", "check", request)
+        git(["push", task["remote"], f"HEAD:refs/heads/{task['branch']}"], cwd=path, env=transport(task["remote"]))
+        result = json.loads(call("POST", "pr", request))
+        task["prId"] = result["id"]
+        with open(task_file, "w") as file:
+            json.dump(task, file, indent=2)
+        print(f"PR: {result['url']}")
+        return
+    project = urllib.parse.quote(task["project"], safe="")
+    repo = urllib.parse.quote(task["repositoryId"], safe="")
+    endpoint = f"{project}/_apis/git/repositories/{repo}/pullrequests"
+    query = urllib.parse.urlencode({"searchCriteria.sourceRefName": f"refs/heads/{task['branch']}",
+                                   "searchCriteria.targetRefName": f"refs/heads/{task['target']}",
+                                   "searchCriteria.status": "all"})
+    existing = api("GET", f"{endpoint}?{query}", task["organization"]).get("value", [])
+    closed = [pr for pr in existing if pr.get("status") in ("completed", "abandoned")]
+    if closed:
+        sys.exit("error: this task already has a closed PR; start a fresh checkout for new work.")
+    # An explicit refspec, no force or deletion: only this task branch ever leaves this checkout.
+    git(["push", task["remote"], f"HEAD:refs/heads/{task['branch']}"], cwd=path, env=transport(task["remote"]))
+    if existing:
+        call("POST", "write", {"method": "PATCH", "path": f"{endpoint}/{existing[0]['pullRequestId']}",
+             "organization": task["organization"], "body": {"title": title, "description": description},
+             "summary": f"Update PR: {title}"})
+        link = f"{task['remote']}/pullrequest/{existing[0]['pullRequestId']}"
+        print(f"Updated PR: {link}")
+        return
+    result = call("POST", "write", {"method": "POST", "path": endpoint, "organization": task["organization"],
+                  "body": {"sourceRefName": f"refs/heads/{task['branch']}",
+                           "targetRefName": f"refs/heads/{task['target']}",
+                           "title": title, "description": description, "isDraft": True},
+                  "summary": f"Open draft PR: {title}"})
+    print(result)
+
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="code", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = parser.add_subparsers(dest="command", required=True)
+    clone = commands.add_parser("checkout")
+    clone.add_argument("url")
+    clone.add_argument("--base")
+    pr = commands.add_parser("pr")
+    pr.add_argument("--title", required=True)
+    pr.add_argument("--body-file", required=True)
+    args = parser.parse_args()
+    checkout(args) if args.command == "checkout" else pull_request(args)
+
+
+if __name__ == "__main__":
+    main()

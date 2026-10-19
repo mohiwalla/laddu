@@ -1,5 +1,5 @@
 /**
- * Each person's own Slack sign-in, so dot can send DMs as them (`slack dm`). Slack's OAuth flow,
+ * Each person's own Slack sign-in for Free tools and sending DMs as them. Slack's OAuth flow,
  * user scopes only: dot DMs a link, they allow it on slack.com, and Slack sends them back to
  * /slack/oauth on dot's web address (the gateway), where the code becomes a user token kept here,
  * on the host (never in a container). Accepted only when the account that allowed it is the person
@@ -14,8 +14,48 @@ type WebClient = App["client"]
 export type Settings = NonNullable<BotConfig["slackSignIn"]>
 type Person = { teamId: string; userId: string }
 
-/** Opening a DM and posting in it, as them; nothing else. */
-const USER_SCOPES = ["chat:write", "im:write"]
+/** Only scopes used by dot's Slack Free tools. Existing connections must consent again. */
+const USER_SCOPES = [
+	"chat:write",
+	"im:write",
+	"im:read",
+	"im:history",
+	"mpim:write",
+	"mpim:read",
+	"mpim:history",
+	"channels:read",
+	"channels:history",
+	"channels:write",
+	"channels:write.invites",
+	"channels:write.topic",
+	"groups:read",
+	"groups:history",
+	"groups:write",
+	"groups:write.invites",
+	"groups:write.topic",
+	"users:read",
+	"users:read.email",
+	"users.profile:read",
+	"users.profile:write",
+	"users:write",
+	"search:read",
+	"files:read",
+	"files:write",
+	"emoji:read",
+	"reactions:read",
+	"reactions:write",
+	"pins:read",
+	"pins:write",
+	"bookmarks:read",
+	"bookmarks:write",
+	"reminders:read",
+	"reminders:write",
+	"dnd:read",
+	"dnd:write",
+	"canvases:read",
+	"canvases:write",
+	"team:read",
+]
 const LINK_MINUTES = 15
 
 type Connection = { token: string; scopes: string[]; connectedAt: string }
@@ -36,6 +76,11 @@ export async function userToken(person: Person): Promise<string | null> {
 	return (await load())[key(person)]?.token ?? null
 }
 
+/** Host-only connection metadata, including the granted scopes (never returned with its token). */
+export async function connection(person: Person): Promise<Connection | null> {
+	return (await load())[key(person)] ?? null
+}
+
 /** Drops a connection Slack no longer accepts (revoked, or the account deactivated). */
 export async function forget(person: Person): Promise<void> {
 	delete (await load())[key(person)]
@@ -45,7 +90,7 @@ export async function forget(person: Person): Promise<void> {
 export async function status(person: Person): Promise<string> {
 	const connection = (await load())[key(person)]
 	return connection
-		? `Connected since ${connection.connectedAt.slice(0, 10)}: DMs go out as them.`
+		? `Connected since ${connection.connectedAt.slice(0, 10)}: DMs go out as them. Granted scopes: ${connection.scopes.join(", ")}. Run slack connect to grant the expanded Slack Free tools.`
 		: "Not connected: DMs can only come from dot (`slack dm --from-dot`). `slack connect` sends them a link to connect."
 }
 
@@ -77,7 +122,7 @@ export async function connect(
 	})}`
 	await client.chat.postMessage({
 		channel: person.userId,
-		text: `To let dot send Slack messages as you, <${link}|connect your Slack account> and allow it. It only lets dot open DMs and post in them, and only when you ask. The link works for ${LINK_MINUTES} minutes; if you didn't ask for this, ignore it.`,
+		text: `To use Slack tools through dot, <${link}|connect your Slack account> and allow it. This grants access to search and read conversations you can access, send messages, manage channels and files, and update your status, reminders and channel canvases when you ask. The link works for ${LINK_MINUTES} minutes; if you didn't ask for this, ignore it.`,
 	})
 	return "Sent them a link in a DM with dot to connect their Slack account. Once they allow it, dot confirms in that DM; then ask again."
 }
@@ -158,7 +203,7 @@ export async function oauthCallback(
 	await client.chat
 		.postMessage({
 			channel: person.userId,
-			text: "Slack connected: when you ask me to DM someone, it now comes from you. Ask me to disconnect Slack to undo it.",
+			text: "Slack connected: you can now ask me to search Slack, work with channels, messages, files, reminders and channel canvases, and update your status. DMs come from you. Ask me to disconnect Slack to undo it.",
 		})
 		.catch(() => {})
 	return page(

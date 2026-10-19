@@ -19,6 +19,8 @@ import { startModelProxy } from "./agent/model-proxy"
 import { startScheduler } from "./scheduler"
 import { BunSocketModeReceiver } from "./slack/socket-mode"
 import { oauthCallback } from "./slack/user-tokens"
+import { SlackAutomations } from "./slack/automations"
+import { SlackForms } from "./slack/forms"
 
 const config = loadBotConfig()
 
@@ -37,13 +39,21 @@ const app = new App({
 })
 
 const auth = await app.client.auth.test()
+const slack = {
+	automations: new SlackAutomations(app.client, auth.user_id!, {
+		allowed: user =>
+			config.allowedUsers === "*" || config.allowedUsers.has(user),
+		task: scheduledRunner(app.client, config).run,
+	}),
+	forms: new SlackForms(app.client),
+}
 // For dot's commands that need the bot (`schedule`, `ado`): next to the model proxy, where
 // containers can reach it; on localhost for the host runtime.
 startBotApi(
 	config.runtime === "docker"
 		? new URL((await startModelProxy()).baseUrl).hostname
 		: "127.0.0.1",
-	{ config, client: app.client },
+	{ config, client: app.client, slack },
 )
 // Container names carry the person's first name, for whoever looks at `docker ps`.
 nameContainersWith(userId => userFirstName(app.client, userId))
@@ -56,7 +66,7 @@ if (config.desktop || slackSignIn)
 			: undefined,
 	)
 if (config.desktop) startDesktopReaper(config)
-registerHandlers(app, config, auth.user_id!)
+registerHandlers(app, config, auth.user_id!, slack)
 // A previous bot process may have left Codex runs going in containers (they hold thread locks).
 if (config.runtime === "docker") await stopOrphanedRuns(auth.team_id!)
 
@@ -64,6 +74,7 @@ await app.start()
 // Turns the previous process was in the middle of: close their replies and answer again.
 await resumeInterrupted(app.client, config, auth.user_id!)
 startScheduler(scheduledRunner(app.client, config))
+await slack.automations.start()
 const who =
 	config.allowedUsers === "*"
 		? "everyone"

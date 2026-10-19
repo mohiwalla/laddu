@@ -23,6 +23,11 @@ Changes (made straight away, as them):
   ado create <project> <type> --title "..." [--set Field=Value ...]   e.g. type Bug, Task, "User Story"
   ado write <METHOD> <path> [--json '<body>'] [--summary "<one line>"]  any other change in the REST API
 
+Coding tasks (a fresh checkout per task; Microsoft tokens stay on the bot):
+  ado checkout <https-repo-url> [--base <branch>]   prints the new checkout path and task branch
+  ado pr --title "..." --body-file /tmp/pr.md      from that checkout, push commits and open a draft PR
+                                                  requires a clean tree with committed changes
+
 --org picks the organization (default: theirs from `ado use`, or their only one). Paths are under
 https://dev.azure.com/<org>/; api-version 7.1 is added unless given. Full URLs on other Azure
 DevOps hosts (vssps, vsrm, almsearch) work too.
@@ -32,6 +37,7 @@ import html
 import json
 import os
 import re
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -189,6 +195,12 @@ def main():
     commands.add_parser("disconnect")
     use = commands.add_parser("use")
     use.add_argument("org")
+    code = commands.add_parser("checkout")
+    code.add_argument("url")
+    code.add_argument("--base")
+    pr = commands.add_parser("pr")
+    pr.add_argument("--title", required=True)
+    pr.add_argument("--body-file", required=True)
     update = commands.add_parser("update")
     update.add_argument("id", type=int)
     update.add_argument("--set", action="append", dest="fields")
@@ -237,6 +249,10 @@ def main():
         print(call("DELETE", "connect"))
     elif args.command == "use":
         print(call("POST", "use", {"organization": args.org}))
+    elif args.command == "checkout":
+        sys.exit(subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), "code"), *sys.argv[1:]]).returncode)
+    elif args.command == "pr":
+        sys.exit(subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), "code"), *sys.argv[1:]]).returncode)
     elif args.command == "wiql":
         wiql(args)
     elif args.command == "item":

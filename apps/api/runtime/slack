@@ -8,6 +8,19 @@ send you this:".
   slack status | connect | disconnect      their Slack connection (connect DMs them a link)
   slack find "<name or email>"             people in the workspace: Slack ID, name, title, email
   slack dm <@U123 | U123 | email> "text" [--from-dot]
+  slack methods [method] | capabilities
+  slack api <method> '<JSON arguments>' [--as auto|user|dot]
+  slack search "in:general decision" [--files] [--page 1]
+  slack channels | history <channel> | thread <channel> <ts>
+  slack send <channel> "text" [--thread <ts>] [--as auto|user|dot]
+  slack upload <channel> <path> [--thread <ts>] | download <file ID> <path>
+  slack automate welcome <channel> "Welcome <@{user}>!"
+  slack automate add '<JSON rule>' | list | history | remove|enable|disable <id>
+  slack form '<JSON form>'
+
+JSON arguments may be read from @filename. Run slack methods <method> for required/optional
+arguments and token requirements. Results include pagination cursors; continue explicitly.
+Free history is limited to 90 days. Lists, Workflow Builder and paid agent surfaces aren't tools.
 
 Use IDs from "People here" or `slack find`; never guess one. At most 20 DMs an hour per person.
 """
@@ -17,6 +30,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+import urllib.parse
 
 API = os.environ.get("DOT_API")
 CALLER = os.environ.get("DOT_CALLER")
@@ -44,6 +58,50 @@ def call(path, body=None, method="POST"):
         sys.exit(f"error: couldn't reach the bot ({error.reason}).")
 
 
+def json_input(value):
+    try:
+        if value.startswith("@"):
+            with open(value[1:], encoding="utf-8") as source:
+                return json.load(source)
+        return json.loads(value)
+    except (ValueError, OSError) as error:
+        sys.exit(f"error: invalid JSON input ({error}).")
+
+
+def file_transfer(path, destination=None, upload=None):
+    if not API or not CALLER:
+        sys.exit("error: Slack isn't available in this turn.")
+    data = None
+    if upload:
+        try:
+            with open(upload, "rb") as source:
+                data = source.read(50 * 1024 * 1024 + 1)
+            if not data or len(data) > 50 * 1024 * 1024:
+                sys.exit("error: file must be between 1 byte and 50 MB.")
+        except OSError as error:
+            sys.exit(f"error: {error}")
+    request = urllib.request.Request(f"{API}{path}", method="PUT" if upload else "GET", data=data,
+                                     headers={"x-dot-caller": CALLER, "content-type": "application/octet-stream"})
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            if destination:
+                # Exclusive creation avoids silently overwriting a workspace file.
+                with open(destination, "xb") as target:
+                    while chunk := response.read(65536):
+                        target.write(chunk)
+                print(f"Downloaded to {destination}")
+            else:
+                print(json.load(response)["text"])
+    except urllib.error.HTTPError as error:
+        try:
+            message = json.load(error)["text"]
+        except Exception:
+            message = f"HTTP {error.code}"
+        sys.exit(f"error: {message}")
+    except (OSError, urllib.error.URLError) as error:
+        sys.exit(f"error: {error}")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="slack", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -55,6 +113,53 @@ def main():
     dm.add_argument("to")
     dm.add_argument("text")
     dm.add_argument("--from-dot", action="store_true", help="send from dot instead of as them")
+    methods = commands.add_parser("methods")
+    methods.add_argument("method", nargs="?")
+    commands.add_parser("capabilities")
+    api = commands.add_parser("api")
+    api.add_argument("method")
+    api.add_argument("arguments", nargs="?", default="{}")
+    api.add_argument("--as", dest="identity", choices=["auto", "user", "dot"], default="auto")
+    search = commands.add_parser("search")
+    search.add_argument("query")
+    search.add_argument("--files", action="store_true")
+    search.add_argument("--page", type=int, default=1)
+    channels = commands.add_parser("channels")
+    channels.add_argument("--cursor")
+    for name in ("history", "thread"):
+        read = commands.add_parser(name)
+        read.add_argument("channel")
+        if name == "thread":
+            read.add_argument("ts")
+        read.add_argument("--cursor")
+        read.add_argument("--limit", type=int, default=50)
+        read.add_argument("--oldest")
+        read.add_argument("--latest")
+    send = commands.add_parser("send")
+    send.add_argument("channel")
+    send.add_argument("text")
+    send.add_argument("--thread")
+    send.add_argument("--as", dest="identity", choices=["auto", "user", "dot"], default="auto")
+    upload = commands.add_parser("upload")
+    upload.add_argument("channel")
+    upload.add_argument("path")
+    upload.add_argument("--thread")
+    download = commands.add_parser("download")
+    download.add_argument("file")
+    download.add_argument("path")
+    form = commands.add_parser("form")
+    form.add_argument("definition")
+    automate = commands.add_parser("automate")
+    automation_commands = automate.add_subparsers(dest="operation", required=True)
+    welcome = automation_commands.add_parser("welcome")
+    welcome.add_argument("channel")
+    welcome.add_argument("text")
+    add = automation_commands.add_parser("add")
+    add.add_argument("rule")
+    for name in ("list", "history"):
+        automation_commands.add_parser(name)
+    for name in ("remove", "enable", "disable"):
+        automation_commands.add_parser(name).add_argument("id")
     args = parser.parse_args()
 
     if args.command == "status":
@@ -65,8 +170,45 @@ def main():
         call("/slack/connect", method="DELETE")
     elif args.command == "find":
         call("/slack/find", {"query": args.query})
-    else:
+    elif args.command == "dm":
         call("/slack/dm", {"to": args.to, "text": args.text, "fromDot": args.from_dot})
+    elif args.command in ("methods", "capabilities"):
+        query = urllib.parse.urlencode({"method": args.method}) if args.command == "methods" and args.method else ""
+        call(f"/slack/{args.command}?{query}", method="GET")
+    elif args.command == "api":
+        call("/slack/api", {"method": args.method, "args": json_input(args.arguments), "as": args.identity})
+    elif args.command == "search":
+        call("/slack/api", {"method": "search.files" if args.files else "search.messages", "args": {"query": args.query, "count": 50, "page": args.page}, "as": "user"})
+    elif args.command == "channels":
+        call("/slack/api", {"method": "conversations.list", "args": {"limit": 100, "exclude_archived": True, **({"cursor": args.cursor} if args.cursor else {})}})
+    elif args.command in ("history", "thread"):
+        parameters = {"channel": args.channel, "limit": args.limit}
+        for key in ("cursor", "oldest", "latest"):
+            if getattr(args, key):
+                parameters[key] = getattr(args, key)
+        if args.command == "thread":
+            parameters["ts"] = args.ts
+        call("/slack/api", {"method": "conversations.replies" if args.command == "thread" else "conversations.history", "args": parameters})
+    elif args.command == "send":
+        parameters = {"channel": args.channel, "text": args.text}
+        if args.thread:
+            parameters["thread_ts"] = args.thread
+        call("/slack/api", {"method": "chat.postMessage", "args": parameters, "as": args.identity})
+    elif args.command == "upload":
+        query = urllib.parse.urlencode({"channel": args.channel, "filename": os.path.basename(args.path), **({"thread_ts": args.thread} if args.thread else {})})
+        file_transfer(f"/slack/upload?{query}", upload=args.path)
+    elif args.command == "download":
+        file_transfer("/slack/download?" + urllib.parse.urlencode({"file": args.file}), destination=args.path)
+    elif args.command == "form":
+        call("/slack/form", json_input(args.definition))
+    elif args.command == "automate":
+        if args.operation == "welcome":
+            body = {"operation": "add", "event": "member_joined_channel", "channel": args.channel, "action": "message", "text": args.text}
+        elif args.operation == "add":
+            body = {**json_input(args.rule), "operation": "add"}
+        else:
+            body = {"operation": args.operation, **({"id": args.id} if hasattr(args, "id") else {})}
+        call("/slack/automate", body)
 
 
 if __name__ == "__main__":

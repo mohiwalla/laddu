@@ -67,6 +67,18 @@ RUN apt-get update \
       '</fontconfig>'; } > /etc/fonts/local.conf \
  && fc-cache -f >/dev/null
 
+# Speech-to-text is ready before the first voice message. Pin PyAV: faster-whisper 1.2.1
+# passes metadata_errors to av.open(), which PyAV 19 removed. Keep the model outside the
+# per-user home volume and load it locally, without downloads or installs during a turn.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3-venv \
+ && rm -rf /var/lib/apt/lists/* \
+ && python3 -m venv /opt/dot/audio \
+ && /opt/dot/audio/bin/pip install --no-cache-dir \
+      faster-whisper==1.2.1 av==16.1.0 ctranslate2==4.8.3 \
+ && /opt/dot/audio/bin/python -c 'from faster_whisper.utils import download_model; download_model("base", output_dir="/opt/dot/audio/model", revision="ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66")' \
+ && /opt/dot/audio/bin/pip check
+
 USER dot
 WORKDIR /home/dot/workspace
 ENV HOME=/home/dot CODEX_HOME=/home/dot/.codex PATH=/opt/codex/bin:/opt/codex/codex-path:$PATH \
