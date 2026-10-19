@@ -66,6 +66,74 @@ RUN apt-get update \
       printf '%s\n' '<match target="font"><edit name="antialias" mode="assign"><bool>true</bool></edit><edit name="hinting" mode="assign"><bool>true</bool></edit><edit name="hintstyle" mode="assign"><const>hintslight</const></edit><edit name="rgba" mode="assign"><const>none</const></edit></match>' \
       '</fontconfig>'; } > /etc/fonts/local.conf \
  && fc-cache -f >/dev/null
+# The desktop's look, as XFCE's system defaults (a person's own choices still win): Arc-Dark for
+# apps and window borders, elementary's dark icons (without its HiDPI copy; the screen is never
+# scaled), a flat dark background (a photo streams and screenshots heavier), and one top bar: app
+# menu (no log-out or shutdown, which would end the session), launchers, open windows, clock. The
+# terminal follows the theme. About 80 MB. (runtime/desktop moves older homes off XFCE's stock look.)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends arc-theme elementary-xfce-icon-theme xfce4-whiskermenu-plugin \
+ && rm -rf /var/lib/apt/lists/* /usr/share/icons/elementary-xfce-hidpi \
+ && x=/etc/xdg/xfce4/xfconf/xfce-perchannel-xml \
+ && sed -i -e 's|"ThemeName" type="string" value="[^"]*"|"ThemeName" type="string" value="Arc-Dark"|' \
+      -e 's|"IconThemeName" type="string" value="[^"]*"|"IconThemeName" type="string" value="elementary-xfce-dark"|' \
+      $x/xsettings.xml \
+ && printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<channel name="xfwm4" version="1.0">' \
+      '<property name="general" type="empty">' \
+      '<property name="theme" type="string" value="Arc-Dark"/>' \
+      '<property name="button_layout" type="string" value="O|HMC"/>' \
+      '<property name="title_alignment" type="string" value="center"/>' \
+      '</property></channel>' > $x/xfwm4.xml \
+ && printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<channel name="xfce4-desktop" version="1.0">' \
+      '<property name="backdrop" type="empty"><property name="screen0" type="empty">' \
+      '<property name="monitorVNC-0" type="empty"><property name="workspace0" type="empty">' \
+      '<property name="color-style" type="int" value="0"/>' \
+      '<property name="image-style" type="int" value="0"/>' \
+      '<property name="rgba1" type="array"><value type="double" value="0.149"/><value type="double" value="0.161"/><value type="double" value="0.2"/><value type="double" value="1"/></property>' \
+      '</property></property></property></property>' \
+      '<property name="desktop-icons" type="empty"><property name="file-icons" type="empty">' \
+      '<property name="show-filesystem" type="bool" value="false"/>' \
+      '<property name="show-removable" type="bool" value="false"/>' \
+      '</property></property></channel>' > $x/xfce4-desktop.xml \
+ && printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<channel name="xfce4-terminal" version="1.0">' \
+      '<property name="color-use-theme" type="bool" value="true"/>' \
+      '<property name="font-use-system" type="bool" value="true"/>' \
+      '</channel>' > $x/xfce4-terminal.xml \
+ && printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<channel name="xfce4-panel" version="1.0">' \
+      '<property name="configver" type="int" value="2"/>' \
+      '<property name="panels" type="array"><value type="int" value="1"/>' \
+      '<property name="dark-mode" type="bool" value="true"/>' \
+      '<property name="panel-1" type="empty">' \
+      '<property name="position" type="string" value="p=6;x=0;y=0"/>' \
+      '<property name="length" type="uint" value="100"/>' \
+      '<property name="position-locked" type="bool" value="true"/>' \
+      '<property name="size" type="uint" value="30"/>' \
+      '<property name="icon-size" type="uint" value="16"/>' \
+      '<property name="plugin-ids" type="array">' \
+      '<value type="int" value="1"/><value type="int" value="2"/><value type="int" value="3"/><value type="int" value="4"/><value type="int" value="5"/>' \
+      '<value type="int" value="6"/><value type="int" value="7"/><value type="int" value="8"/><value type="int" value="9"/><value type="int" value="10"/>' \
+      '</property></property></property>' \
+      '<property name="plugins" type="empty">' \
+      '<property name="plugin-1" type="string" value="whiskermenu">' \
+      '<property name="favorites" type="array"><value type="string" value="chromium.desktop"/><value type="string" value="thunar.desktop"/><value type="string" value="xfce4-terminal.desktop"/><value type="string" value="org.xfce.mousepad.desktop"/></property>' \
+      '<property name="show-command-lockscreen" type="bool" value="false"/>' \
+      '<property name="show-command-switchuser" type="bool" value="false"/>' \
+      '<property name="show-command-logout" type="bool" value="false"/>' \
+      '<property name="show-command-restart" type="bool" value="false"/>' \
+      '<property name="show-command-shutdown" type="bool" value="false"/>' \
+      '<property name="show-command-suspend" type="bool" value="false"/>' \
+      '<property name="show-command-hibernate" type="bool" value="false"/>' \
+      '</property>' \
+      '<property name="plugin-2" type="string" value="separator"><property name="style" type="uint" value="0"/></property>' \
+      '<property name="plugin-3" type="string" value="launcher"><property name="items" type="array"><value type="string" value="chromium.desktop"/></property></property>' \
+      '<property name="plugin-4" type="string" value="launcher"><property name="items" type="array"><value type="string" value="xfce4-terminal.desktop"/></property></property>' \
+      '<property name="plugin-5" type="string" value="launcher"><property name="items" type="array"><value type="string" value="thunar.desktop"/></property></property>' \
+      '<property name="plugin-6" type="string" value="separator"><property name="style" type="uint" value="0"/></property>' \
+      '<property name="plugin-7" type="string" value="tasklist"><property name="grouping" type="uint" value="0"/><property name="show-handle" type="bool" value="false"/></property>' \
+      '<property name="plugin-8" type="string" value="separator"><property name="expand" type="bool" value="true"/><property name="style" type="uint" value="0"/></property>' \
+      '<property name="plugin-9" type="string" value="systray"><property name="square-icons" type="bool" value="true"/></property>' \
+      '<property name="plugin-10" type="string" value="clock"><property name="digital-layout" type="uint" value="3"/><property name="digital-time-format" type="string" value="%a %d %b  %H:%M"/></property>' \
+      '</property></channel>' > /etc/xdg/xfce4/panel/default.xml
 
 # Speech-to-text is ready before the first voice message. Pin PyAV: faster-whisper 1.2.1
 # passes metadata_errors to av.open(), which PyAV 19 removed. Keep the model outside the

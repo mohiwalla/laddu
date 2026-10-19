@@ -158,6 +158,7 @@ def start():
     }
     ENV_FILE.write_text(json.dumps(env))
     full = session_env()
+    adopt_look(full)
     spawn(["xfce4-session"], full, log)
     run("xset", "s", "off", "-dpms", env=full, check=False)
     # No bell: the web viewer plays every one as a sound (apps ring it on typos, empty searches…).
@@ -183,6 +184,31 @@ XFCE_FONTS = [
     ("xsettings", "/Xft/RGBA", "string", "none"),
     ("xfwm4", "/general/title_font", "string", "Inter Variable Semi-Bold 9"),
 ]
+
+
+# The image's look (Dockerfile) is XFCE's system default, but homes from before it saved XFCE's
+# stock values, which win over it. Once per home, before the session starts, drop the ones still
+# stock so the image's show through; anything a person chose stays.
+LOOK_MARK = STATE / "look-v1"
+STOCK_LOOK = [
+    ("xsettings", "/Net/ThemeName", {"", "Xfce", "Adwaita"}),
+    ("xsettings", "/Net/IconThemeName", {"", "Tango", "Adwaita"}),
+    ("xfwm4", "/general/theme", {"Default"}),
+]
+
+
+def adopt_look(env):
+    if LOOK_MARK.exists():
+        return
+    for channel, prop, stock in STOCK_LOOK:
+        got = run("xfconf-query", "-c", channel, "-p", prop, env=env, check=False)
+        if got.returncode != 0 or got.stdout.decode().strip() in stock:
+            run("xfconf-query", "-c", channel, "-p", prop, "-r", env=env, check=False)
+    # Debian's stock panels (a top bar and a dock ending in a directory menu) → the image's one bar.
+    got = run("xfconf-query", "-c", "xfce4-panel", "-p", "/plugins/plugin-18", env=env, check=False)
+    if got.stdout.decode().strip() == "directorymenu":
+        run("xfconf-query", "-c", "xfce4-panel", "-p", "/", "-r", "-R", env=env, check=False)
+    LOOK_MARK.touch()
 
 
 def set_fonts(env):
