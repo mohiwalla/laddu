@@ -1,8 +1,9 @@
-/** Add local event subscriptions while preserving remote OAuth URLs and deployment settings. */
-const args = Bun.argv.slice(2)
+/** Sync events and optionally agent view, preserving remote OAuth URLs and deployment settings. */
+const enableAgent = Bun.argv.includes("--agent-view")
+const args = Bun.argv.slice(2).filter(arg => arg !== "--agent-view")
 if (!args.includes("--app") || !args.includes("--team"))
 	throw new Error(
-		"Usage: bun run scripts/slack-sync-events.ts --app <app ID> --team <workspace>",
+		"Usage: bun run scripts/slack-sync-events.ts --app <app ID> --team <workspace> [--agent-view]",
 	)
 const appRoot = Bun.fileURLToPath(new URL("../", import.meta.url))
 async function cli(command: string[], cwd = appRoot) {
@@ -24,16 +25,29 @@ const remote = JSON.parse(
 )
 const local = Bun.YAML.parse(
 	await Bun.file(`${appRoot}slack-manifest.yaml`).text(),
-) as { settings: { event_subscriptions: { bot_events: string[] } } }
+) as {
+	features: { agent_view: { agent_description: string } }
+	settings: { event_subscriptions: { bot_events: string[] } }
+}
 const previous: string[] =
 	remote.settings?.event_subscriptions?.bot_events ?? []
 const events = [
 	...new Set([...previous, ...local.settings.event_subscriptions.bot_events]),
-]
-if (events.length === previous.length) {
+	// A Stop subscription makes Slack's working indicator clickable. Keep it hidden for everyone.
+].filter(event => event !== "agent_session_stopped")
+const agentChanged = enableAgent && !remote.features?.agent_view
+const eventsChanged =
+	events.length !== previous.length ||
+	events.some(event => !previous.includes(event))
+if (!eventsChanged && !agentChanged) {
 	console.log("Slack event subscriptions already match.")
 } else {
 	remote.settings.event_subscriptions.bot_events = events
+	if (enableAgent) {
+		remote.features ??= {}
+		remote.features.agent_view ??= local.features.agent_view
+		delete remote.features.assistant_view
+	}
 	const temporary = (await Bun.$`mktemp -d`.text()).trim()
 	try {
 		await Bun.write(`${temporary}/manifest.json`, JSON.stringify(remote), {
@@ -66,6 +80,10 @@ if (events.length === previous.length) {
 		console.log(
 			`Added Slack events: ${events.filter(event => !previous.includes(event)).join(", ")}.`,
 		)
+		const removed = previous.filter(event => !events.includes(event))
+		if (removed.length)
+			console.log(`Removed Slack events: ${removed.join(", ")}.`)
+		if (enableAgent) console.log("Slack agent view enabled.")
 	} finally {
 		await Bun.$`rm -rf ${temporary}`.quiet()
 	}

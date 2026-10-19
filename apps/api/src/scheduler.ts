@@ -151,15 +151,13 @@ function fieldMatches(
 
 const CRON_FIELD = /^(\*|\d+(-\d+)?)(\/\d+)?(,(\*|\d+(-\d+)?)(\/\d+)?)*$/
 
-/** Why a cron expression is refused, or null if it's fine. Recurring jobs run at most hourly. */
+/** Why a cron expression is refused, or null if it's fine. Minimum recurring interval: one minute. */
 export function cronProblem(cron: string): string | null {
 	const fields = cron.trim().split(/\s+/)
 	if (fields.length !== 5)
-		return 'use five fields: "minute hour day-of-month month day-of-week"'
+		return 'use five fields: "minute hour day-of-month month day-of-week"; minimum interval is one minute'
 	if (!fields.every(field => CRON_FIELD.test(field)))
 		return "only numbers, *, ranges (1-5), lists (1,3) and steps (*/2)"
-	if (!/^\d+$/.test(fields[0]!))
-		return "the minute must be a single number: recurring tasks run at most once an hour"
 	return null
 }
 

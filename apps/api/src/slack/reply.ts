@@ -1,5 +1,5 @@
 /**
- * The bot's reply while a turn runs. Uses Slack's streaming messages: each step is a native task card
+ * The bot's reply after a tool action starts. Uses Slack's streaming messages: each step is a native task card
  * (spinner, then done or failed) with its command tucked into the card's details, and the answer
  * lands in the same message. Falls back to editing a plain placeholder if streaming is unavailable.
  */
@@ -40,16 +40,18 @@ async function readMessage(
 }
 
 export type Reply = {
-	/** The reply message; `streaming` when it's a Slack stream rather than a plain placeholder. */
-	ts: string
-	streaming: boolean
 	step(step: Step): void
 	/** Posts the answer; an empty answer (files only) just closes the progress. */
 	finish(text: string): Promise<void>
 	fail(message: string): Promise<void>
+	/** Confirms native Stop, including when Slack already stopped the stream. */
+	cancel(): Promise<void>
 	/** Removes the reply altogether (the answer was only a reaction). */
 	discard(): Promise<void>
 }
+
+type ReplyMessage = { ts: string; streaming: boolean }
+type PostedReply = Reply & ReplyMessage
 
 /** Slack's limit for `markdown_text`. */
 const MAX_MARKDOWN = 12_000
@@ -95,12 +97,18 @@ export function chunkMarkdown(
 const clip = (text: string, max: number) =>
 	text.length > max ? `${text.slice(0, max - 1)}…` : text
 
-function taskChunk(step: Step): TaskChunk {
+function taskChunk(step: Step, failed = false): TaskChunk {
+	// Slack derives the plan's warning icon from any task with status=error. A failed tool
+	// attempt is still a finished step while Codex recovers; only a failed turn gets that icon.
+	const attemptFailed = step.status === "error" && !failed
 	const chunk: TaskChunk = {
 		type: "task_update",
 		id: step.id,
-		title: clip(step.title, MAX_TASK_TEXT),
-		status: step.status,
+		title: clip(
+			attemptFailed ? `Attempt failed: ${step.title}` : step.title,
+			MAX_TASK_TEXT,
+		),
+		status: attemptFailed ? "complete" : step.status,
 	}
 	// Code fence around the command; clipped inside so the fence always closes.
 	if (step.details)
@@ -111,32 +119,92 @@ function taskChunk(step: Step): TaskChunk {
 export async function openReply(
 	client: WebClient,
 	target: ReplyTarget,
+	onPosted: (message: ReplyMessage) => Promise<void> = async () => {},
 ): Promise<Reply> {
-	try {
-		return await openStream(client, target)
-	} catch (error) {
-		const reason =
-			(error as { data?: { error?: string } })?.data?.error ?? error
-		console.warn(
-			"[reply] streaming unavailable, using a placeholder:",
-			reason,
+	const started = Date.now()
+	let posted: Promise<PostedReply> | undefined
+	let chain: Promise<void> = Promise.resolve()
+	let closed = false
+	const remember = (message: ReplyMessage) =>
+		onPosted(message).catch(error =>
+			console.warn("[reply] couldn't save message:", error),
 		)
-		return openPlaceholder(client, target)
+	const show = async (first: Step) => {
+		let reply: PostedReply
+		try {
+			reply = await openStream(client, target, first, started)
+		} catch (error) {
+			console.warn(
+				"[reply] streaming unavailable, using a placeholder:",
+				(error as { data?: { error?: string } })?.data?.error ?? error,
+			)
+			reply = await openPlaceholder(client, target, first)
+		}
+		await remember({ ts: reply.ts, streaming: reply.streaming })
+		return reply
+	}
+	const postText = async (text: string) => {
+		let first = true
+		for (const part of text ? chunkMarkdown(text) : []) {
+			const message = await client.chat.postMessage({
+				channel: target.channel,
+				thread_ts: target.threadTs,
+				markdown_text: part,
+			})
+			if (first && message.ts)
+				await remember({ ts: message.ts, streaming: false })
+			first = false
+		}
+	}
+	const settle = async () => {
+		closed = true
+		await chain
+		return posted?.catch(() => undefined)
+	}
+	return {
+		step(step) {
+			if (closed) return
+			// The native agent status covers the time before the first real action.
+			if (!posted) {
+				posted = show(step)
+				chain = posted.then(() => {})
+			} else {
+				const opening = posted
+				chain = chain.then(async () => (await opening).step(step))
+			}
+			chain = chain.catch(error =>
+				console.warn("[reply] progress unavailable:", error),
+			)
+		},
+		async finish(text) {
+			const reply = await settle()
+			if (reply) await reply.finish(text)
+			else await postText(text)
+		},
+		async fail(message) {
+			const reply = await settle()
+			if (reply) await reply.fail(message)
+			else await postText(`:warning: ${message}`)
+		},
+		async cancel() {
+			const reply = await settle()
+			if (reply) await reply.cancel()
+			else await postText("_Stopped._")
+		},
+		async discard() {
+			await (await settle())?.discard()
+		},
 	}
 }
 
 async function openStream(
 	client: WebClient,
 	target: ReplyTarget,
-): Promise<Reply> {
-	const started = Date.now()
+	first: Step,
+	started: number,
+): Promise<PostedReply> {
 	const { channel } = target
-	// Shown until Codex's first step, so there's a spinner from the start.
-	const opening: Step = {
-		id: "opening",
-		title: "Reading the conversation",
-		status: "in_progress",
-	}
+	let title = first.title
 	const { ts } = await client.chat.startStream({
 		channel,
 		thread_ts: target.threadTs,
@@ -144,20 +212,21 @@ async function openStream(
 		recipient_team_id: target.teamId,
 		task_display_mode: "plan",
 		chunks: [
-			{ type: "plan_update", title: "Working on it" },
-			taskChunk(opening),
+			{ type: "plan_update", title: clip(title, MAX_TASK_TEXT) },
+			taskChunk(first),
 		],
 	})
 	if (!ts) throw new Error("chat.startStream returned no ts")
 
 	// Latest state per step, sent in batches. Slack updates a task in place by id but appends its
 	// details on every update, so they're sent once.
-	const steps = new Map<string, Step>([[opening.id, opening]])
-	const detailed = new Set<string>()
-	const toChunks = (batch: Map<string, Step>) =>
+	const steps = new Map<string, Step>([[first.id, first]])
+	const detailed = new Set<string>(first.details ? [first.id] : [])
+	const toChunks = (batch: Map<string, Step>, failed = false) =>
 		[...batch.values()].map(step => {
 			const chunk = taskChunk(
 				detailed.has(step.id) ? { ...step, details: undefined } : step,
+				failed,
 			)
 			if (step.details) detailed.add(step.id)
 			return chunk
@@ -177,7 +246,10 @@ async function openStream(
 	const flush = () => {
 		timer = undefined
 		const chunks: Chunk[] = [
-			{ type: "plan_update", title: `Working on it · ${elapsed()}` },
+			{
+				type: "plan_update",
+				title: clip(`${title} · ${elapsed()}`, MAX_TASK_TEXT),
+			},
 			...toChunks(pending),
 		]
 		pending = new Map()
@@ -197,6 +269,8 @@ async function openStream(
 	}
 	clock = setTimeout(tick, clockInterval())
 	const update = (step: Step) => {
+		if (stopped) return
+		title = step.title
 		steps.set(step.id, step)
 		pending.set(step.id, step)
 		timer ??= setTimeout(flush, STREAM_FLUSH_MS)
@@ -212,7 +286,7 @@ async function openStream(
 		for (const step of steps.values())
 			if (step.status === "in_progress")
 				pending.set(step.id, { ...step, status })
-		const chunks = toChunks(pending)
+		const chunks = toChunks(pending, status === "error")
 		pending = new Map()
 		return chunks
 	}
@@ -221,25 +295,16 @@ async function openStream(
 		streaming: true,
 		step(step) {
 			update(step)
-			// Slack shows the whole plan as done once no task is in progress, which is the case between
-			// steps while Codex thinks. The first row covers those gaps: it spins as "Thinking" whenever
-			// no step runs, and rests while one does.
-			const running = [...steps.values()].some(
-				other =>
-					other.id !== opening.id && other.status === "in_progress",
-			)
-			const first = steps.get(opening.id)!
-			if (running && first.status === "in_progress")
-				update({ ...first, status: "complete" })
-			if (!running && first.status !== "in_progress")
-				update({ ...first, title: "Thinking", status: "in_progress" })
 		},
 		async finish(text) {
 			const tasks = await settle("complete")
 			const [first, ...rest] = text ? chunkMarkdown(text) : []
 			const done: Chunk[] = [
 				...tasks,
-				{ type: "plan_update", title: `Done in ${elapsed()}` },
+				{
+					type: "plan_update",
+					title: `Done · ${steps.size} step${steps.size === 1 ? "" : "s"} · ${elapsed()}`,
+				},
 			]
 			try {
 				await client.chat.stopStream({
@@ -276,11 +341,31 @@ async function openStream(
 					...tasks,
 					{
 						type: "plan_update",
-						title: `Stopped after ${elapsed()}`,
+						title: `Failed after ${elapsed()}`,
 					},
 					{ type: "markdown_text", text: `:warning: ${message}` },
 				],
 			})
+		},
+		async cancel() {
+			const tasks = await settle("complete")
+			await client.chat
+				.stopStream({
+					channel,
+					ts,
+					chunks: [
+						...tasks,
+						{ type: "plan_update", title: "Stopped" },
+						{ type: "markdown_text", text: "_Stopped._" },
+					],
+				})
+				.catch(() =>
+					client.chat.postMessage({
+						channel,
+						thread_ts: target.threadTs,
+						markdown_text: "_Stopped._",
+					}),
+				)
 		},
 		async discard() {
 			await settle("complete")
@@ -294,17 +379,17 @@ async function openStream(
 	}
 }
 
-/** Pre-streaming behaviour: one message reading "Working on it…", edited with the latest step. */
+/** If streaming is unavailable, show the actual action and edit it with later steps. */
 async function openPlaceholder(
 	client: WebClient,
 	target: ReplyTarget,
-): Promise<Reply> {
+	first: Step,
+): Promise<PostedReply> {
 	const { channel, threadTs } = target
-	const working = "_Working on it…_"
 	const placeholder = await client.chat.postMessage({
 		channel,
 		thread_ts: threadTs,
-		markdown_text: working,
+		markdown_text: first.title,
 	})
 	const ts = placeholder.ts!
 
@@ -324,7 +409,7 @@ async function openPlaceholder(
 				client.chat.update({
 					channel,
 					ts,
-					markdown_text: `${working}\n\n${status}`,
+					markdown_text: status,
 				}),
 			)
 			.catch(() => {})
@@ -339,7 +424,16 @@ async function openPlaceholder(
 	return {
 		ts,
 		streaming: false,
+		async cancel() {
+			await close()
+			await client.chat.update({
+				channel,
+				ts,
+				markdown_text: "_Stopped._",
+			})
+		},
 		step(step) {
+			if (closed) return
 			latest = step.title
 			timer ??= setTimeout(
 				flush,

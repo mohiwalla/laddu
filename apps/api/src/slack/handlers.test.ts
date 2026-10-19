@@ -3,6 +3,11 @@ import type { App } from "@slack/bolt"
 import type { BotConfig } from "../config"
 import * as inflight from "../inflight"
 import * as sessions from "../sessions"
+import * as codex from "../agent/codex"
+import * as context from "./context"
+import * as attachments from "./attachments"
+import * as replies from "./reply"
+import * as learning from "../agent/learning"
 import { registerHandlers } from "./handlers"
 
 const botUserId = "U_DOT"
@@ -106,5 +111,148 @@ test.each([undefined, "file_share", "thread_broadcast"])(
 			`${channel}:${threadTs}:${userId}`,
 			expect.any(Function),
 		)
+	},
+)
+
+test.each(["success", "failure", "stop"] as const)(
+	"agent DM lifecycle: %s clears working status and persists only successful work",
+	async outcome => {
+		serialized.mockImplementation(async (_key, task) => task())
+		const extraSpies: { mockRestore(): void }[] = []
+		let finished!: () => void
+		const done = new Promise<void>(resolve => {
+			finished = resolve
+		})
+		let running!: () => void
+		const ready = new Promise<void>(resolve => {
+			running = resolve
+		})
+		const reply = {
+			ts: "3.001",
+			streaming: true,
+			step: mock(() => {}),
+			finish: mock(async () => {}),
+			fail: mock(async () => {}),
+			cancel: mock(async () => {}),
+			discard: mock(async () => {}),
+		}
+		const save = spyOn(sessions, "saveSession").mockResolvedValue(undefined)
+		const run = spyOn(codex, "runTurn").mockImplementation(
+			async ({ signal }) => {
+				running()
+				if (outcome === "stop") {
+					await new Promise((_, reject) =>
+						signal!.addEventListener(
+							"abort",
+							() => reject(signal!.reason),
+							{ once: true },
+						),
+					)
+				}
+				if (outcome === "failure") throw new Error("Example failure")
+				return {
+					threadId: "codex-thread",
+					text: "Done",
+					files: [],
+					skipped: [],
+				}
+			},
+		)
+		extraSpies.push(
+			save,
+			run,
+			spyOn(sessions, "getSession").mockResolvedValue(undefined),
+			spyOn(inflight, "markReply").mockResolvedValue(undefined),
+			spyOn(inflight, "markDone").mockImplementation(async () => {
+				finished()
+			}),
+			spyOn(replies, "openReply").mockResolvedValue(reply),
+			spyOn(context, "buildTurnInput").mockResolvedValue({
+				text: "Do a task",
+				transcript: "Do a task",
+				attachments: [],
+				linked: [],
+				place: "DM",
+			}),
+			spyOn(context, "userTimezone").mockResolvedValue("Asia/Kolkata"),
+			spyOn(attachments, "downloadAttachments").mockResolvedValue([]),
+			spyOn(attachments, "uploadFiles").mockResolvedValue(undefined),
+			spyOn(learning, "afterTurn").mockResolvedValue(undefined),
+		)
+		try {
+			let onMessage!: (args: unknown) => Promise<void>
+			let onStop!: (args: unknown) => Promise<void>
+			const apiCall = mock(async () => ({ ok: true }))
+			const client = {
+				apiCall,
+				reactions: { add: mock(async () => ({})) },
+			}
+			const app = {
+				event: (name: string, handler: typeof onStop) => {
+					if (name === "agent_session_stopped") onStop = handler
+				},
+				message: (handler: typeof onMessage) => {
+					onMessage = handler
+				},
+				action: () => {},
+				command: () => {},
+				shortcut: () => {},
+				view: () => {},
+			} as unknown as App
+			registerHandlers(
+				app,
+				{ allowedUsers: new Set([userId]) } as BotConfig,
+				botUserId,
+			)
+			const ts = `1792200000.${String(++sequence).padStart(6, "0")}`
+			await onMessage({
+				message: {
+					channel: "D_AGENT",
+					channel_type: "im",
+					user: userId,
+					ts,
+				},
+				client,
+				context: { teamId: "T_TEAM" },
+			})
+			await ready
+			if (outcome === "stop") {
+				const signal = run.mock.calls[0]![0].signal!
+				await onStop({
+					event: {
+						channel: "D_AGENT",
+						thread_ts: ts,
+						user: "U_OTHER",
+					},
+				})
+				expect(signal.aborted).toBe(false)
+				await onStop({
+					event: { channel: "D_AGENT", thread_ts: ts, user: userId },
+				})
+				expect(signal.aborted).toBe(true)
+			}
+			await done
+			expect(apiCall).toHaveBeenLastCalledWith(
+				"agents.sessions.setStatus",
+				{
+					channel_id: "D_AGENT",
+					thread_ts: ts,
+					status: "active",
+				},
+			)
+			expect(run).toHaveBeenCalledTimes(1)
+			expect(save).toHaveBeenCalledTimes(outcome === "success" ? 1 : 0)
+			expect(reply.finish).toHaveBeenCalledTimes(
+				outcome === "success" ? 1 : 0,
+			)
+			expect(reply.fail).toHaveBeenCalledTimes(
+				outcome === "failure" ? 1 : 0,
+			)
+			expect(reply.cancel).toHaveBeenCalledTimes(
+				outcome === "stop" ? 1 : 0,
+			)
+		} finally {
+			for (const spy of extraSpies) spy.mockRestore()
+		}
 	},
 )

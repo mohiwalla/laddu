@@ -49,6 +49,7 @@ apps/
       slack/forms.ts    persistent button/modal forms; submissions run as their submitter
       slack/user-tokens.ts each person's Slack sign-in (user token), so DMs can go out as them
       slack/reply.ts   streamed reply: steps as Slack task cards, then the answer
+      slack/agent-sessions.ts native working status and cancellation for active/queued thread requests
       slack/socket-mode.ts Socket Mode receiver on Bun's WebSocket (Bolt's built-in one
                        needs undici's `ping`, which Bun's undici lacks)
     agent-home/        AGENTS.md = bot persona (mounted read-only into containers); an optional,
@@ -78,7 +79,7 @@ marketing site if this becomes something teammates can run.
    ▼  Slack Socket Mode (websocket, no public URL)
  apps/api
    1. allow-list: ALLOWED_SLACK_USERS ("*" = everyone, or member IDs; default: just the owner)
-   2. react 👀, post "Working on it…" in the thread
+   2. set the native agent status to working (no reply placeholder)
    3. build transcript:
         in a thread  → thread replies (conversations.replies)
         top-level    → last N channel messages up to the tag (conversations.history)
@@ -86,14 +87,27 @@ marketing site if this becomes something teammates can run.
    4. Codex turn in the requester's container: new thread, or resume theirs for this Slack thread
         • spawned per turn via @openai/codex-sdk (`codex exec`, through scripts/codex-docker.sh)
         • billed to your ChatGPT plan; the token stays on the host (model proxy)
-        • progress events edit the placeholder ("Running `git log`", plan checklist…)
-   5. final answer replaces the placeholder (Markdown; split past 12k chars), 👀 → ✅
+        • the first action opens a detailed progress accordion; later actions update it
+   5. finish the activity record and post the answer (Markdown; split past 12k chars)
+      • no actions: post only the answer, or react without posting
+      • clear native working status after the turn
 ```
 
 One (Slack thread, user) = one Codex thread, so two people in the same thread each have their own
 conversation with the bot. Turns for the same key are queued. Codex stores conversations in the
 user's container volume; the bot stores only `{key → codex thread id, last seen ts}` in
 `.data/sessions.json`.
+
+The Slack app declares `agent_view`. Interactive turns set `agents.sessions.setStatus` to
+`processing`, then `active` after success, failure or cancellation. The status remains processing
+while another person still has work running in that thread. The `agent_session_stopped` event is
+deliberately unsubscribed, so Slack shows working status without a native Stop button for anyone.
+These native surfaces supplement streamed task cards; unavailable agent APIs don't prevent replies.
+The native working indicator is the only progress UI until Codex executes its first action. That
+action opens the streamed accordion, titled with the current action and containing actual tools,
+commands and file edits. There are no synthetic reading or thinking steps. Turns without actions
+post only their final answer (or react), and completed action streams retain an activity record.
+The message is saved for restart recovery when it is actually posted, rather than when work starts.
 
 ## Isolation: one container per user
 
@@ -364,8 +378,8 @@ after 30 days. Slack Free supports these ordinary interactions without Workflow 
 
 ## Scheduled tasks
 
-Codex creates them with the `schedule` command (`--at` once, or `--cron`, at most hourly; times in
-the person's Slack time zone). The command calls the bot's API (`agent/bot-api.ts`) with
+Codex creates them with the `schedule` command (`--at` once, or `--cron`, minimum interval one
+minute; times in the person's Slack time zone). The command calls the bot's API (`agent/bot-api.ts`) with
 `DOT_CALLER`, a credential this process signs per turn over (team, user, channel, thread), so a
 request can only act as that person, in that conversation. Jobs live in `.data/schedules.json`;
 every 30 seconds the bot runs due ones as fresh Codex turns for their owner (memory loaded) and

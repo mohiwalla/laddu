@@ -9,6 +9,7 @@ Codex drives it through `desktop mcp`, an MCP server registered in its config; p
   desktop start     start the desktop if it isn't running
   desktop stop      stop it (apps close; files and the browser profile stay)
   desktop status    running or not, and how long since the last action
+  desktop exec [--] <command> [args...]  run a command with this desktop's display and session
   desktop mcp       MCP server on stdin/stdout (used by Codex)
   desktop control on|off  the person has taken control / handed it back (set by the bot's viewer)
   desktop events    dot's pointer position and actions as JSON lines, for the viewer's dot cursor
@@ -82,6 +83,8 @@ def session_env():
     if ENV_FILE.exists():
         env.update(json.loads(ENV_FILE.read_text()))
     env["DISPLAY"] = DISPLAY
+    env.setdefault("MAGICK_THREAD_LIMIT", "2")
+    env.setdefault("OMP_NUM_THREADS", "2")
     return env
 
 
@@ -263,7 +266,10 @@ def status():
 # ---- observing ----------------------------------------------------------------------------
 
 def screenshot():
-    return run("import", "-window", "root", "png:-", env=session_env()).stdout
+    # ImageMagick otherwise sizes its worker pool from host CPUs, which can exhaust a
+    # container's thread allowance even though the container only has two CPUs.
+    env = {**session_env(), "MAGICK_THREAD_LIMIT": "2", "OMP_NUM_THREADS": "2"}
+    return run("import", "-limit", "thread", "2", "-window", "root", "png:-", env=env).stdout
 
 
 def active_window():
@@ -663,7 +669,26 @@ def link(reason):
             sys.exit(f"error: the bot answered {error.code}")
 
 
+def exec_command(args):
+    if args[:1] == ["--"]:
+        args = args[1:]
+    if not args:
+        sys.exit("usage: desktop exec [--] <command> [args...]")
+    if person_in_control():
+        sys.exit("error: the person has control; use the desktop wait tool until they hand it back.")
+    start()
+    touch()
+    try:
+        result = subprocess.run(args, env=session_env())
+    except FileNotFoundError:
+        sys.exit(f"error: command not installed: {args[0]}")
+    sys.exit(result.returncode if result.returncode >= 0 else 128 - result.returncode)
+
+
 def main(args):
+    if args in (["--help"], ["-h"], ["help"]):
+        print(__doc__.strip())
+        return
     command = args[0] if args else "status"
     if command == "link":
         link(" ".join(args[1:]))
@@ -674,6 +699,8 @@ def main(args):
         print("stopped")
     elif command == "status":
         print(status())
+    elif command == "exec":
+        exec_command(args[1:])
     elif command == "events":
         events()
     elif command == "control":

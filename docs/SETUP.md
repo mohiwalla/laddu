@@ -62,6 +62,29 @@ steps: `slack login` prints a `/slackauthticket …` command; send it in Slack, 
 `slack login --ticket <ticket> --challenge <code>` with the code Slack shows. Or paste the manifest
 by hand: api.slack.com/apps → your app → **App Manifest**.
 
+### Slack agent experience
+
+The manifest declares dot as an agent using `features.agent_view`. For an existing installation,
+enable it without overwriting its OAuth URLs, scopes or other deployment settings:
+
+```sh
+bun run scripts/slack-sync-events.ts --app <APP_ID> --team <WORKSPACE> --agent-view
+systemctl --user restart dot-srafis.service
+```
+
+Dot reports native working status while answering. The `agent_session_stopped` event is deliberately
+unsubscribed so Slack shows a non-interactive working indicator without a Stop button for anyone.
+The sync script removes any existing Stop subscription while preserving other remote events.
+The detailed progress accordion appears only after a real tool action, with the current action as
+its title. Simple responses use the native indicator until the answer or reaction is ready.
+If the workspace rejects agent status calls, ordinary replies and streamed progress still work.
+Slack lists top-bar agent display as a paid-plan feature; admins must enable the agent experience,
+and members choose visible agents from **More agents → Manage**. The Codex backend is unchanged.
+
+References: [agent development](https://docs.slack.dev/ai/developing-agents/),
+[agent sessions](https://docs.slack.dev/ai/agent-sessions/) and
+[agent display](https://slack.com/help/articles/33077521383059-Display-AI-agents-and-assistants-in-Slack).
+
 ## 3. Sign in with ChatGPT
 
 ```sh
@@ -219,7 +242,8 @@ profiles/status, reminders and channel canvas access. The manifest already decla
 an installer may need to reinstall dot if the installed app has an older grant. No Slack Pro
 subscription is needed for these core tools. Free history is limited to 90 days and dot counts
 as one of the workspace's ten apps. Lists, Workflow Builder, standalone canvases, custom user
-groups, Enterprise APIs and paid agent surfaces are excluded.
+groups and Enterprise APIs are excluded from these tools. The optional Slack agent surfaces above
+have their own plan requirements.
 
 Enable the saved event-rule subscriptions on an existing app without overwriting its OAuth URLs:
 

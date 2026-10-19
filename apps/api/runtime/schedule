@@ -9,8 +9,9 @@ the task to stand on its own: what to do, for whom, and what the answer should l
   schedule list
   schedule remove <id>
 
-Times are in the person's time zone ($DOT_TIMEZONE). Recurring tasks run at most hourly (the
-minute must be a single number). --post: this thread (default), the channel itself, or a DM.
+Times are in the person's time zone ($DOT_TIMEZONE). The minimum recurring interval is one
+minute: use "* * * * *" for every minute or "*/5 * * * *" for every five minutes.
+--post: this thread (default), the channel itself, or a DM.
 A run that finds nothing worth saying replies exactly [SILENT] and nothing is posted.
 """
 import argparse

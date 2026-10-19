@@ -1,0 +1,212 @@
+#!/usr/bin/env bun
+/** Download public data with redirects, decompression and validation before publishing the file. */
+const help = `Download a public URL with redirects, decompression and content validation.
+
+  webfetch <url> <output> [--type auto|json|image|html|text|binary]
+
+Only a validated, nonempty response replaces the output file. HTTP errors, browser verification
+pages and invalid content exit nonzero. Use integrations for authenticated data and the desktop
+browser for interactive sites. Downloads are limited to 50 MB and 30 seconds.`
+const kinds = ["auto", "json", "image", "html", "text", "binary"]
+const maxBytes = 50 * 1024 * 1024
+
+function fail(message) {
+	throw new Error(message)
+}
+
+async function validate(path, kind, contentType) {
+	const bytes = await Bun.file(path).bytes()
+	if (!bytes.length)
+		fail("The server returned an empty response; no file was saved.")
+	if (bytes.length > maxBytes)
+		fail("Download exceeds 50 MB; no file was saved.")
+	const preview = new TextDecoder().decode(bytes.subarray(0, 65536))
+	const html =
+		contentType.toLowerCase().includes("text/html") ||
+		/^\s*<(?:!doctype\s+html|html)\b/i.test(preview)
+	if (
+		html &&
+		/<title[^>]*>\s*(?:Just a moment(?:\.{3}|…)?|Attention Required[^<]*|Checking your browser[^<]*)\s*<\/title>/i.test(
+			preview,
+		)
+	)
+		fail(
+			"The site returned a browser verification page; use the desktop browser instead.",
+		)
+	if (kind === "auto") {
+		const mime = contentType.toLowerCase().split(";", 1)[0].trim()
+		kind =
+			mime === "application/json" || mime.endsWith("+json")
+				? "json"
+				: mime.startsWith("image/")
+					? "image"
+					: html
+						? "html"
+						: "binary"
+	}
+	if (["json", "image", "binary"].includes(kind) && html)
+		fail(
+			`Expected ${kind}, but the server returned HTML (possibly a login or error page); use the browser or another source.`,
+		)
+	if (kind === "json") {
+		try {
+			JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
+		} catch {
+			fail(
+				"The response is not valid JSON; check the source before parsing it.",
+			)
+		}
+	} else if (kind === "image") {
+		const child = Bun.spawn(
+			["identify", "-limit", "thread", "2", "-ping", path],
+			{
+				env: {
+					...Bun.env,
+					MAGICK_THREAD_LIMIT: "2",
+					OMP_NUM_THREADS: "2",
+				},
+				stdout: "ignore",
+				stderr: "ignore",
+			},
+		)
+		if (await child.exited)
+			fail(
+				"The response is not a valid image; use the browser or another source.",
+			)
+	} else if (kind === "html" || kind === "text") {
+		if (kind === "html" && !html)
+			fail("Expected HTML, but the response is a different file type.")
+		const charset =
+			contentType.match(/charset\s*=\s*["']?([^;\s"']+)/i)?.[1] ?? "utf-8"
+		try {
+			new TextDecoder(charset, { fatal: true }).decode(bytes)
+		} catch {
+			fail(
+				"The response is not readable text; check its content type and encoding.",
+			)
+		}
+	}
+	return { type: kind, bytes: bytes.length }
+}
+
+async function main(args) {
+	if (args.length === 1 && ["--help", "-h", "help"].includes(args[0])) {
+		console.log(help)
+		return
+	}
+	const positional = []
+	let kind = "auto"
+	for (let i = 0; i < args.length; i++) {
+		if (args[i] === "--type") kind = args[++i]
+		else if (args[i].startsWith("--type=")) kind = args[i].slice(7)
+		else positional.push(args[i])
+	}
+	if (positional.length !== 2 || !kinds.includes(kind)) fail(help)
+	const [input, output] = positional
+	let url
+	try {
+		url = new URL(input)
+	} catch {
+		fail("Give a valid HTTP(S) URL.")
+	}
+	if (
+		!["http:", "https:"].includes(url.protocol) ||
+		!url.hostname ||
+		url.username ||
+		url.password ||
+		/[\r\n]/.test(input)
+	)
+		fail("Use an HTTP(S) URL without embedded credentials.")
+	const slash = output.lastIndexOf("/")
+	const parent = slash < 0 ? "." : output.slice(0, slash) || "/"
+	const temp = `${parent}/.webfetch-${crypto.randomUUID()}`
+	// Infer output types too: an HTML error page must never become data.json or image.png.
+	if (kind === "auto") {
+		const suffix = output.match(/\.([^./]+)$/)?.[1].toLowerCase()
+		if (suffix === "json") kind = "json"
+		else if (
+			[
+				"png",
+				"jpg",
+				"jpeg",
+				"gif",
+				"webp",
+				"bmp",
+				"tif",
+				"tiff",
+			].includes(suffix)
+		)
+			kind = "image"
+		else if (["html", "htm"].includes(suffix)) kind = "html"
+	}
+	try {
+		await Bun.write(temp, "", { createPath: true })
+		const child = Bun.spawn(
+			[
+				"curl",
+				"--disable",
+				"--silent",
+				"--show-error",
+				"--location",
+				"--compressed",
+				"--fail",
+				"--connect-timeout",
+				"10",
+				"--max-time",
+				"30",
+				"--max-redirs",
+				"5",
+				"--max-filesize",
+				String(maxBytes),
+				"--proto",
+				"=http,https",
+				"--proto-redir",
+				"=http,https",
+				"--output",
+				temp,
+				"--write-out",
+				"%{http_code}\n%{content_type}",
+				"--url",
+				input,
+			],
+			{ stdout: "pipe", stderr: "pipe" },
+		)
+		const [exitCode, stdout, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+		])
+		const [status = "000", contentType = ""] = stdout.split(/\r?\n/)
+		if (exitCode) {
+			if (status === "429")
+				fail(
+					"HTTP 429: the source is rate limiting requests; wait or use another source.",
+				)
+			if (status === "401" || status === "403")
+				fail(
+					`HTTP ${status}: the source denied access; use its supported integration or the browser.`,
+				)
+			if (Number(status) >= 400)
+				fail(
+					`HTTP ${status}: the source returned an error; no file was saved.`,
+				)
+			fail(stderr.trim() || "The download failed; no file was saved.")
+		}
+		const result = await validate(temp, kind, contentType)
+		await Bun.$`/bin/mv -fT -- ${temp} ${output}`.quiet()
+		console.log(
+			JSON.stringify({
+				path: output,
+				status: Number(status),
+				content_type: contentType,
+				...result,
+			}),
+		)
+	} finally {
+		await Bun.file(temp)
+			.delete()
+			.catch(() => {})
+	}
+}
+
+await main(Bun.argv.slice(2))

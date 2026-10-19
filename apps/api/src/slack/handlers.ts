@@ -29,6 +29,7 @@ import {
 } from "./context"
 import { downloadAttachments, uploadFiles } from "./attachments"
 import { closeInterrupted, openReply, type Reply } from "./reply"
+import { AgentSessions } from "./agent-sessions"
 import { computerInUse, publishHome } from "../agent/desktop"
 import type { Step } from "../agent/steps"
 import { markDone, markReply, markStarted, takeInterrupted } from "../inflight"
@@ -47,6 +48,7 @@ const RESUME_WITHIN_MS = 30 * 60 * 1000
 const DEDUPE_MS = 10 * 60 * 1000
 /** A turn is tried at most this many times when its failure is worth retrying (see errors.ts). */
 const MAX_ATTEMPTS = 2
+const agentSessions = new AgentSessions()
 
 /** A turn that failed for good, already classified and logged. */
 class TurnFailed extends Error {
@@ -97,21 +99,28 @@ async function handle(
 	const key = sessionKey(trigger.channel, threadTs, trigger.userId)
 	// Keyed by request, not session: several can be queued for one thread.
 	const inflightKey = triggerKey(trigger)
+	const agent = agentSessions.track(client, {
+		channel: trigger.channel,
+		threadTs,
+		userId: trigger.userId,
+		teamId: trigger.teamId,
+	})
 	await markStarted(inflightKey, trigger).catch(() => {})
 
 	await serialize(key, async () => {
 		let reply: Reply | undefined
 		try {
-			reply = await openReply(client, {
-				channel: trigger.channel,
-				threadTs,
-				userId: trigger.userId,
-				teamId: trigger.teamId,
-			})
-			await markReply(inflightKey, {
-				ts: reply.ts,
-				streaming: reply.streaming,
-			}).catch(() => {})
+			await agent.start()
+			reply = await openReply(
+				client,
+				{
+					channel: trigger.channel,
+					threadTs,
+					userId: trigger.userId,
+					teamId: trigger.teamId,
+				},
+				message => markReply(inflightKey, message).catch(() => {}),
+			)
 			const paused = usagePause()
 			if (paused)
 				throw new TurnFailed({
@@ -143,6 +152,7 @@ async function handle(
 			let result: TurnResult
 			for (let attempt = 1; ; attempt++) {
 				try {
+					agent.signal.throwIfAborted()
 					// Rebuilt each attempt: after a thread reset the fresh thread needs the whole conversation.
 					turn = await buildTurnInput({
 						client,
@@ -156,6 +166,7 @@ async function handle(
 						turn.attachments,
 					)
 					result = await runTurn({
+						signal: agent.signal,
 						config,
 						user,
 						threadId: session?.codexThreadId,
@@ -173,6 +184,7 @@ async function handle(
 					})
 					break
 				} catch (error) {
+					if (agent.signal.aborted) throw error
 					const failure = classify(error, {
 						utcClock: config.runtime === "docker",
 					})
@@ -186,14 +198,10 @@ async function handle(
 					}
 					if (!failure.retry || attempt >= MAX_ATTEMPTS)
 						throw new TurnFailed(failure)
-					reply.step({
-						id: `retry-${attempt}`,
-						title: `${failure.message} Trying again…`,
-						status: "error",
-					})
 					await Bun.sleep(failure.retryAfterMs)
 				}
 			}
+			agent.signal.throwIfAborted()
 			await saveSession(key, {
 				codexThreadId: result.threadId,
 				lastSeenTs: trigger.ts,
@@ -258,6 +266,18 @@ async function handle(
 				})
 			}
 		} catch (error) {
+			if (agent.signal.aborted) {
+				if (reply)
+					await reply
+						.cancel()
+						.catch(failed =>
+							console.warn(
+								`[${key}] couldn't confirm stop`,
+								failed,
+							),
+						)
+				return
+			}
 			const failure =
 				error instanceof TurnFailed
 					? error.failure
@@ -280,6 +300,7 @@ async function handle(
 			else await notifyDirectly(client, trigger, message)
 			await react(client, trigger.channel, trigger.ts, "x")
 		} finally {
+			await agent.finish()
 			await markDone(inflightKey).catch(() => {})
 		}
 	})
@@ -347,6 +368,11 @@ export function registerHandlers(
 		userId !== undefined &&
 		userId !== botUserId &&
 		(config.allowedUsers === "*" || config.allowedUsers.has(userId))
+
+	app.event("agent_session_stopped", async ({ event }) => {
+		if (!isAllowed(event.user)) return
+		agentSessions.stop(event.channel, event.thread_ts)
+	})
 
 	if (features) {
 		for (const name of ruleEvents)

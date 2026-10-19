@@ -137,6 +137,10 @@ export async function prepareDocker(config: BotConfig): Promise<{
 		)
 		await Bun.$`chmod 755 ${runtimeDir}/bin/${name}`.quiet()
 	}
+	// Bun-based tools run inside the same Linux container as Codex. Keep the executable in
+	// the shared read-only runtime mount, so adding a helper doesn't rebuild every user's image.
+	await Bun.write(`${runtimeDir}/bin/bun`, Bun.file(Bun.argv[0]!))
+	await Bun.$`chmod 755 ${runtimeDir}/bin/bun`.quiet()
 
 	await writeModelCatalog(hostModelCatalog)
 	const proxy = await startModelProxy()

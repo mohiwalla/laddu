@@ -47,8 +47,11 @@ export function unwrapCommand(command: string): string {
 export function commandTitle(command: string): string {
 	const host = command.match(/https?:\/\/([^/\s'"?#]+)/)?.[1]
 	const program = command.trim().split(/\s+/)[0]?.replace(/^.*\//, "") ?? ""
-	if (host && /\b(curl|wget)\b/.test(command)) return `Fetching ${host}`
+	if (host && /\b(curl|wget|webfetch)\b/.test(command))
+		return `Fetching ${host}`
 	if (/^python3?$/.test(program)) return "Running a Python script"
+	if (program === "desktop" && /^\s*desktop\s+exec\s/.test(command))
+		return "Running a desktop command"
 	if (/^(unzip|tar|gunzip|7z)$/.test(program)) return "Unpacking files"
 	if (
 		/^(rg|grep|find|ls|cat|head|tail|sed|awk|wc|jq|file|stat|tree)$/.test(
@@ -104,11 +107,18 @@ function toStep(item: ThreadItem, done: boolean): Step | null {
 	switch (item.type) {
 		case "command_execution": {
 			const command = unwrapCommand(item.command)
+			// rg/grep use exit 1 for an ordinary empty search. Only handle a single simple
+			// command, so a failed pipeline or a later command can't be mistaken for no matches.
+			const noMatches =
+				item.exit_code === 1 &&
+				/^\s*(?:\S*\/)?(?:rg|grep)\s/.test(command) &&
+				!/[;&|`$<>()\n]/.test(command)
 			return {
 				id: item.id,
 				title: commandTitle(command),
-				status: status(item.status),
-				details: command,
+				status: noMatches ? "complete" : status(item.status),
+				details: noMatches ? `${command}\nNo matches found.` : command,
+				computer: /^\s*desktop\s+exec\s/.test(command) || undefined,
 			}
 		}
 		case "mcp_tool_call":
@@ -176,7 +186,9 @@ export function stepTracker(onStep: (step: Step) => void) {
 				...step,
 				id: computer.id,
 				title: computer.title,
-				details: `${count} action${count === 1 ? "" : "s"} · ${step.title}`,
+				details:
+					step.details ??
+					`${count} action${count === 1 ? "" : "s"} · ${step.title}`,
 			})
 			return
 		}

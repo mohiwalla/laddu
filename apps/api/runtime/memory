@@ -109,6 +109,9 @@ def find(entries, text):
 
 
 def main(args):
+    if args in (["--help"], ["-h"], ["help"]):
+        print(__doc__.strip())
+        return
     if args[:1] == ["show"]:
         blocks = [render(store, entries) for store in STORES if (entries := load(store))]
         print("\n\n".join(blocks) if blocks else "(memory is empty)")

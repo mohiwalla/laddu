@@ -111,6 +111,9 @@ def add(db):
 
 
 def main(args):
+    if args in (["--help"], ["-h"], ["help"]):
+        print(__doc__.strip())
+        return
     command = args[0] if args else ""
     db = connect()
     if command == "search" and len(args) >= 2:

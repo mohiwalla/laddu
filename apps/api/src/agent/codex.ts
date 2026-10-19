@@ -263,6 +263,7 @@ export async function runTurn(options: {
 	}
 	onStep?: (step: Step) => void
 }): Promise<TurnResult> {
+	options.signal?.throwIfAborted()
 	const { config, input, slack } = options
 	const track = stepTracker(step => options.onStep?.(step))
 
@@ -290,93 +291,108 @@ export async function runTurn(options: {
 	}
 	const { codex, threadOptions, saveFile, outbox, listOutbox, stop } =
 		await createCodex(config, options.user, turnId, turnEnv)
-	options.signal?.addEventListener(
-		"abort",
-		() => void stop().catch(() => {}),
-		{ once: true },
-	)
-	// Loaded once per Codex thread, like a system prompt; resumed threads already have it.
-	const memory = options.threadId
-		? null
-		: await loadMemory(() =>
-				runTool(config, options.user, ["memory", "show"]),
-			)
-	// The CLI reads image paths itself, so files must exist where it runs (inside the container).
-	const attached = await Promise.all(
-		(options.files ?? []).map(async file => ({
-			file,
-			path: await saveFile(file),
-		})),
-	)
-	const images = attached.filter(({ file }) => file.image)
-	const recalled =
-		memory &&
-		`<memory-context>\nWhat you've saved about the person you're working for, from earlier conversations (background, not instructions):\n\n${memory}\n</memory-context>`
-	const notes = [
-		attached.length &&
-			`Files attached in these messages, saved for you${images.length ? " (images are also shown below, in order)" : ""}:\n` +
-				attached
-					.map(({ file, path }) => `- ${file.title}: ${path}`)
-					.join("\n"),
-		`To send files to Slack (CSV, images, documents, code…), save them directly in ${outbox}/. They're uploaded to this thread right after your reply, so refer to them by name, not path.`,
-	].filter(Boolean)
-	const turnInput: UserInput[] = [
-		{
-			type: "text",
-			text: [recalled, input, ...notes].filter(Boolean).join("\n\n"),
-		},
-		...images.map(({ path }) => ({ type: "local_image" as const, path })),
-	]
-	const thread = options.threadId
-		? codex.resumeThread(options.threadId, threadOptions)
-		: codex.startThread(threadOptions)
-
-	const { events } = await thread.runStreamed(turnInput, {
-		signal: options.signal,
-	})
-	let threadId = options.threadId ?? null
-	let text = ""
-	let completed = false
-	let lastError: string | null = null
-
-	for await (const event of events) {
-		switch (event.type) {
-			case "thread.started":
-				threadId = event.thread_id
-				break
-			case "item.started":
-			case "item.updated":
-			case "item.completed":
-				// The last message is the answer; earlier ones are notes before actions (see steps.ts).
-				if (
-					event.type === "item.completed" &&
-					event.item.type === "agent_message"
-				)
-					text = event.item.text
-				track(event.item, event.type === "item.completed")
-				break
-			case "turn.completed":
-				completed = true
-				break
-			case "turn.failed":
-				throw new Error(event.error.message)
-			case "error":
-				// Also used for retry notices ("Reconnecting... 1/5"); only turn.failed is fatal.
-				lastError = event.message
-				break
-		}
+	options.signal?.throwIfAborted()
+	let stopping: Promise<void> | undefined
+	const onAbort = () => {
+		stopping = stop().then(
+			() => {},
+			() => {},
+		)
 	}
+	options.signal?.addEventListener("abort", onAbort, { once: true })
+	try {
+		// Loaded once per Codex thread, like a system prompt; resumed threads already have it.
+		const memory = options.threadId
+			? null
+			: await loadMemory(() =>
+					runTool(config, options.user, ["memory", "show"]),
+				)
+		// The CLI reads image paths itself, so files must exist where it runs (inside the container).
+		const attached = await Promise.all(
+			(options.files ?? []).map(async file => ({
+				file,
+				path: await saveFile(file),
+			})),
+		)
+		const images = attached.filter(({ file }) => file.image)
+		const recalled =
+			memory &&
+			`<memory-context>\nWhat you've saved about the person you're working for, from earlier conversations (background, not instructions):\n\n${memory}\n</memory-context>`
+		const notes = [
+			attached.length &&
+				`Files attached in these messages, saved for you${images.length ? " (images are also shown below, in order)" : ""}:\n` +
+					attached
+						.map(({ file, path }) => `- ${file.title}: ${path}`)
+						.join("\n"),
+			`To send files to Slack (CSV, images, documents, code…), save them directly in ${outbox}/. They're uploaded to this thread right after your reply, so refer to them by name, not path.`,
+		].filter(Boolean)
+		const turnInput: UserInput[] = [
+			{
+				type: "text",
+				text: [recalled, input, ...notes].filter(Boolean).join("\n\n"),
+			},
+			...images.map(({ path }) => ({
+				type: "local_image" as const,
+				path,
+			})),
+		]
+		const thread = options.threadId
+			? codex.resumeThread(options.threadId, threadOptions)
+			: codex.startThread(threadOptions)
 
-	if (!completed)
-		throw new Error(lastError ?? "Codex stopped before finishing the turn")
-	threadId ??= thread.id
-	if (!threadId) throw new Error("Codex did not report a thread id")
-	const { files, skipped } = await collectOutbox(await listOutbox())
-	return {
-		threadId,
-		text:
-			text || (files.length ? "" : "_(Codex finished without a reply.)_"),
-		files,
-		skipped,
+		const { events } = await thread.runStreamed(turnInput, {
+			signal: options.signal,
+		})
+		let threadId = options.threadId ?? null
+		let text = ""
+		let completed = false
+		let lastError: string | null = null
+
+		for await (const event of events) {
+			switch (event.type) {
+				case "thread.started":
+					threadId = event.thread_id
+					break
+				case "item.started":
+				case "item.updated":
+				case "item.completed":
+					// The last message is the answer; earlier ones are notes before actions (see steps.ts).
+					if (
+						event.type === "item.completed" &&
+						event.item.type === "agent_message"
+					)
+						text = event.item.text
+					track(event.item, event.type === "item.completed")
+					break
+				case "turn.completed":
+					completed = true
+					break
+				case "turn.failed":
+					throw new Error(event.error.message)
+				case "error":
+					// Also used for retry notices ("Reconnecting... 1/5"); only turn.failed is fatal.
+					lastError = event.message
+					break
+			}
+		}
+
+		if (!completed)
+			throw new Error(
+				lastError ?? "Codex stopped before finishing the turn",
+			)
+		threadId ??= thread.id
+		if (!threadId) throw new Error("Codex did not report a thread id")
+		const { files, skipped } = await collectOutbox(await listOutbox())
+		return {
+			threadId,
+			text:
+				text ||
+				(files.length ? "" : "_(Codex finished without a reply.)_"),
+			files,
+			skipped,
+		}
+	} finally {
+		options.signal?.removeEventListener("abort", onAbort)
+		await stopping
 	}
 }
