@@ -17,6 +17,26 @@ send you this:".
   slack automate welcome <channel> "Welcome <@{user}>!"
   slack automate add '<JSON rule>' | list | history | remove|enable|disable <id>
   slack form '<JSON form>'
+  slack ask "<question>" [--choice "A" --choice "B" ...] [--multiple | --buttons] [--no-other]
+  slack ask '<JSON question>'                              a form: several fields in a popup
+
+ask puts a question to the person in this thread and waits for their answer. Choices show as radio
+buttons (checkboxes with --multiple; a dropdown past 10 choices, up to 100), with a Send button and
+"Something else..." for a typed answer unless --no-other. --buttons: up to 5 choices as one-click
+buttons. No choices: a typed answer. Use it instead of asking in your reply when you need their
+answer to carry on. It waits up to 10 minutes; if they haven't answered by then, end your turn
+saying you're waiting, and their answer comes to you later as a new message.
+
+A JSON question: {"text": "...", "title": "popup title, 24 max", "fields": [...]} (or choices,
+multiple, buttons, other as above). Each field: {"label", "type", "name", "required" (default
+true), "hint", "placeholder", "initial"} and per type:
+  text (multiline, min, max length) | number (decimal, min, max) | email | url
+  select | multiselect (options, up to 100; max picks) | radio | checkboxes (options, up to 10)
+  date (initial YYYY-MM-DD) | time (HH:MM) | datetime (ISO)
+  user | users | channel | channels | conversation | conversations (initial: IDs; max picks)
+  file (max files, up to 10; filetypes) | richtext
+The answer to a form is JSON by field label: IDs for people and channels, ISO for date-times,
+{id, name} for files (fetch them with `slack download`), null for fields left empty.
 
 JSON arguments may be read from @filename. Run slack methods <method> for required/optional
 arguments and token requirements. Results include pagination cursors; continue explicitly.
@@ -56,6 +76,38 @@ def call(path, body=None, method="POST"):
         sys.exit(f"error: {message}")
     except urllib.error.URLError as error:
         sys.exit(f"error: couldn't reach the bot ({error.reason}).")
+
+
+def ask(body):
+    if not API or not CALLER:
+        sys.exit("error: Slack isn't available here (no connection to the bot in this turn).")
+    headers = {"x-dot-caller": CALLER, "content-type": "application/json"}
+
+    def send(request):
+        try:
+            with urllib.request.urlopen(request, timeout=90) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as error:
+            try:
+                message = json.load(error)["text"]
+            except Exception:
+                message = f"HTTP {error.code}"
+            sys.exit(f"error: {message}")
+        except urllib.error.URLError as error:
+            sys.exit(f"error: couldn't reach the bot ({error.reason}).")
+
+    question = send(urllib.request.Request(f"{API}/slack/ask", method="POST", data=json.dumps(body).encode(), headers=headers))["text"]
+    print("Asked in the thread; waiting for their answer...", flush=True)
+    while True:
+        result = send(urllib.request.Request(f"{API}/slack/ask?{urllib.parse.urlencode({'id': question})}", headers=headers))
+        if result["status"] == "answered":
+            print(f"Their answer: {result['answer']}")
+            return
+        if result["status"] == "later":
+            print("No answer within 10 minutes. The question stays open in the thread: end your turn now, saying you're waiting for their answer. When they answer, it comes to you as a new message.")
+            return
+        if result["status"] == "gone":
+            sys.exit("error: the question is no longer open.")
 
 
 def json_input(value):
@@ -149,6 +201,12 @@ def main():
     download.add_argument("path")
     form = commands.add_parser("form")
     form.add_argument("definition")
+    question = commands.add_parser("ask")
+    question.add_argument("text")
+    question.add_argument("--choice", action="append", default=[])
+    question.add_argument("--multiple", action="store_true", help="let them tick several choices")
+    question.add_argument("--buttons", action="store_true", help="choices as one-click buttons")
+    question.add_argument("--no-other", action="store_true", help="no typed answer besides the choices")
     automate = commands.add_parser("automate")
     automation_commands = automate.add_subparsers(dest="operation", required=True)
     welcome = automation_commands.add_parser("welcome")
@@ -201,6 +259,11 @@ def main():
         file_transfer("/slack/download?" + urllib.parse.urlencode({"file": args.file}), destination=args.path)
     elif args.command == "form":
         call("/slack/form", json_input(args.definition))
+    elif args.command == "ask":
+        if args.text.lstrip().startswith("{") or args.text.startswith("@"):
+            ask(json_input(args.text))
+        else:
+            ask({"text": args.text, "choices": args.choice, "multiple": args.multiple, "buttons": args.buttons, "other": not args.no_other})
     elif args.command == "automate":
         if args.operation == "welcome":
             body = {"operation": "add", "event": "member_joined_channel", "channel": args.channel, "action": "message", "text": args.text}

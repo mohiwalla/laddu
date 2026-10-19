@@ -31,6 +31,7 @@ import {
 import { downloadAttachments, uploadFiles } from "./attachments"
 import { closeInterrupted, openReply, type Reply } from "./reply"
 import { AgentSessions } from "./agent-sessions"
+import { answerWithMessage, registerQuestions, turnEnded } from "./questions"
 import { computerInUse, publishHome } from "../agent/desktop"
 import type { Step } from "../agent/steps"
 import { markDone, markReply, markStarted, takeInterrupted } from "../inflight"
@@ -83,9 +84,14 @@ type Steered = { seen: string; lines: string[] }
  */
 const steering = new Map<string, { steer: Steer; steered: Steered }>()
 
+/** A mention or DM's own words, without mentions. */
+const ownWords = (trigger: Trigger) =>
+	trigger.via
+		? ""
+		: (trigger.text ?? "").replace(/<@[A-Z0-9]+(?:\|[^>]*)?>/g, "").trim()
+
 /** "STOP" on its own, in capitals (a mention of dot around it is fine). */
-const isStop = (trigger: Trigger) =>
-	!trigger.via && trigger.text?.replace(/<@[A-Z0-9]+(?:\|[^>]*)?>/g, "").trim() === "STOP"
+const isStop = (trigger: Trigger) => ownWords(trigger) === "STOP"
 
 /** Adds a reaction; false if Slack refused it (unknown emoji, no access). */
 async function react(
@@ -125,8 +131,17 @@ async function handle(
 				.catch(() => {})
 		return
 	}
+	// dot asked them something here (`slack ask`): a reply in the thread answers it.
+	const words = ownWords(trigger)
+	if (words && answerWithMessage(client, key, words) === "answered") {
+		await react(client, trigger.channel, trigger.ts, "eyes")
+		return
+	}
 	// dot is already working on something of theirs here: this message goes into that turn.
-	if (steering.has(key) && (await steerInto(client, config, botUserId, trigger, key)))
+	if (
+		steering.has(key) &&
+		(await steerInto(client, config, botUserId, trigger, key))
+	)
 		return
 	// Keyed by request, not session: several can be queued for one thread.
 	const inflightKey = triggerKey(trigger)
@@ -338,6 +353,7 @@ async function handle(
 			else await notifyDirectly(client, trigger, message)
 			await react(client, trigger.channel, trigger.ts, "x")
 		} finally {
+			turnEnded(client, key, agent.signal.aborted)
 			await agent.finish()
 			await markDone(inflightKey).catch(() => {})
 		}
@@ -360,16 +376,25 @@ async function steerInto(
 	try {
 		const input = await steerInput({ client, trigger, botUserId })
 		if (!input) return false
-		const files = await downloadAttachments(config.slackBotToken, input.attachments)
+		const files = await downloadAttachments(
+			config.slackBotToken,
+			input.attachments,
+		)
 		// It may have ended while the message was read.
-		if (steering.get(key) !== running || !(await running.steer(input.text, files)))
+		if (
+			steering.get(key) !== running ||
+			!(await running.steer(input.text, files))
+		)
 			return false
 		running.steered.seen = trigger.ts
 		running.steered.lines.push(input.line)
 		await react(client, trigger.channel, trigger.ts, "eyes")
 		return true
 	} catch (error) {
-		console.warn(`[${key}] couldn't add the message to the running turn`, error)
+		console.warn(
+			`[${key}] couldn't add the message to the running turn`,
+			error,
+		)
 		return false
 	}
 }
@@ -436,6 +461,20 @@ export function registerHandlers(
 		userId !== undefined &&
 		userId !== botUserId &&
 		(config.allowedUsers === "*" || config.allowedUsers.has(userId))
+
+	// Answers to `slack ask` that come after the turn stopped waiting: a turn of their own.
+	registerQuestions(app, (question, request) => {
+		void handle(app.client, config, botUserId, {
+			teamId: question.teamId,
+			userId: question.userId,
+			channel: question.channel,
+			ts: question.ts,
+			threadTs: question.threadTs,
+			isDm: question.channel.startsWith("D"),
+			via: "answer",
+			request,
+		})
+	})
 
 	// Slack's Stop button: anyone in the thread sees it, so it only stops the clicker's own work.
 	app.event("agent_session_stopped", async ({ event }) => {

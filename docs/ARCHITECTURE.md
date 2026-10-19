@@ -364,6 +364,16 @@ be shared. Submission runs as the submitter after rechecking channel membership 
 allow-list. Duplicate view submissions are suppressed. Definitions survive restarts and expire
 after 30 days. Slack Free supports these ordinary interactions without Workflow Builder.
 
+`slack ask` (src/slack/questions.ts) posts a question in the turn's thread: one-click buttons, or
+radio buttons, checkboxes or a dropdown (in an input block, so picks don't round-trip) with Send,
+and a modal for a typed answer. A JSON question is a one-time form: its Answer button opens a modal
+with any of Slack's inputs (src/slack/question-fields.ts: text, number, email, URL, selects, radio,
+checkboxes, date/time pickers, people and channel pickers, files, rich text). A reply in the
+thread also answers any question. Only the person the turn is for can answer. The
+command long-polls the bot API, so the answer lands in the same turn; after 10 minutes, or once the
+turn ends, a later answer starts a new turn (`via: "answer"`). STOP withdraws open questions.
+Questions live in memory, like the turns waiting on them.
+
 ## Ways in
 
 - **@mention** in channels (`app_mention`) and group DMs (`message.mpim` containing the mention;

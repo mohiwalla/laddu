@@ -76,8 +76,11 @@ export type Trigger = {
 	/** Who asked; the turn runs for them, in their container. */
 	userId: string
 	/** How they asked. Absent means a mention or DM. */
-	via?: "reaction" | "command" | "shortcut"
-	/** For `command`/`shortcut`: what they typed. For `reaction`: the emoji's name. */
+	via?: "reaction" | "command" | "shortcut" | "answer"
+	/**
+	 * For `command`/`shortcut`: what they typed. For `reaction`: the emoji's name. For `answer`:
+	 * their answer to a question dot asked with `slack ask`, after that turn stopped waiting.
+	 */
 	request?: string
 	/** The message's own text, for a mention or DM (to spot STOP). */
 	text?: string
@@ -469,7 +472,11 @@ export async function steerInput(options: {
 	client: WebClient
 	trigger: Trigger
 	botUserId: string
-}): Promise<{ text: string; attachments: SlackAttachment[]; line: string } | null> {
+}): Promise<{
+	text: string
+	attachments: SlackAttachment[]
+	line: string
+} | null> {
 	const { client, trigger, botUserId } = options
 	if (!trigger.threadTs) return null
 	const message = (
@@ -479,7 +486,12 @@ export async function steerInput(options: {
 		})
 	).find(candidate => candidate.ts === trigger.ts)
 	if (!message) return null
-	const line = await formatMessage(client, message, botUserId, new Set([trigger.userId]))
+	const line = await formatMessage(
+		client,
+		message,
+		botUserId,
+		new Set([trigger.userId]),
+	)
 	const attachments = (message.files ?? [])
 		.map(asAttachment)
 		.filter(attachment => attachment !== null)
@@ -625,7 +637,9 @@ export async function buildTurnInput(options: {
 				? `${requester} asked you with /dot: "${request}". Respond to that request.`
 				: trigger.via === "shortcut"
 					? `${requester} used "Ask dot" on the last message above${request ? ` and asked: "${request}"` : ", asking you to help with it"}. Respond to that.`
-					: `Respond to the last message, from ${requester}.`
+					: trigger.via === "answer"
+						? `${requester} answered the question you asked them in this thread. ${request} Carry on with what you were doing.`
+						: `Respond to the last message, from ${requester}.`
 	const text = [
 		header,
 		"",

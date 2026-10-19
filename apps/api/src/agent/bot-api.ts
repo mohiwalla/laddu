@@ -1,7 +1,7 @@
 /**
  * A small API for dot's commands inside a container that need the bot itself: `schedule`, `ado`
  * (Azure DevOps) and `ms` (Microsoft 365), whose tokens stay here, `slack` (find people, DM
- * them as the person or from dot) and `desktop link`.
+ * them as the person or from dot, ask them questions) and `desktop link`.
  *
  * Each Codex turn gets a caller credential signed by this process: who the turn runs for and the
  * Slack thread it came from. The command sends it back, so a request can only act as that person,
@@ -19,6 +19,7 @@ import { findPeople, sendOnBehalf } from "../slack/messaging"
 import * as slackSignIn from "../slack/user-tokens"
 import { callSlack, capabilities, object, slackFailure } from "../slack/api"
 import { transfer } from "../slack/transfers"
+import * as questions from "../slack/questions"
 import type { SlackAutomations } from "../slack/automations"
 import type { SlackForms } from "../slack/forms"
 import { sendDesktopLink } from "./desktop"
@@ -396,6 +397,7 @@ async function handleSlack(
 	deps: Deps,
 ): Promise<Response> {
 	const person = { teamId: caller.teamId, userId: caller.userId }
+	if (action === "ask") return handleAsk(request, caller, deps)
 	try {
 		if (
 			["methods", "capabilities"].includes(action ?? "") &&
@@ -539,6 +541,38 @@ async function handleSlack(
 		return reply(404, "Use find, dm, status or connect.")
 	} catch (error) {
 		return failed(error, "Slack")
+	}
+}
+
+/**
+ * `slack ask`: POST puts the question in the thread and returns its ID; GET ?id= is one long poll
+ * for the answer (the command repeats it while the turn waits).
+ */
+async function handleAsk(
+	request: Request,
+	caller: Caller,
+	deps: Deps,
+): Promise<Response> {
+	if (caller.scheduled)
+		return reply(
+			403,
+			"A scheduled run can't ask; nobody is in the conversation.",
+		)
+	try {
+		if (request.method === "POST") {
+			const input = await request.json().catch(() => null)
+			if (!object(input)) return reply(400, "Give a JSON object.")
+			return reply(200, await questions.ask(deps.client, caller, input))
+		}
+		const id = new URL(request.url).searchParams.get("id")
+		if (request.method !== "GET" || !id)
+			return reply(405, "Use POST, or GET ?id=.")
+		const result = await questions.poll(id, caller)
+		return Response.json({ ok: true, ...result })
+	} catch (error) {
+		if (error instanceof questions.QuestionError)
+			return reply(400, error.message)
+		return failed(error, "Slack question")
 	}
 }
 
