@@ -1,0 +1,23 @@
+{
+	"name": "@repo/cli",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "slack-dot: set up and run dot, the Slack assistant backed by Codex",
+	"bin": {
+		"slack-dot": "src/index.ts"
+	},
+	"scripts": {
+		"build": "bun run build.ts",
+		"typecheck": "tsc --noEmit",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"@repo/api": "workspace:*"
+	},
+	"devDependencies": {
+		"@repo/typescript-config": "workspace:*",
+		"@types/bun": "latest",
+		"typescript": "^5.9.0"
+	}
+}

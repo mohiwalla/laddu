@@ -597,8 +597,9 @@ export function registerHandlers(
 		})
 	})
 
-	// `/dot <request>`: dot posts the request where it was typed and answers in its thread.
-	app.command("/dot", async ({ command, ack, respond, client, context }) => {
+	// `/dot <request>`: dot posts the request where it was typed and answers in its thread. Any
+	// command name: `slack-dot setup` names it after the bot, and Slack only sends this app's own.
+	app.command(/^\//, async ({ command, ack, respond, client, context }) => {
 		await ack()
 		if (!isAllowed(command.user_id)) {
 			await respond({

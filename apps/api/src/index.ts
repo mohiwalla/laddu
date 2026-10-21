@@ -28,7 +28,7 @@ const config = loadBotConfig()
 const runtime =
 	config.runtime === "docker"
 		? `docker (${(await prepareDocker(config)).tag})`
-		: (await prepareCodexHome(config.workdir), "host")
+		: (await prepareCodexHome(config.workdir, config.localDir), "host")
 // Fail fast if `bun run login` hasn't been run (or the session has ended).
 await getAccessToken()
 // Socket Mode: Slack connects over a websocket, so no public URL is needed.

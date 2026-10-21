@@ -33,7 +33,10 @@ import { stepTracker, type Step } from "./steps"
 import { hostToolEnv, runTool } from "./tools"
 
 /** Host runtime: writes the bot's own CODEX_HOME/config.toml and links in the shared skills. */
-export async function prepareCodexHome(workdir: string): Promise<void> {
+export async function prepareCodexHome(
+	workdir: string,
+	localDir: string,
+): Promise<void> {
 	const modelCatalog = `${paths.codexHome}/models.json`
 	await writeModelCatalog(modelCatalog)
 	await writePrivate(
@@ -42,11 +45,10 @@ export async function prepareCodexHome(workdir: string): Promise<void> {
 	)
 	const skills = `${paths.codexHome}/skills`
 	await Bun.$`mkdir -p ${skills}`.quiet()
-	for (const [link, source] of [
-		["dot", "skills"],
-		["team", "skills.local"],
+	for (const [link, dir] of [
+		["dot", `${workdir}/skills`],
+		["team", `${localDir}/skills.local`],
 	] as const) {
-		const dir = `${workdir}/${source}`
 		const stat = await Bun.file(dir)
 			.stat()
 			.catch(() => null)
@@ -222,7 +224,7 @@ async function createCodex(
 		const toolEnv = hostToolEnv(user)
 		// Codex reads the persona from the workdir; the private additions go in as its global
 		// instructions (CODEX_HOME/AGENTS.md), refreshed each turn like the persona.
-		const privateNotes = Bun.file(`${config.workdir}/AGENTS.local.md`)
+		const privateNotes = Bun.file(`${config.localDir}/AGENTS.local.md`)
 		if (await privateNotes.exists())
 			await writePrivate(
 				`${paths.codexHome}/AGENTS.md`,

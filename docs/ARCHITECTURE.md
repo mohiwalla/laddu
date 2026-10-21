@@ -13,6 +13,8 @@ Turborepo monorepo on Bun workspaces. Bun APIs only, no `node:*` imports (see `A
 
 ```text
 apps/
+  cli/                 `slack-dot`, the installer and admin CLI (docs/INSTALLER.md), published to
+                       npm with the bot inside; install.sh is its one-command bootstrap
   api/                 the bot backend (this doc)
     src/
       index.ts         boot: config, ChatGPT token check, Slack Socket Mode

@@ -4,7 +4,7 @@
  * A named volume keeps each user's workspace and Codex sessions across restarts.
  */
 import type { BotConfig } from "../config"
-import { paths } from "../config"
+import { instance, paths } from "../config"
 import { writePrivate } from "../files"
 import { codexConfig } from "./codex-config"
 import { startModelProxy, type ModelProxy } from "./model-proxy"
@@ -168,6 +168,13 @@ export async function prepareDocker(config: BotConfig): Promise<{
 
 const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "")
 
+/** `docker ps` filter for this bot's containers: all dot containers, or just this instance's. */
+export const ownContainers = [
+	"--filter",
+	"label=dot.bot=1",
+	...(instance ? ["--filter", `label=dot.instance=${instance}`] : []),
+]
+
 /** First name for a Slack user ID, set at startup (index.ts); only used to make names readable. */
 let firstNameOf: (userId: string) => Promise<string> = async () => ""
 export function nameContainersWith(
@@ -176,14 +183,19 @@ export function nameContainersWith(
 	firstNameOf = lookup
 }
 
-/** `dot-<first name>-<team>-<user>`, e.g. dot-alex-t0123abcd-u0456efgh; the IDs keep it unique. */
+/**
+ * `dot-[<instance>-]<first name>-<team>-<user>`, e.g. dot-alex-t0123abcd-u0456efgh; the IDs keep
+ * it unique.
+ */
 export const containerName = (
 	teamId: string,
 	userId: string,
 	firstName = "",
 ) => {
 	const name = slug(firstName.normalize("NFKD")).slice(0, 20)
-	return ["dot", name, slug(teamId), slug(userId)].filter(Boolean).join("-")
+	return ["dot", slug(instance), name, slug(teamId), slug(userId)]
+		.filter(Boolean)
+		.join("-")
 }
 
 const pending = new Map<string, Promise<string>>()
@@ -210,7 +222,7 @@ export function ensureContainer(
 		// Found by its labels, so a container from before names had first names (or from before a
 		// rename in Slack) is renamed in place rather than recreated.
 		const existing = (
-			await Bun.$`docker ps --all --filter label=dot.bot=1 --filter ${`label=dot.team=${teamId}`} --filter ${`label=dot.user=${userId}`} --format ${"{{.Names}}"}`.text()
+			await Bun.$`docker ps --all ${ownContainers} --filter ${`label=dot.team=${teamId}`} --filter ${`label=dot.user=${userId}`} --format ${"{{.Names}}"}`.text()
 		)
 			.trim()
 			.split("\n")[0]
@@ -228,6 +240,7 @@ export function ensureContainer(
 			`dot.team=${teamId}`,
 			"--label",
 			`dot.user=${userId}`,
+			...(instance ? ["--label", `dot.instance=${instance}`] : []),
 			// Groups them as one "dot" app in Docker Desktop and editor container views.
 			"--label",
 			"com.docker.compose.project=dot",
@@ -251,11 +264,15 @@ export function ensureContainer(
 			// Always networked: Codex reaches the model through the proxy on the bridge gateway. With
 			// ISOLATE_NETWORK on, it's then limited to the internet (see isolate()).
 			"--volume",
-			`dot-home-${slug(teamId)}-${slug(userId)}:${CONTAINER_HOME}`,
+			`${["dot-home", slug(instance), slug(teamId), slug(userId)].filter(Boolean).join("-")}:${CONTAINER_HOME}`,
 			// Directories, not files: a file bind mount keeps the old inode when an editor replaces the
 			// file. scripts/codex-docker.sh links these into CODEX_HOME before every run.
 			"--volume",
 			`${config.workdir}:/opt/dot/persona:ro`,
+			// The deployment's AGENTS.local.md and skills.local/, when kept outside the persona folder.
+			...(config.localDir !== config.workdir
+				? ["--volume", `${config.localDir}:/opt/dot/persona-local:ro`]
+				: []),
 			"--volume",
 			`${runtimeDir}:/opt/dot/runtime:ro`,
 			imageTag,
@@ -419,7 +436,7 @@ export async function stopRun(
  */
 export async function stopOrphanedRuns(teamId: string): Promise<void> {
 	const listing =
-		await Bun.$`docker ps --filter label=dot.bot=1 --filter ${`label=dot.team=${teamId}`} --format ${"{{.Names}}"}`.text()
+		await Bun.$`docker ps ${ownContainers} --filter ${`label=dot.team=${teamId}`} --format ${"{{.Names}}"}`.text()
 	for (const name of listing.split("\n").filter(Boolean)) {
 		const killed =
 			await Bun.$`docker exec ${name} pkill -f ${"^codex(\\[turn=[^]]*\\])? (exec|app-server)"}`

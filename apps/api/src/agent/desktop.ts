@@ -20,6 +20,7 @@ import {
 	CONTAINER_TOOLS_DIR,
 	DESKTOP_VIEWER_PORT,
 	ensureContainer,
+	ownContainers,
 } from "./containers"
 
 type WebClient = App["client"]
@@ -1019,7 +1020,7 @@ export function startDesktopReaper(config: BotConfig): void {
 	if (idleMs <= 0) return
 	setInterval(async () => {
 		const listing =
-			await Bun.$`docker ps --filter label=dot.bot=1 --format ${"{{.Names}}"}`
+			await Bun.$`docker ps ${ownContainers} --format ${"{{.Names}}"}`
 				.quiet()
 				.nothrow()
 				.text()

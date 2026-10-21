@@ -1,5 +1,19 @@
 # Setup (apps/api)
 
+## On a server: one command
+
+```sh
+curl -fsSL https://<install-host>/install.sh | sh
+```
+
+This installs Docker and Bun if they're missing, installs the `slack-dot` CLI (`apps/cli`), and runs
+`slack-dot setup`, which creates and installs the Slack app, signs in to ChatGPT, and starts the
+bot as a systemd service. See [apps/cli/README.md](../apps/cli/README.md) for the commands
+afterwards, and [INSTALLER.md](INSTALLER.md) for how it works. The rest of this page is the manual
+setup, for development from this repo.
+
+## Manual setup
+
 Needs Bun ≥ 1.4, Docker (your user in the `docker` group) and a ChatGPT Plus or Pro account. All
 commands run from `apps/api` unless noted. The first start builds the `dot-runtime` image (a minute or two).
 

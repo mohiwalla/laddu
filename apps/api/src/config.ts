@@ -32,8 +32,16 @@ export const paths = {
 
 export const appName = optional("APP_NAME", "slack-codex-bot")
 
+/**
+ * Set by `slack-dot setup` (the instance's name). Labels this bot's containers and volumes, so
+ * several bots on one machine, even in one workspace, never touch each other's. Unset: the
+ * names from before instances.
+ */
+export const instance = optional("DOT_INSTANCE", "")
+
 /** Settings only the bot process needs. Read lazily so `bun run login` works without Slack tokens. */
 export function loadBotConfig() {
+	const workdir = fromAppRoot(optional("CODEX_WORKDIR", "agent-home"))
 	const ownerUserId = required("OWNER_SLACK_USER_ID")
 	const allowed = optional("ALLOWED_SLACK_USERS", ownerUserId)
 	/** Where the desktop viewer gateway listens; keep it local and put a tunnel or proxy in front. */
@@ -88,7 +96,14 @@ export function loadBotConfig() {
 		 * networked, since Codex reaches the model through the proxy. No hosted web search on the plan route.
 		 */
 		network: optional("CODEX_NETWORK", "true") === "true",
-		workdir: fromAppRoot(optional("CODEX_WORKDIR", "agent-home")),
+		workdir,
+		/**
+		 * Where the deployment's own AGENTS.local.md and skills.local/ live. Defaults to the persona
+		 * folder; `slack-dot setup` points it at the instance folder, outside the installed package.
+		 */
+		localDir: Bun.env.CODEX_LOCAL_DIR?.trim()
+			? fromAppRoot(Bun.env.CODEX_LOCAL_DIR.trim())
+			: workdir,
 		contextMessages: Number(optional("CONTEXT_MESSAGES", "20")),
 		/** Every this many turns per person, a background Codex run updates their memory; 0 turns it off. */
 		memoryReviewEvery: Number(optional("MEMORY_REVIEW_EVERY", "3")),
