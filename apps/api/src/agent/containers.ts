@@ -276,12 +276,27 @@ export function ensureContainer(
 			console.log(`[containers] started ${name} for ${userId}`)
 		}
 		if (isolated) await isolate(name)
+		await ensureWorkdir(name)
 		return name
 	})()
 
 	pending.set(key, task)
 	task.finally(() => pending.delete(key)).catch(() => {})
 	return task
+}
+
+/**
+ * If ~/workspace goes missing from the volume (dot deleted it), Docker recreates the image's
+ * WORKDIR as root on the next start, and dot can't write there. The container has no
+ * capabilities, so a short-lived root helper hands it back.
+ */
+async function ensureWorkdir(name: string): Promise<void> {
+	const owner = await Bun.$`docker exec ${name} stat -c %U ${CONTAINER_WORKDIR}`
+		.quiet()
+		.nothrow()
+	if (owner.exitCode === 0 && owner.stdout.toString().trim() === "dot") return
+	await Bun.$`docker run --rm --volumes-from ${name} --user root --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --network none --entrypoint sh ${imageTag!} -c ${`mkdir -p ${CONTAINER_WORKDIR} && chown dot:dot ${CONTAINER_WORKDIR}`}`.quiet()
+	console.log(`[containers] ${name}: gave ${CONTAINER_WORKDIR} back to dot`)
 }
 
 /** Addresses that aren't the public internet: this machine, the home network, other containers. */
