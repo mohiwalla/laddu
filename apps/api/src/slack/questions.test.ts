@@ -2,13 +2,12 @@ import { afterEach, expect, test } from "bun:test"
 import type { App } from "@slack/bolt"
 import { sessionKey } from "../sessions"
 import {
-	answerWithMessage,
 	ask,
 	clearQuestions,
-	poll,
+	closeWithMessage,
 	QuestionError,
 	registerQuestions,
-	turnEnded,
+	withdrawQuestions,
 } from "./questions"
 
 const asker = { teamId: "T1", userId: "U1", channel: "C1", threadTs: "1.1" }
@@ -52,50 +51,9 @@ test("bad choices are refused", async () => {
 	).rejects.toThrow(QuestionError)
 })
 
-test("a reply in the thread answers the waiting question", async () => {
-	const { client, updated } = fakeClient()
-	const id = await ask(client, asker, { text: "Which?", choices: ["A", "B"] })
-	const waiting = poll(id, asker)
-	expect(answerWithMessage(client, key, "B please")).toBe("answered")
-	expect(await waiting).toEqual({ status: "answered", answer: "B please" })
-	expect(updated).toHaveLength(1)
-	expect(answerWithMessage(client, key, "thanks")).toBeNull()
-})
-
-test("only the asker's session can read the answer", async () => {
-	const { client } = fakeClient()
-	const id = await ask(client, asker, { text: "Which?" })
-	expect(await poll(id, { ...asker, userId: "U2" })).toEqual({
-		status: "gone",
-	})
-})
-
-test("STOP withdraws the question", async () => {
-	const { client, updated } = fakeClient()
-	const id = await ask(client, asker, { text: "Which?" })
-	turnEnded(client, key, true)
-	expect(await poll(id, asker)).toEqual({ status: "gone" })
-	expect(JSON.stringify(updated[0])).toContain("No longer needed")
-})
-
-test("an answer after the turn ended starts a new turn", async () => {
-	const { client } = fakeClient()
-	const later: string[] = []
-	registerQuestions(
-		{ action: () => {}, view: () => {} } as unknown as App,
-		(_question, request) => later.push(request),
-	)
-	const id = await ask(client, asker, { text: "Which?" })
-	turnEnded(client, key, false)
-	expect(await poll(id, asker)).toEqual({ status: "later" })
-	// A typed reply then is an ordinary message (its own turn), and closes the question.
-	expect(answerWithMessage(client, key, "A")).toBe("closed")
-	expect(later).toEqual([])
-})
-
-test("a typed answer in the modal, after the turn ended, starts a new turn", async () => {
-	const { client, updated } = fakeClient()
-	const later: string[] = []
+/** Registers the handlers; returns the answers sent on to dot and the modal submit handler. */
+function register() {
+	const answers: string[] = []
 	const views: Record<string, (args: unknown) => Promise<void>> = {}
 	registerQuestions(
 		{
@@ -103,11 +61,34 @@ test("a typed answer in the modal, after the turn ended, starts a new turn", asy
 			view: (id: string, handler: (args: unknown) => Promise<void>) =>
 				(views[id] = handler),
 		} as unknown as App,
-		(_question, request) => later.push(request),
+		(_question, request) => answers.push(request),
 	)
+	return { answers, submit: (args: unknown) => views.dot_ask_submit!(args) }
+}
+
+test("a reply typed in the thread closes the question and is their next message", async () => {
+	const { client, updated } = fakeClient()
+	const { answers } = register()
+	await ask(client, asker, { text: "Which?", choices: ["A", "B"] })
+	expect(closeWithMessage(client, key)).toBe(true)
+	expect(JSON.stringify(updated[0])).toContain("Answered in the thread")
+	expect(answers).toEqual([])
+	expect(closeWithMessage(client, key)).toBe(false)
+})
+
+test("STOP withdraws the question", async () => {
+	const { client, updated } = fakeClient()
+	await ask(client, asker, { text: "Which?" })
+	withdrawQuestions(client, key)
+	expect(JSON.stringify(updated[0])).toContain("No longer needed")
+	expect(closeWithMessage(client, key)).toBe(false)
+})
+
+test("a typed answer in the modal goes to dot", async () => {
+	const { client, updated } = fakeClient()
+	const { answers, submit } = register()
 	const id = await ask(client, asker, { text: "Which?" })
-	turnEnded(client, key, false)
-	await views.dot_ask_submit!({
+	await submit({
 		ack: async () => {},
 		body: { user: { id: "U1" } },
 		client,
@@ -116,8 +97,24 @@ test("a typed answer in the modal, after the turn ended, starts a new turn", asy
 			state: { values: { answer: { value: { value: "B" } } } },
 		},
 	})
-	expect(later).toEqual(['You asked: "Which?" Their answer: B'])
+	expect(answers).toEqual(['You asked: "Which?" Their answer: B'])
 	expect(JSON.stringify(updated[0])).toContain("B")
+})
+
+test("only the asker can answer in the modal", async () => {
+	const { client } = fakeClient()
+	const { answers, submit } = register()
+	const id = await ask(client, asker, { text: "Which?" })
+	await submit({
+		ack: async () => {},
+		body: { user: { id: "U2" } },
+		client,
+		view: {
+			private_metadata: id,
+			state: { values: { answer: { value: { value: "B" } } } },
+		},
+	})
+	expect(answers).toEqual([])
 })
 
 test("buttons answer in one click; many choices make a dropdown", async () => {
@@ -144,15 +141,7 @@ test("buttons answer in one click; many choices make a dropdown", async () => {
 
 test("a form's answers come back as JSON by label", async () => {
 	const { client, updated } = fakeClient()
-	const views: Record<string, (args: unknown) => Promise<void>> = {}
-	registerQuestions(
-		{
-			action: () => {},
-			view: (id: string, handler: (args: unknown) => Promise<void>) =>
-				(views[id] = handler),
-		} as unknown as App,
-		() => {},
-	)
+	const { answers, submit } = register()
 	const id = await ask(client, asker, {
 		text: "Trip details",
 		fields: [
@@ -160,8 +149,7 @@ test("a form's answers come back as JSON by label", async () => {
 			{ name: "who", label: "Who's coming", type: "users" },
 		],
 	})
-	const waiting = poll(id, asker)
-	await views.dot_ask_submit!({
+	await submit({
 		ack: async () => {},
 		body: { user: { id: "U1" } },
 		client,
@@ -175,9 +163,8 @@ test("a form's answers come back as JSON by label", async () => {
 			},
 		},
 	})
-	expect(await waiting).toEqual({
-		status: "answered",
-		answer: JSON.stringify({ City: "Pune", "Who's coming": ["U2", "U3"] }),
-	})
+	expect(answers).toEqual([
+		`You asked: "Trip details" Their answer: ${JSON.stringify({ City: "Pune", "Who's coming": ["U2", "U3"] })}`,
+	])
 	expect(JSON.stringify(updated[0])).toContain("<@U2>, <@U3>")
 })

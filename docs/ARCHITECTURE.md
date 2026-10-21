@@ -368,11 +368,11 @@ after 30 days. Slack Free supports these ordinary interactions without Workflow 
 radio buttons, checkboxes or a dropdown (in an input block, so picks don't round-trip) with Send,
 and a modal for a typed answer. A JSON question is a one-time form: its Answer button opens a modal
 with any of Slack's inputs (src/slack/question-fields.ts: text, number, email, URL, selects, radio,
-checkboxes, date/time pickers, people and channel pickers, files, rich text). A reply in the
-thread also answers any question. Only the person the turn is for can answer. The
-command long-polls the bot API, so the answer lands in the same turn; after 10 minutes, or once the
-turn ends, a later answer starts a new turn (`via: "answer"`). STOP withdraws open questions.
-Questions live in memory, like the turns waiting on them.
+checkboxes, date/time pickers, people and channel pickers, files, rich text). Only the person the
+turn is for can answer. The command returns as soon as the question is posted and dot ends its turn
+with just a reaction; the answer comes back as a turn of its own (`via: "answer"`), or steers into
+theirs if one is running. A reply typed in the thread is their next message and closes the question.
+STOP withdraws open questions. Questions live in memory, for 24 hours.
 
 ## Ways in
 

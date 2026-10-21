@@ -32,7 +32,11 @@ import { downloadAttachments, uploadFiles } from "./attachments"
 import { closeInterrupted, openReply, type Reply } from "./reply"
 import { AgentSessions } from "./agent-sessions"
 import { configFor } from "../preferences"
-import { answerWithMessage, registerQuestions, turnEnded } from "./questions"
+import {
+	closeWithMessage,
+	registerQuestions,
+	withdrawQuestions,
+} from "./questions"
 import { computerInUse } from "../agent/desktop"
 import { registerHome } from "./home"
 import type { Step } from "../agent/steps"
@@ -133,12 +137,8 @@ async function handle(
 				.catch(() => {})
 		return
 	}
-	// dot asked them something here (`slack ask`): a reply in the thread answers it.
-	const words = ownWords(trigger)
-	if (words && answerWithMessage(client, key, words) === "answered") {
-		await react(client, trigger.channel, trigger.ts, "eyes")
-		return
-	}
+	// dot asked them something here (`slack ask`): a typed reply answers it, as their next message.
+	if (ownWords(trigger)) closeWithMessage(client, key)
 	// dot is already working on something of theirs here: this message goes into that turn.
 	if (
 		steering.has(key) &&
@@ -355,7 +355,7 @@ async function handle(
 			else await notifyDirectly(client, trigger, message)
 			await react(client, trigger.channel, trigger.ts, "x")
 		} finally {
-			turnEnded(client, key, agent.signal.aborted)
+			if (agent.signal.aborted) withdrawQuestions(client, key)
 			await agent.finish()
 			await markDone(inflightKey).catch(() => {})
 		}
@@ -464,7 +464,7 @@ export function registerHandlers(
 		userId !== botUserId &&
 		(config.allowedUsers === "*" || config.allowedUsers.has(userId))
 
-	// Answers to `slack ask` that come after the turn stopped waiting: a turn of their own.
+	// Answers to `slack ask`: a turn of their own, or into theirs if one is running here.
 	registerQuestions(app, (question, request) => {
 		void handle(app.client, config, botUserId, {
 			teamId: question.teamId,

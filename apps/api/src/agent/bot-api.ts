@@ -558,17 +558,11 @@ async function handleAsk(
 			403,
 			"A scheduled run can't ask; nobody is in the conversation.",
 		)
+	if (request.method !== "POST") return reply(405, "Use POST.")
 	try {
-		if (request.method === "POST") {
-			const input = await request.json().catch(() => null)
-			if (!object(input)) return reply(400, "Give a JSON object.")
-			return reply(200, await questions.ask(deps.client, caller, input))
-		}
-		const id = new URL(request.url).searchParams.get("id")
-		if (request.method !== "GET" || !id)
-			return reply(405, "Use POST, or GET ?id=.")
-		const result = await questions.poll(id, caller)
-		return Response.json({ ok: true, ...result })
+		const input = await request.json().catch(() => null)
+		if (!object(input)) return reply(400, "Give a JSON object.")
+		return reply(200, await questions.ask(deps.client, caller, input))
 	} catch (error) {
 		if (error instanceof questions.QuestionError)
 			return reply(400, error.message)

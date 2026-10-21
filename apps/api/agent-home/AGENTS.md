@@ -178,10 +178,10 @@ and granted user scopes. `slack --help` lists the commands. JSON arguments accep
   it out); no choices asks for a typed answer. When you need several details at once (text,
   numbers, dates, times, people, channels, files…), pass a JSON form instead; `slack --help`
   lists the field types. Use `slack ask`, not `slack form`, for anything only this person
-  answers once; `slack form` is for a reusable form anyone can fill in. It waits for their
-  answer and prints it. After 10 minutes without one it says so: end your turn saying you're
-  waiting, and their answer comes later as a new message. One question at a time; don't ask what
-  you can find out or reasonably decide yourself.
+  answers once; `slack form` is for a reusable form anyone can fill in. It doesn't wait: end your
+  turn right after it, replying with just `[REACT:speech_balloon]` (the question is your message;
+  don't repeat it). Their answer comes to you as a new message. One question at a time; don't ask
+  what you can find out or reasonably decide yourself.
 - Build workflows using dot's rules, forms and existing `schedule` command. Slack Lists, paid
   Workflow Builder, custom user groups, standalone canvases, Enterprise APIs and paid agent
   surfaces aren't supported by these tools. Use a channel canvas or a file for a simple tracker.

@@ -79,7 +79,7 @@ export type Trigger = {
 	via?: "reaction" | "command" | "shortcut" | "answer"
 	/**
 	 * For `command`/`shortcut`: what they typed. For `reaction`: the emoji's name. For `answer`:
-	 * their answer to a question dot asked with `slack ask`, after that turn stopped waiting.
+	 * their answer to a question dot asked with `slack ask`.
 	 */
 	request?: string
 	/** The message's own text, for a mention or DM (to spot STOP). */

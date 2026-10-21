@@ -20,12 +20,12 @@ send you this:".
   slack ask "<question>" [--choice "A" --choice "B" ...] [--multiple | --buttons] [--no-other]
   slack ask '<JSON question>'                              a form: several fields in a popup
 
-ask puts a question to the person in this thread and waits for their answer. Choices show as radio
-buttons (checkboxes with --multiple; a dropdown past 10 choices, up to 100), with a Send button and
-"Something else..." for a typed answer unless --no-other. --buttons: up to 5 choices as one-click
-buttons. No choices: a typed answer. Use it instead of asking in your reply when you need their
-answer to carry on. It waits up to 10 minutes; if they haven't answered by then, end your turn
-saying you're waiting, and their answer comes to you later as a new message.
+ask puts a question to the person in this thread. Choices show as radio buttons (checkboxes with
+--multiple; a dropdown past 10 choices, up to 100), with a Send button and "Something else..." for
+a typed answer unless --no-other. --buttons: up to 5 choices as one-click buttons. No choices: a
+typed answer. Use it instead of asking in your reply when you need their answer to carry on. It
+doesn't wait: end your turn right after it, replying with just [REACT:speech_balloon] (the
+question is your message). Their answer comes to you as a new message.
 
 A JSON question: {"text": "...", "title": "popup title, 24 max", "fields": [...]} (or choices,
 multiple, buttons, other as above). Each field: {"label", "type", "name", "required" (default
@@ -96,18 +96,8 @@ def ask(body):
         except urllib.error.URLError as error:
             sys.exit(f"error: couldn't reach the bot ({error.reason}).")
 
-    question = send(urllib.request.Request(f"{API}/slack/ask", method="POST", data=json.dumps(body).encode(), headers=headers))["text"]
-    print("Asked in the thread; waiting for their answer...", flush=True)
-    while True:
-        result = send(urllib.request.Request(f"{API}/slack/ask?{urllib.parse.urlencode({'id': question})}", headers=headers))
-        if result["status"] == "answered":
-            print(f"Their answer: {result['answer']}")
-            return
-        if result["status"] == "later":
-            print("No answer within 10 minutes. The question stays open in the thread: end your turn now, saying you're waiting for their answer. When they answer, it comes to you as a new message.")
-            return
-        if result["status"] == "gone":
-            sys.exit("error: the question is no longer open.")
+    send(urllib.request.Request(f"{API}/slack/ask", method="POST", data=json.dumps(body).encode(), headers=headers))
+    print("Asked in the thread. End your turn now, replying with just [REACT:speech_balloon]; their answer comes to you as a new message.")
 
 
 def json_input(value):

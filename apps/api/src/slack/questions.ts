@@ -1,10 +1,10 @@
 /**
  * Questions dot asks in a thread (`slack ask`): choices right in the message (one-click buttons,
  * radio buttons, checkboxes, or a dropdown for many), a typed answer in a modal, or a whole form
- * of fields in a modal (question-fields.ts); a reply in the thread answers any of them. Only the person the turn is for can
- * answer. The command waits for the answer inside its turn; once it stops waiting (WAIT_MS, or the
- * turn ends), a later answer starts a new turn instead. Kept in memory: a restart ends the turns
- * that wait on them.
+ * of fields in a modal (question-fields.ts). Only the person the turn is for can answer. The
+ * command doesn't wait: dot ends its turn, and the answer comes back as a turn of its own (or goes
+ * into theirs, if one is running). A reply typed in the thread is just their next message, and
+ * closes the question. Kept in memory: a restart drops open questions.
  */
 import type { App, types } from "@slack/bolt"
 import { sessionKey } from "../sessions"
@@ -40,21 +40,12 @@ type Question = Asker & {
 	fields?: Field[]
 	/** The form's modal title. */
 	title: string
-	/** "waiting": its turn's command waits for the answer. "later": an answer starts a new turn. */
-	state: "waiting" | "later"
-	waitUntil: number
+	askedAt: number
 	answer?: string
-	/** Wakes the command's long poll. */
-	wake: () => void
-	woken: Promise<void>
 }
 
-/** How long a turn waits for an answer before carrying on without it. */
-export const WAIT_MS = 10 * 60_000
-/** How long a question stays answerable once its turn stopped waiting. */
+/** How long a question stays answerable. */
 const OPEN_MS = 24 * 3600_000
-/** One long poll from the command; under the bot API's idle timeout. */
-const POLL_MS = 50_000
 const MAX_OPEN = 5
 
 const questions = new Map<string, Question>()
@@ -64,14 +55,7 @@ export class QuestionError extends Error {}
 function prune() {
 	const now = Date.now()
 	for (const [id, question] of questions)
-		if (question.state === "later" && question.waitUntil + OPEN_MS < now)
-			questions.delete(id)
-}
-
-function wakeable(): Pick<Question, "wake" | "woken"> {
-	let wake = () => {}
-	const woken = new Promise<void>(resolve => (wake = resolve))
-	return { wake, woken }
+		if (question.askedAt + OPEN_MS < now) questions.delete(id)
 }
 
 const escape = (text: string) =>
@@ -182,9 +166,9 @@ async function close(client: WebClient, question: Question, outcome: string) {
 		)
 }
 
-/** Their answer to a question that no turn waits for any more: starts a new turn. */
-type Later = (question: Asker & { ts: string }, request: string) => void
-let later: Later = () => {}
+/** Their answer: goes to dot as a turn (or into the one running for them there). */
+type Answered = (question: Asker & { ts: string }, request: string) => void
+let answered: Answered = () => {}
 
 function settle(
 	client: WebClient,
@@ -194,17 +178,14 @@ function settle(
 ) {
 	if (question.answer !== undefined) return
 	question.answer = answer
+	questions.delete(question.id)
 	void close(
 		client,
 		question,
 		outcome ??
 			`:white_check_mark: <@${question.userId}>: ${escape(answer)}`,
 	)
-	if (question.state === "waiting") question.wake()
-	else {
-		questions.delete(question.id)
-		later(question, `You asked: "${question.text}" Their answer: ${answer}`)
-	}
+	answered(question, `You asked: "${question.text}" Their answer: ${answer}`)
 }
 
 export async function ask(
@@ -275,7 +256,6 @@ export async function ask(
 		)
 	const question: Question = {
 		...asker,
-		...wakeable(),
 		id: crypto.randomUUID(),
 		key,
 		ts: "",
@@ -286,8 +266,7 @@ export async function ask(
 		other: input.other !== false && !fields,
 		...(fields ? { fields } : {}),
 		title,
-		state: "waiting",
-		waitUntil: Date.now() + WAIT_MS,
+		askedAt: Date.now(),
 	}
 	const posted = await client.chat.postMessage({
 		channel: asker.channel,
@@ -300,84 +279,32 @@ export async function ask(
 	return question.id
 }
 
-/** One long poll for the answer, by the person whose turn asked. */
-export async function poll(
-	id: string,
-	asker: Asker,
-): Promise<
-	| { status: "answered"; answer: string }
-	| { status: "waiting" | "later" | "gone" }
-> {
-	const question = questions.get(id)
-	if (
-		!question ||
-		question.key !== sessionKey(asker.channel, asker.threadTs, asker.userId)
-	)
-		return { status: "gone" }
-	if (question.answer === undefined && question.state === "waiting") {
-		const left = question.waitUntil - Date.now()
-		if (left > 0)
-			await Promise.race([
-				question.woken,
-				Bun.sleep(Math.min(left, POLL_MS)),
-			])
-	}
-	if (question.answer !== undefined) {
-		questions.delete(id)
-		return { status: "answered", answer: question.answer }
-	}
-	if (question.state === "later") return { status: "later" }
-	if (Date.now() < question.waitUntil) return { status: "waiting" }
-	question.state = "later"
-	return { status: "later" }
-}
-
 /**
- * A message from them in the thread while a question is open. "answered": it was the answer to
- * the question their turn waits on (nothing more to do). "closed": a question no turn waits for;
- * the message goes on as an ordinary one. Null: nothing open.
+ * A message from them in the thread: their reply to whatever dot asked them there, so it closes
+ * those questions and goes on as their next message. Whether any were open.
  */
-export function answerWithMessage(
-	client: WebClient,
-	key: string,
-	text: string,
-): "answered" | "closed" | null {
+export function closeWithMessage(client: WebClient, key: string): boolean {
 	const open = [...questions.values()].filter(
-		question => question.key === key && question.answer === undefined,
+		question => question.key === key,
 	)
-	const waiting = open.findLast(question => question.state === "waiting")
-	if (waiting) {
-		settle(client, waiting, text, `:speech_balloon: Answered in the thread`)
-		return "answered"
-	}
 	for (const question of open) {
-		question.answer = text
 		questions.delete(question.id)
 		void close(client, question, ":speech_balloon: Answered in the thread")
 	}
-	return open.length ? "closed" : null
+	return open.length > 0
 }
 
-/**
- * Their turn ended. Stopped: its questions are withdrawn. Otherwise ones still waiting stay open,
- * and their answer starts a new turn.
- */
-export function turnEnded(client: WebClient, key: string, stopped: boolean) {
+/** They stopped dot's work in this thread: its questions there are withdrawn. */
+export function withdrawQuestions(client: WebClient, key: string) {
 	for (const question of questions.values()) {
-		if (question.key !== key || question.state !== "waiting") continue
-		if (question.answer !== undefined) {
-			questions.delete(question.id)
-			continue
-		}
-		if (stopped) {
-			questions.delete(question.id)
-			void close(client, question, "_No longer needed._")
-		} else question.state = "later"
+		if (question.key !== key) continue
+		questions.delete(question.id)
+		void close(client, question, "_No longer needed._")
 	}
 }
 
-export function registerQuestions(app: App, onLater: Later) {
-	later = onLater
+export function registerQuestions(app: App, onAnswer: Answered) {
+	answered = onAnswer
 	/** The question behind a click, or null after telling the clicker why they can't answer. */
 	const clicked = async (
 		client: WebClient,
