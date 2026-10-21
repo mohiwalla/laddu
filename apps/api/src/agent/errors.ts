@@ -4,6 +4,7 @@
  * Codex retries dropped model connections itself, so a turn-level retry is a second line.
  */
 import { AuthError } from "../auth/siwc"
+import { LostSessionError } from "./acp"
 
 export type Failure = {
 	kind:
@@ -11,6 +12,7 @@ export type Failure = {
 		| "usage_limit"
 		| "context_full"
 		| "unsupported"
+		| "lost_thread"
 		| "transient"
 		| "workspace"
 		| "unknown"
@@ -19,7 +21,7 @@ export type Failure = {
 	/** Try the turn again (after `retryAfterMs`). */
 	retry: boolean
 	retryAfterMs: number
-	/** Start a fresh Codex thread; resuming this one would fail the same way. */
+	/** Start a fresh conversation with the agent; resuming this one would fail the same way. */
 	resetThread: boolean
 }
 
@@ -41,6 +43,11 @@ const firstLine = (text: string) => text.trim().split("\n")[0]!.slice(0, 300)
 /** `docker` runtime: times in Codex's messages come from the container's clock, which is UTC. */
 export function classify(error: unknown, { utcClock = false } = {}): Failure {
 	if (error instanceof AuthError) return fail("auth", error.message)
+	if (error instanceof LostSessionError)
+		return fail("lost_thread", "I lost track of this conversation.", {
+			retry: true,
+			resetThread: true,
+		})
 	if (error instanceof Bun.$.ShellError) {
 		// Docker commands (creating the container, copying files in): usually a hiccup worth one retry.
 		const detail = firstLine(error.stderr.toString() || error.message)

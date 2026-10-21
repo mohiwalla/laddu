@@ -4,7 +4,7 @@
  */
 import type { BotConfig } from "../config"
 import { paths } from "../config"
-import type { TurnUser } from "./codex"
+import type { TurnUser } from "./turn"
 import { CONTAINER_TOOLS_DIR, ensureContainer, TOOLS_DIR } from "./containers"
 
 /** Host runtime: where each user's memory and history live (the commands read these env vars). */

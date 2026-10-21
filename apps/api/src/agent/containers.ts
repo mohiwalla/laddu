@@ -27,6 +27,8 @@ export const DESKTOP_VIEWER_PORT = 6901
 
 /** Stand-in `codex` executable that forwards into the container named by $DOT_CONTAINER. */
 export const CODEX_DOCKER_WRAPPER = `${appRoot}scripts/codex-docker.sh`
+/** The same for OpenCode, as an ACP agent (`opencode acp`). */
+export const OPENCODE_DOCKER_WRAPPER = `${appRoot}scripts/opencode-docker.sh`
 
 const runtimeDir = `${paths.dataDir}/runtime`
 const hostConfigToml = `${runtimeDir}/config.toml`
@@ -313,9 +315,10 @@ export function ensureContainer(
  * capabilities, so a short-lived root helper hands it back.
  */
 async function ensureWorkdir(name: string): Promise<void> {
-	const owner = await Bun.$`docker exec ${name} stat -c %U ${CONTAINER_WORKDIR}`
-		.quiet()
-		.nothrow()
+	const owner =
+		await Bun.$`docker exec ${name} stat -c %U ${CONTAINER_WORKDIR}`
+			.quiet()
+			.nothrow()
 	if (owner.exitCode === 0 && owner.stdout.toString().trim() === "dot") return
 	await Bun.$`docker run --rm --volumes-from ${name} --user root --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --network none --entrypoint sh ${imageTag!} -c ${`mkdir -p ${CONTAINER_WORKDIR} && chown dot:dot ${CONTAINER_WORKDIR}`}`.quiet()
 	console.log(`[containers] ${name}: gave ${CONTAINER_WORKDIR} back to dot`)
@@ -419,30 +422,31 @@ export async function listContainerDir(container: string, dir: string) {
 		})
 }
 
-/** Ends one Codex run inside a container (Stop): the wrapper names it codex[turn=<id>]. */
+/** Ends one agent run inside a container (Stop): the wrappers name it <agent>[turn=<id>]. */
 export async function stopRun(
 	container: string,
 	turnId: string,
 ): Promise<void> {
-	await Bun.$`docker exec ${container} pkill -f ${`^codex\\[turn=${turnId}\\]`}`
+	await Bun.$`docker exec ${container} pkill -f ${`^[a-z]+\\[turn=${turnId}\\]`}`
 		.quiet()
 		.nothrow()
 }
 
 /**
- * Stops Codex runs left in this workspace's containers by a previous bot process. Killing the bot
- * only ends `docker exec` on the host; the run inside keeps going and holds its thread's lock
- * ("already has an active writer"). Call at startup, before this process starts any turn.
+ * Stops agent runs (Codex, OpenCode) left in this workspace's containers by a previous bot
+ * process. Killing the bot only ends `docker exec` on the host; the run inside keeps going and
+ * holds its thread's lock ("already has an active writer"). Call at startup, before this process
+ * starts any turn.
  */
 export async function stopOrphanedRuns(teamId: string): Promise<void> {
 	const listing =
 		await Bun.$`docker ps ${ownContainers} --filter ${`label=dot.team=${teamId}`} --format ${"{{.Names}}"}`.text()
 	for (const name of listing.split("\n").filter(Boolean)) {
 		const killed =
-			await Bun.$`docker exec ${name} pkill -f ${"^codex(\\[turn=[^]]*\\])? (exec|app-server)"}`
+			await Bun.$`docker exec ${name} pkill -f ${"^(codex(\\[turn=[^]]*\\])? (exec|app-server)|opencode\\[turn=[^]]*\\] acp)"}`
 				.quiet()
 				.nothrow()
 		if (killed.exitCode === 0)
-			console.warn(`[containers] stopped orphaned Codex run in ${name}`)
+			console.warn(`[containers] stopped orphaned agent run in ${name}`)
 	}
 }

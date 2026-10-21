@@ -6,11 +6,17 @@
  */
 import type { App, types } from "@slack/bolt"
 import type { BotConfig } from "../config"
-import { listModels, type ModelOption } from "../agent/codex"
+import { AGENTS, isAgent } from "../agent/agents"
+import type { ModelOption } from "../agent/turn"
 import { desktopLink } from "../agent/desktop"
 import { runTool } from "../agent/tools"
 import * as microsoft from "../integrations/microsoft"
-import { effective, preferences, setPreferences } from "../preferences"
+import {
+	agentFor,
+	effective,
+	preferences,
+	setPreferences,
+} from "../preferences"
 import { listJobs, nextRun, removeJob, type Job } from "../scheduler"
 import type { AgentSessions } from "./agent-sessions"
 import type { SlackAutomations } from "./automations"
@@ -143,22 +149,28 @@ async function agentSection(
 	config: BotConfig,
 	person: Person,
 ): Promise<Block[]> {
-	const [picked, models] = await Promise.all([
-		preferences(person),
-		listModels(),
-	])
+	const picked = await preferences(person)
+	const agent = agentFor(config, picked)
+	const models = await AGENTS[agent].listModels()
 	const chosen = effective(config, picked, models)
 	const option: ModelOption | undefined = chosen.option
 	const blocks: Block[] = [
 		header(":brain:  Agent"),
-		{
-			type: "section",
-			// Slack trims a trailing line break; the zero-width space keeps an empty line under them.
-			fields: [
-				md("*Agent*\nCodex\n\u200b"),
-				md("*Plan*\nChatGPT subscription\n\u200b"),
-			],
-		},
+		row(
+			"*Agent*",
+			select(
+				"home_agent",
+				Object.entries(AGENTS).map(([id, about]) => ({
+					text: about.name,
+					value: id,
+				})),
+				agent,
+			),
+		),
+		// Slack trims a trailing line break; the zero-width space keeps an empty line under it.
+		hint(
+			`${AGENTS[agent].plan}${agent === "opencode" ? ". No sign-in; they may keep what they're sent" : ""}.\n\u200b`,
+		),
 	]
 	if (!models.length)
 		return [
@@ -675,6 +687,16 @@ export function registerHome(app: App, given: Deps) {
 	app.action("open_computer", async ({ ack }) => ack())
 	control("home_refresh", async () => {})
 
+	control("home_agent", async ({ person, value }) => {
+		if (!isAgent(value)) return
+		// Each agent has its own models; the picks for the old one don't carry over.
+		await setPreferences(person, {
+			agent: value,
+			model: undefined,
+			effort: undefined,
+			fast: undefined,
+		})
+	})
 	control("home_model", async ({ person, value }) =>
 		setPreferences(person, { model: value }),
 	)
@@ -686,6 +708,7 @@ export function registerHome(app: App, given: Deps) {
 	)
 	control("home_defaults", async ({ person }) =>
 		setPreferences(person, {
+			agent: undefined,
 			model: undefined,
 			effort: undefined,
 			fast: undefined,

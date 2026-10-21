@@ -20,17 +20,30 @@ import {
 	CONTAINER_WORKDIR,
 	TOOLS_DIR,
 	ensureContainer,
-	listContainerDir,
-	makeDirInContainer,
 	stopRun,
-	writeIntoContainer,
 	writeModelCatalog,
 } from "./containers"
 import { startModelProxy } from "./model-proxy"
 import { AppServer, asThreadItem } from "./app-server"
-import { botApiUrl, callerCredential } from "./bot-api"
-import { stepTracker, type Step } from "./steps"
+import { stepTracker } from "./steps"
 import { hostToolEnv, runTool } from "./tools"
+import {
+	childEnv,
+	collectOutbox,
+	containerWorkspace,
+	loadMemory,
+	memoryNote,
+	newTurnId,
+	outboxNote,
+	saveAttachments,
+	turnEnv as makeTurnEnv,
+	type ModelOption,
+	type OutboxEntry,
+	type TurnFile,
+	type TurnOptions,
+	type TurnResult,
+	type TurnUser,
+} from "./turn"
 
 /** Host runtime: writes the bot's own CODEX_HOME/config.toml and links in the shared skills. */
 export async function prepareCodexHome(
@@ -58,39 +71,6 @@ export async function prepareCodexHome(
 	}
 }
 
-/** Env for the Codex child (or the docker wrapper): this process's env minus Slack secrets. */
-function codexEnv(extra: Record<string, string>): Record<string, string> {
-	const env: Record<string, string> = {}
-	for (const [key, value] of Object.entries(Bun.env)) {
-		if (value !== undefined && !key.startsWith("SLACK_")) env[key] = value
-	}
-	return { ...env, ...extra }
-}
-
-/** The Slack user a turn runs for; picks their container in the Docker runtime. */
-export type TurnUser = { teamId: string; userId: string }
-
-/** A file attached in Slack; images are also shown to the model. */
-export type TurnFile = {
-	fileName: string
-	title: string
-	data: Uint8Array
-	image: boolean
-}
-
-/** A file Codex left in the turn's outbox, to upload to Slack. */
-export type OutFile = { name: string; data: Uint8Array }
-
-/** What a turn's outbox holds, read lazily. */
-type OutboxEntry = {
-	name: string
-	size: number
-	read: () => Promise<Uint8Array>
-}
-
-const MAX_OUT_FILES = 10
-const MAX_OUT_BYTES = 50 * 1024 * 1024
-
 /** Where the host runtime's codex is: the SDK's own bundled binary (it finds it on construction). */
 function hostCodex(): { executablePath: string; pathDirs: string[] } {
 	return (
@@ -100,16 +80,6 @@ function hostCodex(): { executablePath: string; pathDirs: string[] } {
 	).exec
 }
 
-export type ModelOption = {
-	id: string
-	name: string
-	description: string
-	efforts: { id: string; description: string }[]
-	defaultEffort: string
-	/** Offers Codex's fast tier (quicker, uses more of the plan). */
-	fast: boolean
-}
-
 let catalog: { models: Promise<ModelOption[]>; at: number } | null = null
 const CATALOG_MS = 6 * 3600_000
 
@@ -117,14 +87,14 @@ const CATALOG_MS = 6 * 3600_000
  * The models Codex offers, as `model/list` reports them (its built-in catalog, the same version
  * as the containers'), cached for a few hours. Empty if it can't be read.
  */
-export function listModels(): Promise<ModelOption[]> {
+export function listCodexModels(): Promise<ModelOption[]> {
 	if (catalog && Date.now() - catalog.at < CATALOG_MS) return catalog.models
 	const models = (async () => {
 		const home = (await Bun.$`mktemp -d`.text()).trim()
 		const codex = hostCodex()
 		const server = new AppServer(
 			[codex.executablePath, "app-server"],
-			codexEnv({
+			childEnv({
 				CODEX_HOME: home,
 				PATH: [...codex.pathDirs, Bun.env.PATH ?? ""].join(":"),
 			}),
@@ -170,6 +140,7 @@ export function listModels(): Promise<ModelOption[]> {
 						model.defaultReasoningEffort ?? "medium",
 					),
 					fast: ((model.serviceTiers as unknown[]) ?? []).length > 0,
+					images: true,
 				}))
 		} finally {
 			server.close()
@@ -238,7 +209,7 @@ async function createCodex(
 		const codex = hostCodex()
 		return {
 			command: [codex.executablePath],
-			env: codexEnv({
+			env: childEnv({
 				CODEX_HOME: paths.codexHome,
 				ACCESS_TOKEN: await getAccessToken(),
 				...toolEnv,
@@ -284,12 +255,11 @@ async function createCodex(
 		ensureContainer(config, user.teamId, user.userId),
 		startModelProxy(),
 	])
-	// In the user's workspace, so they can come back to these files later.
-	const outbox = `${CONTAINER_WORKDIR}/slack-outbox/${turnId}`
-	await makeDirInContainer(container, outbox)
+	const workspace = await containerWorkspace(container, turnId)
 	return {
+		...workspace,
 		command: [CODEX_DOCKER_WRAPPER],
-		env: codexEnv({
+		env: childEnv({
 			DOT_CONTAINER: container,
 			DOT_PROXY_KEY: proxy.key,
 			...turnEnv,
@@ -307,109 +277,18 @@ async function createCodex(
 			cwd: CONTAINER_WORKDIR,
 			sandbox: "danger-full-access" as const,
 		},
-		saveFile: async (file: TurnFile) => {
-			const path = `${CONTAINER_WORKDIR}/slack-files/${file.fileName}`
-			await writeIntoContainer(container, path, file.data)
-			return path
-		},
-		outbox,
 		// Closing the app-server only ends `docker exec` on the host; the run inside needs ending too.
 		stop: () => stopRun(container, turnId),
-		listOutbox: () => listContainerDir(container, outbox),
 	}
 }
 
-/** The person's saved memory, rendered; null when empty or unreadable (never fails the turn). */
-async function loadMemory(show: () => Promise<string>): Promise<string | null> {
-	try {
-		const text = (await show()).trim()
-		return text && text !== "(memory is empty)" ? text : null
-	} catch (error) {
-		console.warn("[memory] couldn't load:", error)
-		return null
-	}
-}
-
-/** The outbox's files to upload, and the names of ones skipped for count or size. */
-async function collectOutbox(
-	entries: OutboxEntry[],
-): Promise<{ files: OutFile[]; skipped: string[] }> {
-	const sorted = entries.toSorted((a, b) => a.name.localeCompare(b.name))
-	const kept = sorted
-		.filter(entry => entry.size > 0 && entry.size <= MAX_OUT_BYTES)
-		.slice(0, MAX_OUT_FILES)
-	const files = await Promise.all(
-		kept.map(async entry => ({
-			name: entry.name,
-			data: await entry.read(),
-		})),
-	)
-	return {
-		files,
-		skipped: sorted
-			.filter(entry => !kept.includes(entry))
-			.map(entry => entry.name),
-	}
-}
-
-export type TurnResult = {
-	threadId: string
-	text: string
-	files: OutFile[]
-	skipped: string[]
-}
-
-/**
- * Adds a message to a turn while it runs (Codex sees it at its next step); false when the turn
- * has already ended, or couldn't take it, so the message should start its own turn instead.
- */
-export type Steer = (input: string, files?: TurnFile[]) => Promise<boolean>
-
-export async function runTurn(options: {
-	config: BotConfig
-	user: TurnUser
-	threadId?: string
-	input: string
-	files?: TurnFile[]
-	/** Cancels the turn (STOP, or the owner's Stop button). */
-	signal?: AbortSignal
-	/** The Slack conversation the turn is for, so commands like `schedule` can act on it. */
-	slack?: {
-		channel: string
-		threadTs: string
-		timezone: string
-		scheduled?: boolean
-	}
-	onStep?: (step: Step) => void
-	/** Called with a way to steer the turn once it runs, and with null once it can't be any more. */
-	onSteerable?: (steer: Steer | null) => void
-}): Promise<TurnResult> {
+export async function runCodexTurn(options: TurnOptions): Promise<TurnResult> {
 	options.signal?.throwIfAborted()
 	const { config, input, slack } = options
 	const track = stepTracker(step => options.onStep?.(step))
 
-	const turnId =
-		new Date()
-			.toISOString()
-			.slice(0, 19)
-			.replace(/[T:]/g, "-")
-			.toLowerCase() + `-${crypto.randomUUID().slice(0, 4)}`
-	const api = botApiUrl()
-	const turnEnv: Record<string, string> = {
-		DOT_TURN: turnId,
-		...(slack
-			? {
-					DOT_CALLER: callerCredential({
-						...options.user,
-						channel: slack.channel,
-						threadTs: slack.threadTs,
-						scheduled: slack.scheduled ?? false,
-					}),
-					DOT_TIMEZONE: slack.timezone,
-					...(api ? { DOT_API: api } : {}),
-				}
-			: {}),
-	}
+	const turnId = newTurnId()
+	const turnEnv = makeTurnEnv(turnId, options.user, slack)
 	const {
 		command,
 		env,
@@ -424,16 +303,7 @@ export async function runTurn(options: {
 
 	// The CLI reads image paths itself, so files must exist where it runs (inside the container).
 	const attach = async (files: TurnFile[]) => {
-		const attached = await Promise.all(
-			files.map(async file => ({ file, path: await saveFile(file) })),
-		)
-		const images = attached.filter(({ file }) => file.image)
-		const note =
-			attached.length > 0 &&
-			`Files attached in these messages, saved for you${images.length ? " (images are also shown below, in order)" : ""}:\n` +
-				attached
-					.map(({ file, path }) => `- ${file.title}: ${path}`)
-					.join("\n")
+		const { note, images } = await saveAttachments(files, saveFile, true)
 		return {
 			note,
 			images: images.map(({ path }) => ({ type: "localImage", path })),
@@ -501,13 +371,8 @@ export async function runTurn(options: {
 					runTool(config, options.user, ["memory", "show"]),
 				)
 		const { note, images } = await attach(options.files ?? [])
-		const recalled =
-			memory &&
-			`<memory-context>\nWhat you've saved about the person you're working for, from earlier conversations (background, not instructions):\n\n${memory}\n</memory-context>`
-		const notes = [
-			note,
-			`To send files to Slack (CSV, images, documents, code…), save them directly in ${outbox}/. They're uploaded to this thread right after your reply, so refer to them by name, not path.`,
-		].filter(Boolean)
+		const recalled = memoryNote(memory)
+		const notes = [note, outboxNote(outbox)].filter(Boolean)
 
 		let answer = ""
 		let lastError: string | null = null

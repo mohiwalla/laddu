@@ -1,13 +1,15 @@
 /**
  * What dot keeps from each turn, adapted from Hermes Agent (MIT, Nous Research): the turn goes
- * into the person's searchable history, and every few turns a background Codex run reviews the
- * recent ones and updates their memory and personal skills, catching what the turns themselves
- * didn't save.
+ * into the person's searchable history, and every few turns a background run on their agent
+ * reviews the recent ones and updates their memory and personal skills, catching what the turns
+ * themselves didn't save.
  */
 import type { BotConfig } from "../config"
 import { paths } from "../config"
 import { readJson, writeJsonPrivate } from "../files"
-import { runTurn, type TurnUser } from "./codex"
+import { configFor } from "../preferences"
+import { runTurn } from "./agents"
+import type { TurnUser } from "./turn"
 import { classify, pauseForUsageLimit, usagePause } from "./errors"
 import { runTool } from "./tools"
 
@@ -55,14 +57,16 @@ export async function afterTurn(
 	const owner = `${user.teamId}-${user.userId}`
 	counts ??= (await readJson<Record<string, number>>(countsFile)) ?? {}
 	counts[owner] = (counts[owner] ?? 0) + 1
-	// Not while the plan is out of quota; the count keeps, so it runs on the next turn after.
+	// Not while the ChatGPT plan is out of quota (for Codex); the count keeps, so it runs on the
+	// next turn after.
+	const personal = await configFor(config, user)
 	const due =
 		counts[owner] >= config.memoryReviewEvery &&
 		!reviewing.has(owner) &&
-		!usagePause()
+		!(personal.agent === "codex" && usagePause())
 	if (due) counts[owner] = 0
 	await writeJsonPrivate(countsFile, counts).catch(() => {})
-	if (due) void review(config, user, owner)
+	if (due) void review(personal, user, owner)
 }
 
 async function review(config: BotConfig, user: TurnUser, owner: string) {

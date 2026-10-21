@@ -1,14 +1,20 @@
 /**
- * Each person's own settings, picked on dot's Home tab: the model, how hard it thinks, and fast
- * mode. Unset ones fall back to the bot's (.env). A pick the model no longer supports is ignored,
- * so a catalog change never breaks a turn.
+ * Each person's own settings, picked on dot's Home tab: the agent, its model, how hard it thinks,
+ * and fast mode. Unset ones fall back to the bot's (.env). A pick the model no longer supports is
+ * ignored, so a catalog change never breaks a turn.
  */
 import type { BotConfig } from "./config"
 import { paths } from "./config"
 import { readJson, writeJsonPrivate } from "./files"
-import { listModels, type ModelOption } from "./agent/codex"
+import { AGENTS, type AgentId } from "./agent/agents"
+import type { ModelOption } from "./agent/turn"
 
-export type Preferences = { model?: string; effort?: string; fast?: boolean }
+export type Preferences = {
+	agent?: AgentId
+	model?: string
+	effort?: string
+	fast?: boolean
+}
 type Person = { teamId: string; userId: string }
 
 const file = `${paths.dataDir}/preferences.json`
@@ -37,23 +43,33 @@ export async function setPreferences(
 	await writeJsonPrivate(file, saved)
 }
 
+/** The agent their turns run on. */
+export const agentFor = (config: BotConfig, picked: Preferences): AgentId =>
+	picked.agent ?? config.agent
+
 export type Effective = {
+	agent: AgentId
 	model: string
 	effort: string
 	fast: boolean
-	/** The model's catalog entry (absent if Codex didn't list it). */
+	/** The model's catalog entry (absent if the agent didn't list it). */
 	option?: ModelOption
 }
 
-/** What their turns use: their picks where the model supports them, else the bot's. */
+/**
+ * What their turns use: their picks where the model supports them, else the bot's. `models` are
+ * their agent's (AGENTS[agentFor(…)].listModels()).
+ */
 export function effective(
 	config: BotConfig,
 	picked: Preferences,
 	models: ModelOption[],
 ): Effective {
+	const agent = agentFor(config, picked)
+	const fallback = agent === "codex" ? config.model : config.opencodeModel
 	const find = (id?: string) => models.find(model => model.id === id)
-	const option = find(picked.model) ?? find(config.model)
-	const model = option?.id ?? config.model
+	const option = find(picked.model) ?? find(fallback)
+	const model = option?.id ?? fallback
 	const supports = (effort?: string) =>
 		effort !== undefined &&
 		(!option || option.efforts.some(candidate => candidate.id === effort))
@@ -62,8 +78,10 @@ export function effective(
 		: supports(config.reasoningEffort)
 			? config.reasoningEffort
 			: (option?.defaultEffort ?? config.reasoningEffort)
-	const fast = (picked.fast ?? config.fast) && (option ? option.fast : true)
-	return { model, effort, fast, ...(option ? { option } : {}) }
+	const fast =
+		(picked.fast ?? config.fast) &&
+		(option ? option.fast : agent === "codex")
+	return { agent, model, effort, fast, ...(option ? { option } : {}) }
 }
 
 /** The bot's config with this person's settings applied, for their turns. */
@@ -72,10 +90,12 @@ export async function configFor(
 	person: Person,
 ): Promise<BotConfig> {
 	const picked = await preferences(person)
-	if (!Object.keys(picked).length) return config
-	const chosen = effective(config, picked, await listModels())
+	const agent = agentFor(config, picked)
+	if (!Object.keys(picked).length && agent === "codex") return config
+	const chosen = effective(config, picked, await AGENTS[agent].listModels())
 	return {
 		...config,
+		agent,
 		model: chosen.model,
 		reasoningEffort: chosen.effort as BotConfig["reasoningEffort"],
 		fast: chosen.fast,

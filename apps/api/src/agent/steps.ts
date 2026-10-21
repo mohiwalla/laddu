@@ -1,9 +1,21 @@
 /**
- * Turns Codex's items into plain-language steps for the Slack progress UI. Codex usually writes a
- * short note before acting ("Checking the weather on wttr.in"); that becomes the step's title and
- * the raw command is kept as its details. Without a note, the title is guessed from the command.
+ * Turns an agent's items (Codex's, or an ACP agent's mapped onto them) into plain-language steps
+ * for the Slack progress UI. The agent usually writes a short note before acting ("Checking the
+ * weather on wttr.in"); that becomes the step's title and the raw command is kept as its details.
+ * Without a note, the title is guessed from the command.
  */
 import type { ThreadItem } from "@openai/codex-sdk"
+
+/** Any other tool an agent ran (an ACP agent's read, search, think…), already titled. */
+export type ToolItem = {
+	id: string
+	type: "tool"
+	title: string
+	status: "in_progress" | "completed" | "failed"
+}
+
+/** What an agent reports as it works: Codex's items, plus ACP agents' other tools. */
+export type AgentItem = ThreadItem | ToolItem
 
 export type Step = {
 	id: string
@@ -97,7 +109,7 @@ function narrationTitle(text: string): string | null {
 	return line ? clip(line, MAX_TITLE) : null
 }
 
-function toStep(item: ThreadItem, done: boolean): Step | null {
+function toStep(item: AgentItem, done: boolean): Step | null {
 	const status = (itemStatus?: string): Step["status"] =>
 		itemStatus === "failed"
 			? "error"
@@ -150,13 +162,19 @@ function toStep(item: ThreadItem, done: boolean): Step | null {
 				status: status(item.status),
 			}
 		}
+		case "tool":
+			return {
+				id: item.id,
+				title: clip(item.title, MAX_TITLE),
+				status: status(item.status),
+			}
 		default:
 			return null
 	}
 }
 
 /**
- * Feed it every Codex item event; it reports each step's latest state, keeping its first title.
+ * Feed it every item event; it reports each step's latest state, keeping its first title.
  * Back-to-back actions on dot's computer (dozens of clicks and keys) share one row, with a count.
  */
 export function stepTracker(onStep: (step: Step) => void) {
@@ -164,7 +182,7 @@ export function stepTracker(onStep: (step: Step) => void) {
 	let narration: string | null = null
 	let computer: { id: string; title: string; actions: Set<string> } | null =
 		null
-	return (item: ThreadItem, done: boolean) => {
+	return (item: AgentItem, done: boolean) => {
 		if (item.type === "agent_message") {
 			if (done) narration = narrationTitle(item.text)
 			return

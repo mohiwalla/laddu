@@ -5,7 +5,8 @@ import type { App } from "@slack/bolt"
 import { ruleEvents, type SlackAutomations } from "./automations"
 import type { SlackForms } from "./forms"
 import type { BotConfig } from "../config"
-import { runTurn, type Steer, type TurnResult } from "../agent/codex"
+import { runTurn } from "../agent/agents"
+import type { Steer, TurnResult } from "../agent/turn"
 import {
 	classify,
 	pauseForUsageLimit,
@@ -169,13 +170,6 @@ async function handle(
 				},
 				message => markReply(inflightKey, message).catch(() => {}),
 			)
-			const paused = usagePause()
-			if (paused)
-				throw new TurnFailed({
-					...classify(new Error("usage limit")),
-					message: paused,
-				})
-
 			const user = { teamId: trigger.teamId, userId: trigger.userId }
 			// The first time this turn uses dot's computer: a fresh link in their Home tab (and, the very
 			// first time ever, a note saying where it is).
@@ -195,7 +189,18 @@ async function handle(
 					),
 				)
 			}
-			let session = await getSession(key)
+			const personal = await configFor(config, user)
+			// The ChatGPT plan's usage limit only holds up Codex.
+			const paused = personal.agent === "codex" && usagePause()
+			if (paused)
+				throw new TurnFailed({
+					...classify(new Error("usage limit")),
+					message: paused,
+				})
+			// Their agent's own conversation; one from another agent (they switched) starts over.
+			let session = await getSession(key).then(found =>
+				found?.agent === personal.agent ? found : undefined,
+			)
 			let turn: TurnInput
 			// Messages added to this turn while it runs (steerInto).
 			const steered: Steered = { seen: trigger.ts, lines: [] }
@@ -217,9 +222,9 @@ async function handle(
 					)
 					result = await runTurn({
 						signal: agent.signal,
-						config: await configFor(config, user),
+						config: personal,
 						user,
-						threadId: session?.codexThreadId,
+						threadId: session?.threadId,
 						input: turn.text,
 						files,
 						slack: {
@@ -258,7 +263,8 @@ async function handle(
 			}
 			agent.signal.throwIfAborted()
 			await saveSession(key, {
-				codexThreadId: result.threadId,
+				agent: personal.agent,
+				threadId: result.threadId,
 				lastSeenTs: steered.seen,
 				linked: [
 					...new Set([...(session?.linked ?? []), ...turn.linked]),
@@ -751,14 +757,15 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 			`Do it now. Your reply is posted ${where} as-is${job.post === "dm" ? "" : `; mention <@${job.userId}> if it's a reminder or needs their attention`}. If there's nothing worth posting this time (e.g. nothing changed), reply exactly [SILENT].`,
 		].join("\n")
 		try {
-			const usage = usagePause()
+			const personal = await configFor(config, user)
+			const usage = personal.agent === "codex" && usagePause()
 			if (usage)
 				throw new TurnFailed({
 					...classify(new Error("usage limit")),
 					message: usage,
 				})
 			const result = await runTurn({
-				config: await configFor(config, user),
+				config: personal,
 				user,
 				input,
 				slack: {

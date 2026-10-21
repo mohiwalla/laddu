@@ -1,16 +1,20 @@
 /**
- * Maps (Slack thread, user) to the Codex thread that answers that user there.
- * Codex keeps the conversation itself (in CODEX_HOME/sessions); we only keep the pointer
- * and the newest Slack message ts already sent to Codex, so follow-ups only send new messages.
+ * Maps (Slack thread, user) to the agent's conversation that answers that user there.
+ * The agent keeps the conversation itself (Codex in CODEX_HOME/sessions, OpenCode in its data
+ * dir); we only keep the pointer and the newest Slack message ts already sent to it, so follow-ups
+ * only send new messages.
  */
+import type { AgentId } from "./agent/agents"
 import { paths } from "./config"
 import { readJson, writeJsonPrivate } from "./files"
 
 export type Session = {
-	codexThreadId: string
-	/** ts of the newest Slack message already included in a Codex turn. */
+	/** Whose conversation it is; after switching agents, the thread starts over with the new one. */
+	agent: AgentId
+	threadId: string
+	/** ts of the newest Slack message already included in a turn. */
 	lastSeenTs: string
-	/** Linked Slack conversations already given to Codex in this thread ("channel:ts"). */
+	/** Linked Slack conversations already given to the agent in this thread ("channel:ts"). */
 	linked?: string[]
 }
 
@@ -45,7 +49,7 @@ export async function deleteSession(key: string): Promise<void> {
 
 const queues = new Map<string, Promise<unknown>>()
 
-/** Run `task` after any earlier task for the same key, so one Slack thread never has two Codex turns at once. */
+/** Run `task` after any earlier task for the same key, so one Slack thread never has two turns at once. */
 export function serialize<T>(key: string, task: () => Promise<T>): Promise<T> {
 	const previous = queues.get(key) ?? Promise.resolve()
 	const next = previous.catch(() => {}).then(task)

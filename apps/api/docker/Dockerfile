@@ -1,5 +1,6 @@
 # Per-user runtime for dot: every Slack user gets their own container from this image.
-# Codex runs inside it, so whatever it executes only sees this container, never the host.
+# Their agent (Codex or OpenCode) runs inside it, so whatever it executes only sees this
+# container, never the host.
 # Built by src/agent/containers.ts; the build context also holds `codex/`, the platform
 # folder of the @openai/codex npm package (same version the SDK expects), layout intact.
 FROM debian:trixie
@@ -146,6 +147,14 @@ RUN apt-get update \
       faster-whisper==1.2.1 av==16.1.0 ctranslate2==4.8.3 \
  && /opt/dot/audio/bin/python -c 'from faster_whisper.utils import download_model; download_model("base", output_dir="/opt/dot/audio/model", revision="ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66")' \
  && /opt/dot/audio/bin/pip check
+
+# OpenCode, dot's other agent (src/agent/opencode.ts): one binary from its npm platform package.
+ARG OPENCODE=1.19.3
+RUN case "$(dpkg --print-architecture)" in amd64) platform=x64 ;; arm64) platform=arm64 ;; esac \
+ && curl -fsSL "https://registry.npmjs.org/opencode-linux-${platform}/-/opencode-linux-${platform}-${OPENCODE}.tgz" \
+      | tar -xz -C /tmp \
+ && install -m 755 /tmp/package/bin/opencode /usr/local/bin/opencode \
+ && rm -rf /tmp/package
 
 USER dot
 WORKDIR /home/dot/workspace

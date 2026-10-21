@@ -1,4 +1,5 @@
 import type { ModelReasoningEffort, SandboxMode } from "@openai/codex-sdk"
+import type { AgentId } from "./agent/agents"
 
 /** apps/api/, as a directory URL; relative paths in env vars resolve against it. */
 const appRoot = new URL("../", import.meta.url)
@@ -16,6 +17,11 @@ function required(name: string): string {
 
 function optional(name: string, fallback: string): string {
 	return Bun.env[name]?.trim() || fallback
+}
+
+function agentId(value: string): AgentId {
+	if (value === "codex" || value === "opencode") return value
+	throw new Error(`DOT_AGENT must be "codex" or "opencode", not "${value}"`)
 }
 
 const dataDir = fromAppRoot(optional("DATA_DIR", ".data"))
@@ -67,7 +73,14 @@ export function loadBotConfig() {
 				: new Set(allowed.split(",").map(id => id.trim())),
 		/** "docker": Codex runs in a per-user container (default). "host": on this machine, sandboxed only by Codex. */
 		runtime: optional("CODEX_RUNTIME", "docker") as "docker" | "host",
+		/** The agent people get until they pick one on the Home tab: "codex" or "opencode". */
+		agent: agentId(optional("DOT_AGENT", "codex")),
+		/**
+		 * The model a turn runs on. From CODEX_MODEL here; configFor() (preferences.ts) swaps in the
+		 * person's pick, or OPENCODE_MODEL when their agent is OpenCode.
+		 */
 		model: required("CODEX_MODEL"),
+		opencodeModel: optional("OPENCODE_MODEL", "opencode/big-pickle"),
 		reasoningEffort: optional(
 			"CODEX_REASONING_EFFORT",
 			"medium",

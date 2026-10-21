@@ -3,7 +3,7 @@ import type { App } from "@slack/bolt"
 import type { BotConfig } from "../config"
 import * as inflight from "../inflight"
 import * as sessions from "../sessions"
-import * as codex from "../agent/codex"
+import * as agents from "../agent/agents"
 import * as context from "./context"
 import * as attachments from "./attachments"
 import * as replies from "./reply"
@@ -137,7 +137,7 @@ test.each(["success", "failure", "stop"] as const)(
 			discard: mock(async () => {}),
 		}
 		const save = spyOn(sessions, "saveSession").mockResolvedValue(undefined)
-		const run = spyOn(codex, "runTurn").mockImplementation(
+		const run = spyOn(agents, "runTurn").mockImplementation(
 			async ({ signal }) => {
 				running()
 				if (outcome === "stop") {
@@ -201,7 +201,10 @@ test.each(["success", "failure", "stop"] as const)(
 			} as unknown as App
 			registerHandlers(
 				app,
-				{ allowedUsers: new Set([userId]) } as BotConfig,
+				{
+					allowedUsers: new Set([userId]),
+					agent: "codex",
+				} as BotConfig,
 				botUserId,
 			)
 			const ts = `1792200000.${String(++sequence).padStart(6, "0")}`

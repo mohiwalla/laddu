@@ -1,8 +1,9 @@
 # Architecture
 
 A personal Slack assistant. You tag it in a channel (or DM it); it reads the conversation around the
-tag, hands the job to Codex, and replies in the thread. Codex is the brain for every request; the
-bot itself only moves messages between Slack and Codex.
+tag, hands the job to an agent, and replies in the thread. The agent is the brain for every request:
+Codex on the owner's ChatGPT plan, or OpenCode's free models, each person's pick on dot's Home tab.
+The bot itself only moves messages between Slack and the agent.
 
 Status: **V0**, with per-person integrations, computer use and Azure Repos coding tasks.
 See [Roadmap](#roadmap).
@@ -20,15 +21,20 @@ apps/
       index.ts         boot: config, ChatGPT token check, Slack Socket Mode
       config.ts        env + paths
       files.ts         JSON / private-file helpers
-      sessions.ts      (Slack thread, user) ↔ Codex thread map, per-key queue
+      sessions.ts      (Slack thread, user) ↔ agent conversation map, per-key queue
+      preferences.ts   each person's picks from the Home tab (agent, model, effort, speed)
       inflight.ts      turns in progress, so a restart can resume them
       auth/siwc.ts     Sign in with ChatGPT credentials + token refresh
       auth/login.ts    `bun run login`: one-time OAuth (PKCE, loopback)
+      agent/agents.ts  the agents a person can pick, and the one entry point for a turn
+      agent/turn.ts    what every agent shares: turn inputs/result, env, workspace, outbox, memory
       agent/codex.ts   runs Codex turns on the ChatGPT plan (in the user's container)
+      agent/acp.ts     runs a turn on any Agent Client Protocol agent (steps, steering, Stop)
+      agent/opencode.ts OpenCode's free models over ACP (in the user's container)
       agent/containers.ts runtime image + one Docker container per Slack user
       agent/model-proxy.ts keeps the ChatGPT token out of containers
       agent/codex-config.ts Codex provider config (direct, or via the proxy)
-      agent/steps.ts   Codex items → plain-language progress steps
+      agent/steps.ts   agent items → plain-language progress steps
       agent/errors.ts  failure classes → message + recovery (retry, fresh thread, quota pause)
       agent/learning.ts turn log + background review (memory, personal skills)
       agent/tools.ts   runs runtime/ commands for a user (container or host)
@@ -516,6 +522,31 @@ tasks, Slack DMs and coding tasks in isolated checkouts ending in a draft Azure 
 - Files attached to messages new this turn (up to 100 MB each, 20 per turn) are saved in the user's
   workspace under `slack-files/` (host runtime: `.data/slack-files/<team>-<user>/`); PNG, JPEG,
   WebP and GIF up to 20 MB are also shown to the model. Codex reads other formats with its own tools.
+## The other brain: OpenCode over ACP
+
+Each person picks their agent on dot's Home tab (`preferences.ts`; `DOT_AGENT` is the default), and
+everything for them runs on it, background memory reviews included. The second agent is
+[OpenCode](https://opencode.ai) on its free models: no sign-in, no plan. Free models may keep what
+they're sent; dot is experimental, so that's accepted.
+
+dot talks to it over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP), the open
+protocol most coding agents speak (Claude, Antigravity, Gemini, Codex and about 40 more in the
+[ACP registry](https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json)), using the
+official `@agentclientprotocol/sdk`. `agent/acp.ts` is the only file that knows the SDK: it starts
+the agent, opens or resumes the session, sets the model, approves every permission request (the
+container is the boundary), maps tool calls onto the same steps as Codex's (commands, edits, web
+search, the desktop's MCP tools) and handles Stop. ACP can't add to a running prompt, so steering
+cancels it and sends the new message as the next prompt, as T3 Code does. Adding another ACP agent
+is a launch command and its sign-in.
+
+OpenCode runs only in the Docker runtime: the image carries its binary (`ARG OPENCODE`), and
+`scripts/opencode-docker.sh` runs `opencode acp` in the person's container with the same persona,
+commands, skills and desktop as Codex, config in `OPENCODE_CONFIG_CONTENT` (everything allowed,
+no sharing or snapshots) and web search through Exa (`OPENCODE_ENABLE_EXA`). Its conversations
+live in the container's home volume; a thread remembers which agent it used, and switching agents
+starts it over. The model list on the Home tab is `opencode models opencode` in the image, free
+ones only; images are sent only to models that take them.
+
 - Slack links in the new messages (typed, unfurled or forwarded; up to 3) are read through the API
   and added to the transcript with their attachments, up to 100 messages each. Private channels and
   DMs only if the person asking is a member, so a link can't expose what they couldn't read.
@@ -533,4 +564,5 @@ tasks, Slack DMs and coding tasks in isolated checkouts ending in a draft Azure 
 - A running answer can't be cancelled from Slack. (`runTurn` takes an `AbortSignal` that also ends
   the run inside the container, but no Slack control uses it: a Stop button can only be shared,
   where everyone sees it, or private, where Slack can't remove it afterwards.)
+- More agents over ACP: Claude, Antigravity, DeepSeek (through OpenCode) with each person's sign-in.
 - State is in local JSON files; one process only.

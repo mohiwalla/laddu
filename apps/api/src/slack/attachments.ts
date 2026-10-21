@@ -3,7 +3,7 @@
  * leaves in its outbox are uploaded to the thread.
  */
 import type { App } from "@slack/bolt"
-import type { TurnFile } from "../agent/codex"
+import type { TurnFile } from "../agent/turn"
 import type { SlackAttachment } from "./context"
 
 type WebClient = App["client"]
