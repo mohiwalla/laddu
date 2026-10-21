@@ -22,6 +22,8 @@ export function codexConfig({
 model_provider = "openai_chatgpt_plan"
 # Codex's own model catalog with sub-agents switched off (see writeModelCatalog in containers.ts).
 model_catalog_json = "${modelCatalog}"
+# OpenAI's hosted web search, run inside the model call (the catalog above makes that possible).
+web_search = "live"
 
 [model_providers.openai_chatgpt_plan]
 name = "ChatGPT plan"

@@ -77,7 +77,9 @@ async function codexDistribution() {
  * Writes Codex's bundled model catalog (from the codex build the SDK uses) with sub-agents
  * switched off for every model. Current models enable them from their catalog entry
  * (`multi_agent_version`) whatever `[features]` says, and a sub-agent's reply is an input item
- * the ChatGPT plan rejects, failing the turn. Regenerated each start, so it follows Codex updates.
+ * the ChatGPT plan rejects, failing the turn. Responses-Lite is off too: it refuses the hosted
+ * web search tool, the only search the plan allows (Codex's own search endpoint rejects plan
+ * credentials). Regenerated each start, so it follows Codex updates.
  */
 export async function writeModelCatalog(path: string): Promise<void> {
 	const { dir } = await codexDistribution()
@@ -87,7 +89,10 @@ export async function writeModelCatalog(path: string): Promise<void> {
 		.env({ ...Bun.env, CODEX_HOME: paths.codexHome })
 		.quiet()
 		.json()) as { models: Record<string, unknown>[] }
-	for (const model of catalog.models) model.multi_agent_version = null
+	for (const model of catalog.models) {
+		model.multi_agent_version = null
+		model.use_responses_lite = false
+	}
 	await writePrivate(path, JSON.stringify(catalog, null, "\t"))
 }
 
