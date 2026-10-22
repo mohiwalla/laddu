@@ -21,7 +21,9 @@ function optional(name: string, fallback: string): string {
 
 /** "*" for everyone in the workspace, else comma-separated Slack user IDs. */
 function users(value: string): "*" | Set<string> {
-	return value === "*" ? "*" : new Set(value.split(",").map(id => id.trim()))
+	return value === "*"
+		? "*"
+		: new Set(value.split(",").map(id => id.trim()).filter(Boolean))
 }
 
 function agentId(value: string): AgentId {
@@ -64,7 +66,14 @@ export function loadBotConfig() {
 			"DESKTOP_PUBLIC_URL",
 			`http://localhost:${port}`,
 		).replace(/\/$/, "")
-		return { host, port, publicUrl }
+		/**
+		 * A second address for the people in `tailnetUsers` (e.g. `tailscale serve` on this machine):
+		 * their links point there, straight over their tailnet instead of through the tunnel.
+		 */
+		const tailnetUrl =
+			Bun.env.DESKTOP_TAILNET_URL?.trim().replace(/\/$/, "") || undefined
+		const tailnetUsers = users(optional("DESKTOP_TAILNET_USERS", ""))
+		return { host, port, publicUrl, tailnetUrl, tailnetUsers }
 	})()
 	return {
 		slackBotToken: required("SLACK_BOT_TOKEN"),

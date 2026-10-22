@@ -396,6 +396,8 @@ offline).
 | `DESKTOP_VIEWER_HOST`    | `127.0.0.1`             | Where the viewer gateway listens                                                                                 |
 | `DESKTOP_VIEWER_PORT`    | `6900`                  |                                                                                                                  |
 | `DESKTOP_PUBLIC_URL`     | `http://localhost:6900` | What watch/control links point to: a tunnel or an HTTPS domain when people open them from elsewhere              |
+| `DESKTOP_TAILNET_URL`    | none                    | This machine on Tailscale (`tailscale serve --bg --https=443 http://127.0.0.1:6900`), for the people below       |
+| `DESKTOP_TAILNET_USERS`  | nobody                  | Whose links point to `DESKTOP_TAILNET_URL` instead: `"*"` or member IDs, all on the tailnet; much faster than a tunnel|
 | `DESKTOP_IDLE_MINUTES`   | `10`                    | A desktop with no actions and no viewers this long is stopped (files and logins stay)                            |
 | `DATA_DIR`               | `.data`                 | Credentials, sessions, the bot's `CODEX_HOME`                                                                    |
 | `APP_NAME`               | `slack-codex-bot`       | Name shown on the ChatGPT consent screen at first registration                                                   |

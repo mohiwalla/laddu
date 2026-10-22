@@ -181,7 +181,9 @@ computer-use plugin of a Linux build of Codex Desktop) and Bytebot.
   (`.data/…/desktop-introduced.json`). `desktop link "<why>"` still sends the link privately on
   request (e.g. to sign in to a site, so passwords never go through Slack). The link opens a
   gateway in the bot (`DESKTOP_VIEWER_HOST`/`PORT`, local by default; `DESKTOP_PUBLIC_URL` is what
-  links point to, e.g. a tunnel or HTTPS domain) that sets a cookie
+  links point to, e.g. a tunnel or HTTPS domain; `DESKTOP_TAILNET_USERS` get `DESKTOP_TAILNET_URL`
+  instead, this machine over Tailscale, ~7 ms where the Cloudflare tunnel took ~150 ms through
+  Marseille) that sets a cookie
   and proxies KasmVNC's web viewer and websocket from that person's container, logged in on the
   bot's side (the VNC login is random per container, `~/.desktop/viewer.json`, and never reaches
   the browser; no container port is published).

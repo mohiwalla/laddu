@@ -544,7 +544,16 @@ export async function desktopLink(
 	config: BotConfig,
 	owner: Owner,
 ): Promise<string> {
-	return `${config.desktopViewer.publicUrl}/open/${await grantToken(owner)}`
+	return `${viewerUrl(config, owner)}/open/${await grantToken(owner)}`
+}
+
+/** Where this person opens the viewer: their tailnet address if they're listed for it. */
+function viewerUrl(config: BotConfig, owner: Owner): string {
+	const { publicUrl, tailnetUrl, tailnetUsers } = config.desktopViewer
+	return tailnetUrl &&
+		(tailnetUsers === "*" || tailnetUsers.has(owner.userId))
+		? tailnetUrl
+		: publicUrl
 }
 
 // ---- where people find their link ---------------------------------------------------------
@@ -785,8 +794,11 @@ export function startDesktopGateway(
 	slackOAuth?: (request: Request) => Promise<Response>,
 	slackHome?: string,
 ): void {
-	const { host, port, publicUrl } = config.desktopViewer
+	const { host, port, publicUrl, tailnetUrl } = config.desktopViewer
 	const secure = publicUrl.startsWith("https:")
+	const origins = new Set(
+		[publicUrl, tailnetUrl].flatMap(url => (url ? [new URL(url).origin] : [])),
+	)
 	const toSlack = slackHome
 		? { href: slackHome, label: "Open dot in Slack" }
 		: undefined
@@ -847,7 +859,7 @@ export function startDesktopGateway(
 				const origin = request.headers.get("origin")
 				if (
 					(websocket || request.method === "POST") &&
-					origin !== new URL(publicUrl).origin
+					!origins.has(origin ?? "")
 				)
 					return new Response("wrong origin", { status: 403 })
 
@@ -1008,7 +1020,7 @@ export function startDesktopGateway(
 		return
 	}
 	console.log(
-		`[desktop] viewer gateway on ${host}:${port} (links: ${publicUrl})`,
+		`[desktop] viewer gateway on ${host}:${port} (links: ${publicUrl}${tailnetUrl ? `, ${tailnetUrl} for DESKTOP_TAILNET_USERS` : ""})`,
 	)
 }
 
