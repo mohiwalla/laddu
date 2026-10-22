@@ -1,8 +1,8 @@
 /**
  * Builds laddu.wtf into dist/: the page bundled from index.html, plus the files fetched by their
  * own names (the OG image, robots.txt, favicon.ico) and the CLI's install.sh, so
- * `curl -fsSL https://laddu.wtf/install.sh | sh` works. Run it with the Bun that should build it
- * (vercel.json pins one), since the bundling happens in this process.
+ * `curl -fsSL https://laddu.wtf/install.sh | sh` works. The bundling happens in this process, so
+ * it's whichever Bun runs this (on Vercel, the one bun.lock was made with); the log names it.
  */
 const root = Bun.fileURLToPath(new URL("./", import.meta.url))
 const dist = `${root}dist`
