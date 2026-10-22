@@ -73,8 +73,17 @@ export function listOpenCodeModels(): Promise<ModelOption[]> {
 				id: `opencode/${model.id}`,
 				name: model.name,
 				description: `Free${model.limit?.context ? ` · ${Math.round(model.limit.context / 1000)}k context` : ""}${model.capabilities?.input?.image ? " · sees images" : ""}`,
-				efforts: [],
-				defaultEffort: "",
+				// Its reasoning variants (low … max); OpenCode offers them once the model is picked.
+				efforts: Object.keys(model.variants ?? {}).map(id => ({
+					id,
+					description: "",
+				})),
+				defaultEffort:
+					["medium", "high"].find(
+						id => id in (model.variants ?? {}),
+					) ??
+					Object.keys(model.variants ?? {})[0] ??
+					"",
 				fast: false,
 				images: model.capabilities?.input?.image === true,
 			}))
@@ -94,6 +103,7 @@ type OpenCodeModel = {
 	cost?: { input?: number; output?: number }
 	limit?: { context?: number }
 	capabilities?: { input?: { image?: boolean } }
+	variants?: Record<string, unknown>
 }
 
 const IMAGE_TYPES: Record<string, string> = {
@@ -182,6 +192,7 @@ export async function runOpenCodeTurn(
 			cwd: CONTAINER_WORKDIR,
 			mcpServers,
 			model: config.model,
+			effort: config.reasoningEffort,
 			stop: () => stopRun(container, turnId),
 		},
 		{

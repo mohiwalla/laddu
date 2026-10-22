@@ -130,6 +130,7 @@ function ago(ms: number): string {
 }
 
 const EFFORTS: Record<string, string> = {
+	none: "None",
 	minimal: "Minimal",
 	low: "Low",
 	medium: "Medium",

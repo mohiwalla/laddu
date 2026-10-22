@@ -20,6 +20,8 @@ export type AcpProcess = {
 	mcpServers: acp.McpServer[]
 	/** A value of the session's model option; left as it is when the agent doesn't offer it. */
 	model?: string
+	/** A value of the model's reasoning option (thought_level); left as it is when not offered. */
+	effort?: string
 	/** Ends the run wherever it runs (closing stdin only ends the local end of `docker exec`). */
 	stop: () => Promise<void>
 }
@@ -188,22 +190,28 @@ export async function runAcpTurn(
 		const id = sessionId!
 		options.signal?.throwIfAborted()
 
-		const model = configOptions?.find(
-			option => option.category === "model" && option.type === "select",
-		)
-		if (
-			agent.model &&
-			model?.type === "select" &&
-			model.currentValue !== agent.model &&
-			selectValues(model).includes(agent.model)
-		)
-			await call(
-				peer.request("session/set_config_option", {
-					sessionId: id,
-					configId: model.id,
-					value: agent.model,
-				}),
+		// The model first: the reasoning option depends on it (OpenCode lists its variants).
+		for (const [category, value] of [
+			["model", agent.model],
+			["thought_level", agent.effort],
+		] as const) {
+			const option = configOptions?.find(
+				option =>
+					option.category === category && option.type === "select",
 			)
+			if (
+				value &&
+				option?.type === "select" &&
+				option.currentValue !== value &&
+				selectValues(option).includes(value)
+			)
+				({ configOptions } = await call(
+					peer.request<acp.SetSessionConfigOptionResponse>(
+						"session/set_config_option",
+						{ sessionId: id, configId: option.id, value },
+					),
+				))
+		}
 
 		// Steering: what to send once the running prompt has been cancelled.
 		let queued: acp.ContentBlock[] = []
