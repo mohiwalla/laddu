@@ -17,6 +17,8 @@ export type ReplyTarget = {
 	threadTs: string
 	userId: string
 	teamId: string
+	/** The name and picture they gave laddu (appearance.ts); edits keep them. */
+	as?: { username?: string; icon_url?: string }
 }
 
 /** Reads one message of a thread back (to see what a stream left behind). */
@@ -159,6 +161,7 @@ export async function openReply(
 				channel: target.channel,
 				thread_ts: target.threadTs,
 				markdown_text: part,
+				...target.as,
 			})
 			if (first && message.ts)
 				await remember({ ts: message.ts, streaming: false })
@@ -222,6 +225,7 @@ async function openStream(
 			recipient_user_id: target.userId,
 			recipient_team_id: target.teamId,
 			task_display_mode: "plan",
+			...target.as,
 			chunks: [
 				{ type: "plan_update", title: clip(title, MAX_TASK_TEXT) },
 				...tasks.map(step => taskChunk(step)),
@@ -275,7 +279,10 @@ async function openStream(
 					...toChunks(done),
 					{
 						type: "plan_update",
-						title: clip(`${title} · continued below`, MAX_TASK_TEXT),
+						title: clip(
+							`${title} · continued below`,
+							MAX_TASK_TEXT,
+						),
 					},
 				],
 			})
@@ -402,6 +409,7 @@ async function openStream(
 					channel,
 					thread_ts: target.threadTs,
 					markdown_text: part,
+					...target.as,
 				})
 		},
 		async fail(message) {
@@ -436,6 +444,7 @@ async function openStream(
 						channel,
 						thread_ts: target.threadTs,
 						markdown_text: "_Stopped._",
+						...target.as,
 					}),
 				)
 		},
@@ -462,6 +471,7 @@ async function openPlaceholder(
 		channel,
 		thread_ts: threadTs,
 		markdown_text: first.title,
+		...target.as,
 	})
 	const ts = placeholder.ts!
 
@@ -528,6 +538,7 @@ async function openPlaceholder(
 						channel,
 						thread_ts: threadTs,
 						markdown_text: first!,
+						...target.as,
 					})
 					await client.chat.delete({ channel, ts }).catch(() => {})
 				})
@@ -536,6 +547,7 @@ async function openPlaceholder(
 					channel,
 					thread_ts: threadTs,
 					markdown_text: part,
+					...target.as,
 				})
 		},
 		async fail(message) {

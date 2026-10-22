@@ -1,5 +1,6 @@
 /** Persistent forms opened by buttons, with submissions continuing as the submitting person. */
 import type { App } from "@slack/bolt"
+import { postAs } from "../appearance"
 import { paths } from "../config"
 import { readJson, writeJsonPrivate } from "../files"
 import {
@@ -142,6 +143,7 @@ export class SlackForms {
 			const message = await this.client.chat.postMessage({
 				channel,
 				...(form.threadTs ? { thread_ts: form.threadTs } : {}),
+				...(await postAs(person)),
 				text: `${form.title}: ${form.instruction}`,
 				blocks: [
 					{

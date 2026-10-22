@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""
+Your name and picture for the person you're working for: Slack shows them on every message you
+post for them, to everyone in the conversation. Your @handle, profile and Home tab stay laddu's.
+They can also change these on your Home tab.
+
+  appearance                          what they've set
+  appearance name "<name>"            what they call you (up to 40 characters, not a coworker's name)
+  appearance picture <image file>     a picture of theirs (e.g. one they attached); cropped to a square
+  appearance picture jalebi|kaju-katli|gulab-jamun|rasgulla   one of laddu's sweets
+  appearance reset [name|picture]     back to laddu's own (both if neither is given)
+
+Only change these when they ask. A change shows from your next message.
+"""
+import argparse
+import io
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+API = os.environ.get("LADDU_API")
+CALLER = os.environ.get("LADDU_CALLER")
+PRESETS = ["jalebi", "kaju-katli", "gulab-jamun", "rasgulla"]
+
+
+def call(method, path, body=None, data=None, content_type="application/json"):
+    if not API or not CALLER:
+        sys.exit("error: appearance isn't available here (no connection to the bot in this turn).")
+    request = urllib.request.Request(
+        f"{API}{path}",
+        method=method,
+        data=data if data is not None else json.dumps(body).encode() if body is not None else None,
+        headers={"x-laddu-caller": CALLER, "content-type": content_type},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            print(json.load(response)["text"])
+    except urllib.error.HTTPError as error:
+        try:
+            message = json.load(error)["text"]
+        except Exception:
+            message = f"HTTP {error.code}"
+        sys.exit(f"error: {message}")
+    except urllib.error.URLError as error:
+        sys.exit(f"error: couldn't reach the bot ({error.reason}).")
+
+
+def square_png(path):
+    """The picture cropped to its centre square, 512 px, as PNG (as-is without Pillow)."""
+    with open(path, "rb") as file:
+        raw = file.read()
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        return raw
+    try:
+        image = ImageOps.exif_transpose(Image.open(io.BytesIO(raw)))
+    except Exception:
+        sys.exit(f"error: {path} isn't a picture I can read.")
+    image = ImageOps.fit(image.convert("RGBA"), (512, 512), Image.LANCZOS)
+    out = io.BytesIO()
+    image.save(out, "PNG", optimize=True)
+    return out.getvalue()
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="appearance", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = parser.add_subparsers(dest="command")
+    name = commands.add_parser("name")
+    name.add_argument("name")
+    picture = commands.add_parser("picture")
+    picture.add_argument("picture", help="an image file, or one of: " + ", ".join(PRESETS))
+    reset = commands.add_parser("reset")
+    reset.add_argument("what", nargs="?", choices=["name", "picture"])
+    args = parser.parse_args()
+
+    if args.command is None:
+        call("GET", "/appearance")
+    elif args.command == "name":
+        call("POST", "/appearance", {"name": args.name})
+    elif args.command == "reset":
+        call("POST", "/appearance", {"reset": args.what or "all"})
+    elif args.picture in PRESETS and not os.path.exists(args.picture):
+        call("POST", "/appearance", {"preset": args.picture})
+    elif os.path.isfile(args.picture):
+        call("PUT", "/appearance/picture", data=square_png(args.picture), content_type="application/octet-stream")
+    else:
+        sys.exit(f"error: no file {args.picture}; give an image file or one of: {', '.join(PRESETS)}.")
+
+
+if __name__ == "__main__":
+    main()

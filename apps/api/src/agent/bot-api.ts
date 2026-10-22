@@ -1,7 +1,8 @@
 /**
  * A small API for laddu's commands inside a container that need the bot itself: `schedule`, `ado`
  * (Azure DevOps) and `ms` (Microsoft 365), whose tokens stay here, `slack` (find people, DM
- * them as the person or from laddu, ask them questions) and `desktop link`.
+ * them as the person or from laddu, ask them questions), `desktop link` and `appearance`
+ * (the name and picture they give laddu).
  *
  * Each Codex turn gets a caller credential signed by this process: who the turn runs for and the
  * Slack thread it came from. The command sends it back, so a request can only act as that person,
@@ -10,6 +11,16 @@
  * Docker bridge address (host runtime: localhost), like the model proxy.
  */
 import type { App } from "@slack/bolt"
+import {
+	appearance,
+	cleanName,
+	nameProblem,
+	picturesWork,
+	PRESETS,
+	savePicture,
+	setAppearance,
+	type Appearance,
+} from "../appearance"
 import type { BotConfig } from "../config"
 import * as azureDevOps from "../integrations/azure-devops"
 import * as graph from "../integrations/graph"
@@ -23,6 +34,7 @@ import * as questions from "../slack/questions"
 import type { SlackAutomations } from "../slack/automations"
 import type { SlackForms } from "../slack/forms"
 import { sendDesktopLink } from "./desktop"
+import { refreshHome } from "../slack/home"
 import {
 	addJob,
 	cronProblem,
@@ -573,6 +585,69 @@ async function handleAsk(
 	}
 }
 
+/** `appearance`: the name and picture the person gave laddu (appearance.ts). */
+async function handleAppearance(
+	request: Request,
+	caller: Caller,
+	id: string | undefined,
+	deps: Deps,
+): Promise<Response> {
+	const person = { teamId: caller.teamId, userId: caller.userId }
+	const describe = async () => {
+		const { name, picture } = await appearance(person)
+		const shown = !picture
+			? "laddu's own picture"
+			: picture in PRESETS
+				? `the ${PRESETS[picture]} picture`
+				: "a picture of theirs"
+		return `Name: ${name ?? "laddu (its own)"}. Picture: ${shown}.${picture && !picturesWork() ? " (Pictures don't show on this bot: it has no public HTTPS address, DESKTOP_PUBLIC_URL.)" : ""}`
+	}
+	if (request.method === "GET" && !id) return reply(200, await describe())
+	if (caller.scheduled)
+		return reply(
+			403,
+			"A scheduled run can't change laddu's name or picture.",
+		)
+	let change: Appearance
+	if (request.method === "PUT" && id === "picture") {
+		if (!picturesWork())
+			return reply(
+				501,
+				"Pictures need the bot's public HTTPS address (DESKTOP_PUBLIC_URL), and this bot has none. Names still work.",
+			)
+		const saved = await savePicture(await request.bytes())
+		if ("problem" in saved) return reply(400, saved.problem)
+		change = { picture: saved.picture }
+	} else if (request.method === "POST" && !id) {
+		const body = (await request.json().catch(() => ({}))) as {
+			name?: string
+			preset?: string
+			reset?: string
+		}
+		if (body.reset)
+			change = {
+				...(body.reset !== "picture" ? { name: undefined } : {}),
+				...(body.reset !== "name" ? { picture: undefined } : {}),
+			}
+		else if (body.name !== undefined) {
+			const name = cleanName(body.name)
+			const problem = await nameProblem(deps.client, name)
+			if (problem) return reply(400, problem)
+			change = { name }
+		} else if (body.preset) {
+			const picture = `${body.preset}.png`
+			if (!(picture in PRESETS)) return reply(400, "No such picture.")
+			change = { picture }
+		} else return reply(400, "Give a name, a picture or a reset.")
+	} else return reply(405, "Use name, picture or reset.")
+	await setAppearance(person, change)
+	void refreshHome(deps.client, person).catch(() => {})
+	return reply(
+		200,
+		`Saved; your next messages for them show it. ${await describe()}`,
+	)
+}
+
 type Deps = {
 	config: BotConfig
 	client: App["client"]
@@ -661,6 +736,8 @@ export function startBotApi(hostname: string, deps: Deps): BotApi {
 				return handleCodeCommit(request, caller, id, deps)
 			if (resource === "slack")
 				return handleSlack(request, caller, id, deps)
+			if (resource === "appearance")
+				return handleAppearance(request, caller, id, deps)
 			if (resource === "desktop" && id === "link")
 				return handleDesktopLink(request, caller, deps)
 			return reply(404, "Unknown endpoint.")

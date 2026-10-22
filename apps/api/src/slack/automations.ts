@@ -1,4 +1,5 @@
 /** Persisted Slack event rules, backed by our service rather than paid Workflow Builder. */
+import { postAs } from "../appearance"
 import { paths } from "../config"
 import { readJson, writeJsonPrivate } from "../files"
 import type { Job } from "../scheduler"
@@ -477,6 +478,7 @@ export class SlackAutomations {
 						client_msg_id: delivery.id,
 						unfurl_links: false,
 						unfurl_media: false,
+						...(await postAs(rule)),
 					})
 				else if (rule.action === "reaction") {
 					if (!event.ts)

@@ -210,6 +210,24 @@ async function formatMessage(
 	return `[${time} UTC] ${author}: ${[text, files, replies].filter(Boolean).join(" ")}`
 }
 
+let ownBot: { botId: string; userId: string } | null = null
+/** laddu's own IDs, so its messages read as its own however they were posted. */
+export function recognizeOwnMessages(botId: string, userId: string) {
+	ownBot = { botId, userId }
+}
+
+/**
+ * Its messages posted under someone's name for it (appearance.ts) come back as "bot_message"s
+ * with only its bot ID; this makes them read like the rest of its messages.
+ */
+const asOwn = (message: SlackMessage): SlackMessage =>
+	ownBot &&
+	message.subtype === "bot_message" &&
+	message.bot_id === ownBot.botId &&
+	!message.user
+		? { ...message, subtype: undefined, user: ownBot.userId }
+		: message
+
 /** Messages Codex is shown: plain ones, thread broadcasts and ones with attachments. */
 const isConversation = (message: SlackMessage) =>
 	!message.subtype ||
@@ -238,7 +256,7 @@ async function threadMessages(
 			cursor,
 		})
 		for (const message of (page.messages ?? []) as SlackMessage[])
-			if (message.ts) byTs.set(message.ts, message)
+			if (message.ts) byTs.set(message.ts, asOwn(message))
 		cursor = page.response_metadata?.next_cursor || undefined
 	} while (cursor)
 	return [...byTs.values()].sort((a, b) => Number(a.ts) - Number(b.ts))
@@ -267,7 +285,7 @@ async function fetchMessages(
 			inclusive: true,
 			limit,
 		})
-		all = ((history.messages ?? []) as SlackMessage[]).reverse()
+		all = ((history.messages ?? []) as SlackMessage[]).reverse().map(asOwn)
 	}
 	all = all.filter(
 		message =>
@@ -400,6 +418,7 @@ async function readChannel(
 		})
 		const messages = ((history.messages ?? []) as SlackMessage[])
 			.reverse()
+			.map(asOwn)
 			.filter(isConversation)
 		// Much of a channel's talk happens in threads: the latest replies of its newest threads.
 		const threads = messages

@@ -1,5 +1,6 @@
 import { App, LogLevel } from "@slack/bolt"
 import { prepareCodexHome } from "./agent/codex"
+import { picturesWork, servePicturesAt } from "./appearance"
 import {
 	nameContainersWith,
 	prepareDocker,
@@ -8,7 +9,7 @@ import {
 import { startDesktopGateway, startDesktopReaper } from "./agent/desktop"
 import { getAccessToken } from "./auth/siwc"
 import { loadBotConfig } from "./config"
-import { userFirstName } from "./slack/context"
+import { recognizeOwnMessages, userFirstName } from "./slack/context"
 import {
 	registerHandlers,
 	resumeInterrupted,
@@ -58,7 +59,8 @@ startBotApi(
 // Container names carry the person's first name, for whoever looks at `docker ps`.
 nameContainersWith(userId => userFirstName(app.client, userId))
 const { slackSignIn } = config
-if (config.desktop || slackSignIn) {
+servePicturesAt(config.desktopViewer.publicUrl)
+if (config.desktop || slackSignIn || picturesWork()) {
 	// laddu's Home tab in the Slack app, for the gateway's pages to send people back to.
 	const appId = await app.client.bots
 		.info({ bot: auth.bot_id! })
@@ -76,6 +78,7 @@ if (config.desktop || slackSignIn) {
 	)
 }
 if (config.desktop) startDesktopReaper(config)
+recognizeOwnMessages(auth.bot_id!, auth.user_id!)
 registerHandlers(app, config, auth.user_id!, slack)
 // A previous bot process may have left Codex runs going in containers (they hold thread locks).
 if (config.runtime === "docker") await stopOrphanedRuns(auth.team_id!)

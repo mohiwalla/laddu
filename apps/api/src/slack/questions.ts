@@ -7,6 +7,7 @@
  * closes the question. Kept in memory: a restart drops open questions.
  */
 import type { App, types } from "@slack/bolt"
+import { postAs } from "../appearance"
 import { sessionKey } from "../sessions"
 import {
 	type Field,
@@ -273,6 +274,7 @@ export async function ask(
 		thread_ts: asker.threadTs,
 		text,
 		blocks: openBlocks(question),
+		...(await postAs(asker)),
 	})
 	question.ts = posted.ts!
 	questions.set(question.id, question)

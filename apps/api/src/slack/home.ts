@@ -7,6 +7,19 @@
 import type { App, types } from "@slack/bolt"
 import type { BotConfig } from "../config"
 import { AGENTS, isAgent } from "../agent/agents"
+import {
+	appearance,
+	cleanName,
+	MAX_NAME,
+	MAX_PICTURE_BYTES,
+	nameProblem,
+	pictureUrl,
+	picturesWork,
+	PRESETS,
+	savePicture,
+	setAppearance,
+	type Appearance,
+} from "../appearance"
 import type { ModelOption } from "../agent/turn"
 import { desktopLink } from "../agent/desktop"
 import { runTool } from "../agent/tools"
@@ -163,7 +176,9 @@ async function agentSection(
 			select(
 				"home_agent",
 				Object.entries(AGENTS)
-					.filter(([id]) => id !== "codex" || canUseCodex(config, person))
+					.filter(
+						([id]) => id !== "codex" || canUseCodex(config, person),
+					)
 					.map(([id, about]) => ({ text: about.name, value: id })),
 				agent,
 			),
@@ -236,6 +251,38 @@ async function agentSection(
 			: hint("The bot's defaults. Changes apply from your next message."),
 	)
 	return blocks
+}
+
+async function appearanceSection(person: Person): Promise<Block[]> {
+	const { name, picture } = await appearance(person)
+	const icon = picture && pictureUrl(picture)
+	const text = `*${escape(name ?? "laddu")}*\n${name || picture ? "On laddu's messages for you, for everyone in the conversation." : "laddu's own name and picture."}`
+	return [
+		header(":art:  Name & picture"),
+		icon
+			? ({
+					type: "section",
+					text: md(text),
+					accessory: {
+						type: "image",
+						image_url: icon,
+						alt_text: name ?? "laddu",
+					},
+				} as Block)
+			: row(text),
+		{
+			type: "actions",
+			elements: [
+				button("Change", "home_look", "edit"),
+				...(name || picture
+					? [button("Reset", "home_look_reset", "reset")]
+					: []),
+			],
+		},
+		hint(
+			"Or ask laddu, e.g. _“call yourself Jalebi”_. You still tag it as @laddu.",
+		),
+	]
 }
 
 async function placeLabel(client: WebClient, channel: string): Promise<string> {
@@ -490,6 +537,7 @@ export async function refreshHome(
 	const [firstName, ...sections] = await Promise.all([
 		userFirstName(client, person.userId).catch(() => ""),
 		safe("Agent", () => agentSection(config, person)),
+		safe("Name & picture", () => appearanceSection(person)),
 		safe("Working now", () =>
 			workingSection(client, agentSessions, person),
 		),
@@ -622,6 +670,96 @@ async function readMemory(config: BotConfig, person: Person): Promise<Memory> {
 	) as Memory
 }
 
+// ---- name & picture popup -------------------------------------------------------------------
+
+const KEEP = "keep"
+const OWN = "own"
+
+function appearanceView(current: Appearance): types.ModalView {
+	const uploaded = current.picture && !(current.picture in PRESETS)
+	const choices = [
+		{ text: "laddu's own", value: OWN },
+		...Object.entries(PRESETS).map(([value, text]) => ({ text, value })),
+		...(uploaded ? [{ text: "The one you uploaded", value: KEEP }] : []),
+	]
+	const picked = uploaded ? KEEP : (current.picture ?? OWN)
+	return {
+		type: "modal",
+		callback_id: "home_look",
+		title: plain("Name & picture"),
+		submit: plain("Save"),
+		close: plain("Cancel"),
+		blocks: [
+			{
+				type: "input",
+				block_id: "name",
+				optional: true,
+				label: plain("Name"),
+				hint: plain(
+					"What laddu is called on its messages for you. Empty for laddu.",
+				),
+				element: {
+					type: "plain_text_input",
+					action_id: "value",
+					max_length: MAX_NAME,
+					placeholder: plain("laddu"),
+					...(current.name ? { initial_value: current.name } : {}),
+				},
+			},
+			...(picturesWork()
+				? ([
+						{
+							type: "input",
+							block_id: "picture",
+							label: plain("Picture"),
+							element: {
+								...select("value", choices, picked),
+							},
+						},
+						{
+							type: "input",
+							block_id: "upload",
+							optional: true,
+							label: plain("Or upload your own"),
+							hint: plain(
+								"PNG, JPEG or GIF up to 5 MB; square looks best.",
+							),
+							element: {
+								type: "file_input",
+								action_id: "value",
+								filetypes: ["png", "jpg", "jpeg", "gif"],
+								max_files: 1,
+							},
+						},
+					] as Block[])
+				: [
+						context(
+							"Pictures need a public HTTPS address for laddu (DESKTOP_PUBLIC_URL); this one has none.",
+						),
+					]),
+		],
+	}
+}
+
+/** The picture they uploaded in the popup, saved; its name, or why it can't be used. */
+async function uploadedPicture(file: {
+	url_private_download?: string
+	url_private?: string
+	size?: number
+}): Promise<{ picture: string } | { problem: string }> {
+	if ((file.size ?? 0) > MAX_PICTURE_BYTES)
+		return { problem: "That picture is over 5 MB." }
+	const response = await fetch(
+		file.url_private_download ?? file.url_private!,
+		{
+			headers: { authorization: `Bearer ${deps!.config.slackBotToken}` },
+		},
+	)
+	if (!response.ok)
+		return { problem: "Couldn't fetch that picture from Slack." }
+	return savePicture(await response.bytes())
+}
+
 // ---- actions --------------------------------------------------------------------------------
 
 export function registerHome(app: App, given: Deps) {
@@ -689,7 +827,10 @@ export function registerHome(app: App, given: Deps) {
 	control("home_refresh", async () => {})
 
 	control("home_agent", async ({ person, value }) => {
-		if (!isAgent(value) || (value === "codex" && !canUseCodex(config, person)))
+		if (
+			!isAgent(value) ||
+			(value === "codex" && !canUseCodex(config, person))
+		)
 			return
 		// Each agent has its own models; the picks for the old one don't carry over.
 		await setPreferences(person, {
@@ -716,6 +857,47 @@ export function registerHome(app: App, given: Deps) {
 			fast: undefined,
 		}),
 	)
+
+	control("home_look", async ({ person, client, body }) => {
+		await client.views.open({
+			trigger_id: body.trigger_id,
+			view: appearanceView(await appearance(person)),
+		})
+	})
+	control("home_look_reset", async ({ person }) =>
+		setAppearance(person, { name: undefined, picture: undefined }),
+	)
+	app.view("home_look", async ({ ack, body, view, client }) => {
+		const person = {
+			teamId: body.team?.id ?? body.user.team_id!,
+			userId: body.user.id,
+		}
+		if (!isAllowed(person.userId)) return ack()
+		const values = view.state.values
+		const name = cleanName(values.name?.value?.value ?? "")
+		const problem = name && (await nameProblem(client, name))
+		if (problem)
+			return ack({ response_action: "errors", errors: { name: problem } })
+		await ack()
+		const choice = values.picture?.value?.selected_option?.value
+		const file = values.upload?.value?.files?.[0]
+		const change: Appearance = { name: name || undefined }
+		let notice: string | undefined
+		if (file) {
+			const saved = await uploadedPicture(file).catch(error => {
+				console.warn("[home] couldn't save the picture", error)
+				return { problem: "Couldn't save that picture." }
+			})
+			if ("picture" in saved) change.picture = saved.picture
+			else notice = `:warning:  ${saved.problem} The name is saved.`
+		} else if (choice && choice !== KEEP)
+			change.picture = choice === OWN ? undefined : choice
+		await setAppearance(person, change)
+		if (notice) notices.set(personKey(person), notice)
+		await refreshHome(client, person).catch(error =>
+			console.warn("[home] couldn't publish", error),
+		)
+	})
 
 	control("home_connect", async ({ person, client, value }) => {
 		if (value === "slack" && config.slackSignIn)

@@ -25,6 +25,8 @@ apps/
       files.ts         JSON / private-file helpers
       sessions.ts      (Slack thread, user) ↔ agent conversation map, per-key queue
       preferences.ts   each person's picks from the Home tab (agent, model, effort, speed)
+      appearance.ts    the name and picture each person gives laddu (Home tab or `appearance`),
+                       on every message it posts for them; pictures served by the gateway
       inflight.ts      turns in progress, so a restart can resume them
       auth/siwc.ts     Sign in with ChatGPT credentials + token refresh
       auth/login.ts    `bun run login`: one-time OAuth (PKCE, loopback)
@@ -41,7 +43,7 @@ apps/
       agent/learning.ts turn log + background review (memory, personal skills)
       agent/tools.ts   runs runtime/ commands for a user (container or host)
       agent/bot-api.ts API for container commands that need the bot (`schedule`, `ado`, `ms`,
-                       `slack`, `desktop link`), signed per turn
+                       `slack`, `desktop link`, `appearance`), signed per turn
       agent/desktop.ts laddu's computer, bot side: signed watch/control links, viewer gateway, idle stop
       scheduler.ts     scheduled tasks: store, cron/time-zone maths, 30-second check
       integrations/microsoft.ts one Microsoft sign-in per person: device code, tokens per API

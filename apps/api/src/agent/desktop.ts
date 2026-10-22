@@ -11,6 +11,7 @@
  * - stops desktops nobody has used or watched for a while (files and browser logins stay).
  */
 import type { App } from "@slack/bolt"
+import { pictureFile } from "../appearance"
 import type { BotConfig } from "../config"
 import { paths } from "../config"
 import { readJson, writeJsonPrivate, writePrivate } from "../files"
@@ -812,7 +813,9 @@ export function startDesktopGateway(
 		config.desktopViewer
 	const secure = publicUrl.startsWith("https:")
 	const origins = new Set(
-		[publicUrl, tailnetUrl].flatMap(url => (url ? [new URL(url).origin] : [])),
+		[publicUrl, tailnetUrl].flatMap(url =>
+			url ? [new URL(url).origin] : [],
+		),
 	)
 	const toSlack = slackHome
 		? { href: slackHome, label: "Open laddu in Slack" }
@@ -829,6 +832,20 @@ export function startDesktopGateway(
 				const url = new URL(request.url)
 				if (url.pathname === "/slack/oauth" && slackOAuth)
 					return slackOAuth(request)
+				// The pictures people give laddu, for Slack to fetch (see appearance.ts).
+				const picture = url.pathname.match(
+					/^\/_laddu\/pictures\/([^/]+)$/,
+				)?.[1]
+				if (picture) {
+					const path = pictureFile(decodeURIComponent(picture))
+					return path && (await Bun.file(path).exists())
+						? new Response(Bun.file(path), {
+								headers: {
+									"cache-control": "public, max-age=86400",
+								},
+							})
+						: new Response("not found", { status: 404 })
+				}
 				if (!config.desktop)
 					return new Response("not found", { status: 404 })
 				const asset = url.pathname.match(/^\/_laddu\/([^/]+)$/)?.[1]

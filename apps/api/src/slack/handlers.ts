@@ -33,6 +33,7 @@ import { downloadAttachments, uploadFiles } from "./attachments"
 import { closeInterrupted, openReply, type Reply } from "./reply"
 import { AgentSessions } from "./agent-sessions"
 import { configFor } from "../preferences"
+import { nameNote, postAs } from "../appearance"
 import {
 	closeWithMessage,
 	registerQuestions,
@@ -160,17 +161,17 @@ async function handle(
 		let reply: Reply | undefined
 		try {
 			await agent.start()
+			const user = { teamId: trigger.teamId, userId: trigger.userId }
 			reply = await openReply(
 				client,
 				{
 					channel: trigger.channel,
 					threadTs,
-					userId: trigger.userId,
-					teamId: trigger.teamId,
+					...user,
+					as: await postAs(user),
 				},
 				message => markReply(inflightKey, message).catch(() => {}),
 			)
-			const user = { teamId: trigger.teamId, userId: trigger.userId }
 			// The first time this turn uses laddu's computer: a fresh link in their Home tab (and, the very
 			// first time ever, a note saying where it is).
 			let linkSent = false
@@ -225,7 +226,9 @@ async function handle(
 						config: personal,
 						user,
 						threadId: session?.threadId,
-						input: turn.text,
+						input: [await nameNote(user), turn.text]
+							.filter(Boolean)
+							.join("\n\n"),
 						files,
 						slack: {
 							channel: trigger.channel,
@@ -719,16 +722,20 @@ async function jobTarget(
 	return { channel: channel!.id! }
 }
 
+/** Posts for the person who set the task up, with the name and picture they gave laddu. */
 async function postTo(
 	client: WebClient,
 	target: { channel: string; threadTs?: string },
 	text: string,
+	person: { teamId: string; userId: string },
 ) {
+	const as = await postAs(person)
 	for (const part of chunkMarkdown(text)) {
 		await client.chat.postMessage({
 			channel: target.channel,
 			...(target.threadTs ? { thread_ts: target.threadTs } : {}),
 			markdown_text: part,
+			...as,
 		})
 	}
 }
@@ -767,7 +774,9 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 			const result = await runTurn({
 				config: personal,
 				user,
-				input,
+				input: [await nameNote(user), input]
+					.filter(Boolean)
+					.join("\n\n"),
 				slack: {
 					channel: job.channel,
 					threadTs: job.threadTs,
@@ -781,7 +790,7 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 				`[scheduler] ${job.id} "${job.name}" ran${silent ? " (silent)" : ""}`,
 			)
 			if (silent) return "done"
-			await postTo(client, target, `${label}\n\n${result.text}`)
+			await postTo(client, target, `${label}\n\n${result.text}`, user)
 			await uploadFiles(
 				client,
 				target.channel,
@@ -812,6 +821,7 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 					client,
 					target,
 					`${label}\n\n:warning: This scheduled task failed: ${failure.message}`,
+					user,
 				).catch(() => {})
 			return "failed"
 		}
@@ -828,6 +838,7 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 			client,
 			target,
 			`_:alarm_clock: ${job.name}_\n\n:warning: I was offline when this was due (${due}), so it didn't run. Ask me again if you still need it.`,
+			{ teamId: job.teamId, userId: job.userId },
 		)
 	}
 
