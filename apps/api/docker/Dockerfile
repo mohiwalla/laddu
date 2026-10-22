@@ -156,6 +156,18 @@ RUN case "$(dpkg --print-architecture)" in amd64) platform=x64 ;; arm64) platfor
  && install -m 755 /tmp/package/bin/opencode /usr/local/bin/opencode \
  && rm -rf /tmp/package
 
+# The person's own computers (runtime/desktop with `machine`): an SSH client, and Tailscale to
+# reach them on their tailnet. It runs in userspace (state on the user's volume), since the
+# network rules close private ranges, the tailnet's included, to the container itself.
+ARG TAILSCALE=1.104.2
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssh-client \
+ && rm -rf /var/lib/apt/lists/* \
+ && arch="$(dpkg --print-architecture)" \
+ && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE}_${arch}.tgz" | tar -xz -C /tmp \
+ && install -m 755 /tmp/tailscale_${TAILSCALE}_${arch}/tailscale /tmp/tailscale_${TAILSCALE}_${arch}/tailscaled /usr/local/bin/ \
+ && rm -rf /tmp/tailscale_*
+
 USER dot
 WORKDIR /home/dot/workspace
 ENV HOME=/home/dot CODEX_HOME=/home/dot/.codex PATH=/opt/codex/bin:/opt/codex/codex-path:$PATH \

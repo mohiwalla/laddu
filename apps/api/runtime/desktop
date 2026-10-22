@@ -13,6 +13,11 @@ Codex drives it through `desktop mcp`, an MCP server registered in its config; p
   desktop mcp       MCP server on stdin/stdout (used by Codex)
   desktop control on|off  the person has taken control / handed it back (set by the bot's viewer)
   desktop events    dot's pointer position and actions as JSON lines, for the viewer's dot cursor
+  desktop check <host>  can the tools drive that computer of the person's (over SSH)? Says what's
+                          missing there and the commands that fix it
+
+The same tools drive the person's own computers when given `machine` (an SSH host): see the
+"other computers" section below and runtime/desktop-agent.py, the half that runs over there.
 
 While the person is in control, the tools wait (up to HANDBACK_WAIT_S per call) instead of acting,
 and an action interrupted by a hand-back isn't done: the screen may have changed under it.
@@ -573,22 +578,330 @@ def wait(args):
     return "waited"
 
 
+# ---- other computers (over SSH) -------------------------------------------------------------
+#
+# `machine` names an SSH host of the person's (~/.ssh/config). One SSH connection per machine,
+# kept for this MCP process, runs runtime/desktop-agent.py there with that machine's own Python
+# (sent over the connection, never installed), which answers one JSON request per line.
+# Machines on the person's tailnet are reached through runtime/tailnet (ProxyCommand).
+# Codex sees one screen of the machine at a time, scaled into MODEL_BOX like dot's own.
+
+AGENT_SOURCE = Path(__file__).resolve().parent / "desktop-agent.py"
+SSH_OPTIONS = [
+    "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=15",
+    "-o", "ServerAliveCountMax=3", "-o", "StrictHostKeyChecking=accept-new",
+]
+# The system Python first: it's the one with the desktop's PyGObject (a Homebrew or pyenv one
+# earlier on PATH usually lacks it).
+BOOT = (
+    'py=$(command -v /usr/bin/python3 || command -v python3) || { echo "no python3" >&2; exit 127; }; '
+    "exec \"$py\" -u -c 'import sys; exec(sys.stdin.read(int(sys.stdin.readline())))'"
+)
+class Machine:
+    def __init__(self, host):
+        self.host = host
+        self.proc = None
+        self.screens = []  # as last shown
+        self.screen = None  # index of the screen Codex sees
+        self.scale = 1
+        self.elements = []
+        self.windows = []
+        self.pointer = None  # where dot last left the pointer, to notice someone else moving it
+
+    def connect(self):
+        self.proc = subprocess.Popen(
+            ["ssh", *SSH_OPTIONS, self.host, BOOT], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, bufsize=1,
+        )
+        source = AGENT_SOURCE.read_text()
+        self.proc.stdin.write(f"{len(source)}\n{source}")
+        self.proc.stdin.flush()
+
+    def ask(self, op, **fields):
+        for attempt in (1, 2):
+            if self.proc is None or self.proc.poll() is not None:
+                self.connect()
+            try:
+                self.proc.stdin.write(json.dumps({"op": op, **fields}) + "\n")
+                self.proc.stdin.flush()
+                line = self.proc.stdout.readline()
+            except BrokenPipeError:
+                line = ""
+            if line:
+                reply = json.loads(line)
+                if not reply.pop("ok"):
+                    raise ValueError(f"{self.host}: {reply['error']}")
+                return reply
+            self.proc.wait(timeout=5)
+            detail = self.proc.stderr.read().strip()[-600:]
+            self.proc = None
+            if attempt == 2 or "Permission denied" in detail or "Could not resolve" in detail:
+                raise ValueError(f"can't reach {self.host} over SSH: {detail or 'connection closed'}")
+
+    # Screens and coordinates ----------------------------------------------------------------
+
+    def look(self, choose=None):
+        """The machine's screens, windows and pointer; picks the screen Codex is shown."""
+        state = self.ask("layout")
+        if state["locked"]:
+            raise ValueError(
+                f"{self.host}'s screen is locked. Nothing can be done on it until the person unlocks "
+                "it; tell them."
+            )
+        self.windows = state["windows"]
+        screens = sorted(state["screens"], key=lambda s: (s["x"], s["y"]))  # 1 is the leftmost
+        if choose is not None:
+            if not 1 <= choose <= len(screens):
+                raise ValueError(f"{self.host} has {len(screens)} screen(s); pick 1–{len(screens)}")
+            self.screen = choose - 1
+        elif self.screen is None or self.screen >= len(screens) or screens != self.screens:
+            # The active window's screen, else the first.
+            active = next((w for w in self.windows if w["active"]), None)
+            self.screen = 0
+            if active:
+                cx = active["frame"][0] + active["frame"][2] // 2
+                cy = active["frame"][1] + active["frame"][3] // 2
+                for i, s in enumerate(screens):
+                    if s["x"] <= cx < s["x"] + s["width"] and s["y"] <= cy < s["y"] + s["height"]:
+                        self.screen = i
+        self.screens = screens
+        s = screens[self.screen]
+        self.scale = min(1, MODEL_BOX[0] / s["width"], MODEL_BOX[1] / s["height"])
+        return state
+
+    def span(self):
+        """Every screen together: the virtual pointer's range."""
+        return [max(s["x"] + s["width"] for s in self.screens), max(s["y"] + s["height"] for s in self.screens)]
+
+    def shown_size(self):
+        s = self.screens[self.screen]
+        return round(s["width"] * self.scale), round(s["height"] * self.scale)
+
+    def shown(self, x, y):
+        s = self.screens[self.screen]
+        return round((x - s["x"]) * self.scale), round((y - s["y"]) * self.scale)
+
+    def point(self, args):
+        if args.get("element") is not None:
+            n = int(args["element"])
+            if not 1 <= n <= len(self.elements):
+                raise ValueError(f"no element {n} in the last observe of {self.host}; call observe again")
+            return self.elements[n - 1]["x"], self.elements[n - 1]["y"]
+        if args.get("x") is None or args.get("y") is None:
+            raise ValueError("give element (from observe) or x and y")
+        x, y = int(args["x"]), int(args["y"])
+        width, height = self.shown_size()
+        if not (0 <= x < width and 0 <= y < height):
+            raise ValueError(f"({x},{y}) is off the {width}x{height} screen")
+        s = self.screens[self.screen]
+        return (min(s["x"] + round(x / self.scale), s["x"] + s["width"] - 1),
+                min(s["y"] + round(y / self.scale), s["y"] + s["height"] - 1))
+
+    def screenshot(self):
+        """The shown screen, cut out of the machine's whole-desktop screenshot and scaled."""
+        from PIL import Image
+        import io
+        whole = Image.open(io.BytesIO(base64.b64decode(self.ask("screenshot")["png"])))
+        left = min(s["x"] for s in self.screens)
+        top = min(s["y"] for s in self.screens)
+        span = self.span()
+        ratio = whole.width / (span[0] - left)  # above 1 on a scaled (HiDPI) desktop
+        s = self.screens[self.screen]
+        box = [round((s["x"] - left) * ratio), round((s["y"] - top) * ratio),
+               round((s["x"] - left + s["width"]) * ratio), round((s["y"] - top + s["height"]) * ratio)]
+        picture = whole.crop(box).convert("RGB").resize(self.shown_size(), Image.LANCZOS)
+        out = io.BytesIO()
+        picture.save(out, "PNG", optimize=True)
+        return out.getvalue()
+
+    # Reading the screen ---------------------------------------------------------------------
+
+    def screen_line(self):
+        s = self.screens[self.screen]
+        active = next((w["title"] for w in self.windows if w["active"]), "(none)")
+        line = "{}, screen {} of {}: {}x{}. Active window: {}.".format(
+            self.host, self.screen + 1, len(self.screens), *self.shown_size(), active)
+        others = [f"{i + 1} ({o['width']}x{o['height']}, {o['name']})" for i, o in enumerate(self.screens) if i != self.screen]
+        if others:
+            line += f" Other screens: {', '.join(others)}; see one with observe screen=N."
+        return line
+
+    def observe(self, all_windows=False):
+        reply = self.ask("controls", windows=self.windows, all_windows=bool(all_windows))
+        s = self.screens[self.screen]
+        self.elements = [e for e in reply["controls"]
+                         if s["x"] <= e["x"] < s["x"] + s["width"] and s["y"] <= e["y"] < s["y"] + s["height"]]
+        lines = [self.screen_line()]
+        if self.elements:
+            lines.append(f"Controls{reply['note']} — [n] role \"name\" (x,y):")
+            for i, e in enumerate(self.elements, 1):
+                state = f" [{', '.join(e['state'])}]" if e["state"] else ""
+                lines.append("[{}] {} \"{}\" ({},{}){}".format(i, e["role"], e["name"], *self.shown(e["x"], e["y"]), state))
+        else:
+            lines.append(
+                f"No controls listed{reply['note']} (this window doesn't share them); "
+                "use the screenshot's coordinates."
+            )
+        return "\n".join(lines)
+
+    # Acting ---------------------------------------------------------------------------------
+
+    def act(self, action, **fields):
+        reply = self.ask("act", action=action, span=self.span(), **fields)
+        return reply["result"]
+
+    def click(self, args):
+        x, y = self.point(args)
+        self.act("click", at=[x, y], button=args.get("button", "left"), clicks=int(args.get("clicks", 1)))
+        self.pointer = (x, y)
+        return "clicked ({},{})".format(*self.shown(x, y))
+
+    def type_text(self, args):
+        how = self.act("type", text=args["text"], enter=bool(args.get("enter")))
+        return f"{how} {len(args['text'])} characters"
+
+    def key(self, args):
+        self.act("key", keys=args["keys"])
+        return f"pressed {args['keys']}"
+
+    def scroll(self, args):
+        if args.get("element") is not None or args.get("x") is not None:
+            x, y = self.point(args)
+        else:
+            s = self.screens[self.screen]
+            x, y = s["x"] + s["width"] // 2, s["y"] + s["height"] // 2
+        direction = args.get("direction", "down")
+        self.act("scroll", at=[x, y], direction=direction, amount=int(args.get("amount", 5)))
+        self.pointer = (x, y)
+        return "scrolled {} at ({},{})".format(direction, *self.shown(x, y))
+
+    def drag(self, args):
+        start = self.point({"x": args["from_x"], "y": args["from_y"]})
+        end = self.point({"x": args["to_x"], "y": args["to_y"]})
+        self.act("drag", **{"from": list(start), "to": list(end)})
+        self.pointer = end
+        return "dragged ({},{}) → ({},{})".format(*self.shown(*start), *self.shown(*end))
+
+    def launch(self, args):
+        self.ask("launch", command=args["command"])
+        time.sleep(float(args.get("wait", 3)))
+        return f"started on {self.host}: {args['command']}"
+
+    def list_windows(self, args):
+        rows = []
+        for w in self.windows:
+            x, y, width, height = w["frame"]
+            screen = next((i + 1 for i, s in enumerate(self.screens)
+                           if s["x"] <= x + width // 2 < s["x"] + s["width"]), "?")
+            flags = (" [active]" if w["active"] else "") + (" [minimized]" if w["minimized"] else "")
+            rows.append(f"{w['id']} \"{w['title']}\" ({w['app']}) on screen {screen}, {width}x{height}{flags}")
+        return "\n".join(rows) or "no windows open"
+
+    def focus(self, args):
+        found = self.ask("focus", window=args["window"])
+        self.screen = None  # show the screen it's on
+        return f"focused \"{found['title']}\""
+
+    def clipboard(self, args):
+        if "text" in args:
+            self.ask("clipboard", text=args["text"])
+            return "clipboard set"
+        return self.ask("clipboard")["text"][:20000] or "(clipboard is empty)"
+
+
+MACHINES = {}
+MACHINE_TOOLS = {
+    "click": Machine.click, "type": Machine.type_text, "key": Machine.key, "scroll": Machine.scroll,
+    "drag": Machine.drag, "launch": Machine.launch, "windows": Machine.list_windows,
+    "focus": Machine.focus, "clipboard": Machine.clipboard, "wait": lambda m, a: wait(a),
+}
+
+
+def call_machine(host, name, args):
+    machine = MACHINES.setdefault(host, Machine(host))
+    lines = []
+    if name == "windows":
+        machine.look()
+        return [{"type": "text", "text": machine.list_windows(args)}]
+    known = machine.screens
+    state = machine.look(args.get("screen") if name in ("observe", "screenshot") else None)
+    if name not in ("observe", "screenshot", "windows", "clipboard", "wait"):
+        # Someone moved the mouse since dot last did: the person is at that computer.
+        at = tuple(state["pointer"])
+        moved = machine.pointer and max(abs(at[0] - machine.pointer[0]), abs(at[1] - machine.pointer[1])) > 3
+        machine.pointer = at
+        if moved:
+            return [{"type": "text", "text": (
+                f"Someone is using {host} right now (its mouse moved since your last action), so "
+                "nothing was done for this call. Don't fight them for it: `wait` and try again, or "
+                "reply to the person with what's left to do."
+            )}]
+    if name in AIMED and known and machine.screens != known:
+        lines.append(
+            f"{host}'s screens changed since your last screenshot, so nothing was done for this "
+            "call; here's the screen now, decide again."
+        )
+        name = "observe"
+    if name not in ("observe", "screenshot"):
+        lines.append(MACHINE_TOOLS[name](machine, args))
+        if name not in SHOW_AFTER:
+            return [{"type": "text", "text": "\n".join(lines)}]
+        time.sleep(0.6)
+        machine.look()
+    lines.append(machine.screen_line() if name == "screenshot" else machine.observe(bool(args.get("all_windows"))))
+    data = base64.b64encode(machine.screenshot()).decode()
+    return [
+        {"type": "text", "text": "\n".join(lines)},
+        {"type": "image", "data": data, "mimeType": "image/png"},
+    ]
+
+
+def check(host):
+    """`desktop check <host>`: what dot can do on that machine, and what's missing."""
+    if not host:
+        sys.exit("usage: desktop check <ssh host>")
+    try:
+        found = Machine(host).ask("info")
+    except ValueError as error:
+        sys.exit(f"error: {error}")
+    print(f"{host} ({found['host']}): {found['desktop'] or 'no desktop'} on {found['session'] or '?'}")
+    if found["missing"]:
+        print("Missing (the person has to do these on that machine):")
+        for item in found["missing"]:
+            print(f"- {item}")
+    else:
+        print("Ready: use the desktop tools with machine=" + json.dumps(host) + ".")
+    if found["locked"]:
+        print("Its screen is locked right now; the person has to unlock it first.")
+    if not found["accessibility"]:
+        print("No accessibility tree: controls won't be listed, use screenshot coordinates.")
+
+
 # ---- MCP over stdio -----------------------------------------------------------------------
 
 POINT = {
     "element": {"type": "integer", "description": "Control number from the last observe"},
     "x": {"type": "integer"}, "y": {"type": "integer"},
 }
+MACHINE = {"machine": {"type": "string", "description": (
+    "Leave out to use your own computer. To use one of the person's own computers instead, its "
+    "SSH host name (from ~/.ssh/config, e.g. \"batman\"); run `desktop check <host>` once first."
+)}}
+SCREEN = {"screen": {"type": "integer", "description": (
+    "On a machine with several screens: which one to see (1, 2…). Clicks and other aimed actions "
+    "go to the screen you were shown last."
+)}}
 TOOLS = {
     "observe": (
         "Screenshot of the desktop plus the active window's on-screen controls (buttons, links, "
         "fields, menu items) with numbers and centre points. Actions return the same view of the "
         "screen after they run, so call this only to start or to refresh; target controls by "
         "number when they're listed.",
-        {"all_windows": {"type": "boolean", "description": "List controls of every window, not just the active one"}},
+        {"all_windows": {"type": "boolean", "description": "List controls of every window, not just the active one"},
+         **SCREEN},
         [], lambda a: None,
     ),
-    "screenshot": ("Screenshot only (cheaper than observe).", {}, [], lambda a: None),
+    "screenshot": ("Screenshot only (cheaper than observe).", {**SCREEN}, [], lambda a: None),
     "click": (
         "Click a control from observe (element) or a screen point (x, y).",
         {**POINT, "button": {"type": "string", "enum": ["left", "right", "middle"]},
@@ -619,7 +932,8 @@ TOOLS = {
     ),
     "launch": (
         "Open an app on the desktop with a shell command, e.g. `chromium https://example.com`, "
-        "`thunar ~/workspace`, `mousepad notes.txt`, `xfce4-terminal`.",
+        "`thunar ~/workspace`, `mousepad notes.txt`, `xfce4-terminal`. On another machine, its "
+        "own apps: e.g. `xdg-open https://example.com` (its default browser), `dolphin`, `konsole`.",
         {"command": {"type": "string"}, "wait": {"type": "number", "description": "Seconds to wait before the screenshot, default 3"}},
         ["command"], launch,
     ),
@@ -634,6 +948,8 @@ TOOLS = {
     ),
     "wait": ("Wait for something to load (max 30 s).", {"seconds": {"type": "number"}}, [], wait),
 }
+for _desc, _props, _required, _fn in TOOLS.values():
+    _props.update(MACHINE)
 # Actions that change the screen return what observe would (controls + screenshot), so the next
 # step can see the result without another call: each call re-sends the whole conversation.
 SHOW_AFTER = {"click", "type", "key", "scroll", "drag", "launch", "focus", "wait"}
@@ -644,6 +960,8 @@ AIMED = {"click", "scroll", "drag"}
 def call_tool(name, args):
     if name not in TOOLS:
         raise ValueError(f"unknown tool {name}")
+    if args.get("machine"):
+        return call_machine(str(args["machine"]).strip(), name, args)
     handed_back = False
     if person_in_control():
         deadline = time.monotonic() + HANDBACK_WAIT_S
@@ -789,6 +1107,8 @@ def main(args):
         control(args[1] if len(args) > 1 else "")
     elif command == "mcp":
         mcp()
+    elif command == "check":
+        check(args[1] if len(args) > 1 else "")
     else:
         sys.exit(__doc__)
 

@@ -13,3 +13,6 @@ node_modules/
 
 # Temporary local
 tmp
+
+# Python bytecode from running runtime/ scripts on the host
+__pycache__/

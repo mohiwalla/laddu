@@ -68,7 +68,9 @@ apps/
                        `recall` (search past conversations), `schedule` (scheduled tasks),
                        `ado` (Azure DevOps), `code` (Azure Repos / CodeCommit coding tasks),
                        `ms` (Microsoft 365), `slack` (Slack Free tools and event rules), `desktop` (dot's computer:
-                       starts it, and serves Codex the tools that drive it, over MCP)
+                       starts it, and serves Codex the tools that drive it, over MCP; with
+                       `desktop-agent.py`, the person's own computers over SSH), `tailnet`
+                       (the container on the person's Tailscale network)
     docker/Dockerfile  per-user runtime image (Debian + the SDK's own codex build)
     scripts/codex-docker.sh stand-in `codex` that runs the real one via `docker exec`
     slack-manifest.yaml
@@ -200,6 +202,30 @@ computer-use plugin of a Linux build of Codex Desktop) and Bytebot.
   actions, 83 s), saving a password in Chromium's own popup and logging back in with its autofill
   (16 actions, 67 s), writing a file through Mousepad's Save dialog (10 actions, 48 s); 150k–370k
   input tokens a task, ~85% cached. About 0.6 GB of memory with Chromium open, ~0% CPU idle.
+
+### The person's own computers
+
+The same tools take `machine`, an SSH host in the container's `~/.ssh/config`, and then drive that
+computer instead (KDE Plasma for now; macOS, Windows and GNOME later). It's for when the person
+isn't using it: there's one pointer, so dot stops when it moves under it.
+
+- **Reach.** `runtime/tailnet` runs Tailscale in userspace in the container (state on the volume,
+  the person signs it in once), since the network rules close the tailnet's addresses to the
+  container like every private range; SSH goes through it as a `ProxyCommand`. A machine reachable
+  from the internet needs only the SSH config.
+- **Far end.** `desktop` keeps one SSH connection per machine for its MCP process and sends it
+  `runtime/desktop-agent.py`, which runs on that machine's own Python (nothing installed there)
+  and answers JSON lines: screenshots from spectacle; screens, windows, focus and the pointer from
+  a KWin script that reports back over D-Bus; mouse and keyboard from two virtual devices made
+  through `/dev/uinput` (an absolute tablet, so a move lands on the exact pixel, and a keyboard),
+  which Plasma's udev rule already opens to whoever is logged in at the screen; controls from
+  AT-SPI, turned on for the session (Qt apps share nothing until it is) and moved by each window's
+  place from KWin, since Wayland apps only know positions inside their own window.
+- **Codex's view.** One screen at a time (the active window's, or `screen=N`), cut out of the
+  whole-desktop screenshot and scaled into the same 1280×800 box as dot's own. Before acting it
+  checks the screen isn't locked and that the pointer is where dot left it; if not, someone is
+  using the machine and nothing is done. Text a US layout can't type is pasted.
+- `desktop check <host>` reports the desktop and anything missing, with the commands that fix it.
 
 ## Integrations
 

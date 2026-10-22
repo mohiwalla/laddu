@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""
+This container on the person's Tailscale network (their tailnet), so you can SSH into their own
+computers there (and drive their desktops: `desktop check <host>`). Tailscale runs in userspace:
+the container's network rules close private ranges, the tailnet's included, to everything else.
+Its state lives in your home, so it's set up once; it starts again by itself after a restart.
+
+  tailnet up            join: prints a sign-in link for the person (send it only to them, privately);
+                        run it again after they've signed in to see it connected
+  tailnet status        connected or not, and the tailnet's machines
+  tailnet nc <host> <port>  a connection to <host> on the tailnet (SSH's ProxyCommand)
+  tailnet down          leave the tailnet (forgets this container's sign-in)
+
+SSH to a tailnet machine goes through it with this in ~/.ssh/config, per host:
+
+  Host batman
+    HostName batman
+    User <their user name on it>
+    ProxyCommand /opt/dot/runtime/bin/tailnet nc %h %p
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+STATE_DIR = Path.home() / ".local/share/tailscale"
+STATE = STATE_DIR / "tailscaled.state"
+SOCKET = STATE_DIR / "tailscaled.sock"
+LOG = STATE_DIR / "tailscaled.log"
+
+
+def tailscale(*args, **kwargs):
+    return subprocess.run(["tailscale", f"--socket={SOCKET}", *args], capture_output=True, text=True, **kwargs)
+
+
+def daemon():
+    """Starts tailscaled unless it's already answering."""
+    if _answering():
+        return
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    STATE_DIR.chmod(0o700)
+    SOCKET.unlink(missing_ok=True)
+    subprocess.Popen(
+        ["tailscaled", "--tun=userspace-networking", f"--state={STATE}", f"--socket={SOCKET}"],
+        stdin=subprocess.DEVNULL, stdout=open(LOG, "ab"), stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    for _ in range(60):
+        if _answering():
+            break
+        time.sleep(0.25)
+    else:
+        sys.exit(f"error: tailscaled didn't start (see {LOG})")
+    # A signed-in node goes NoState → Starting → Running over its first seconds.
+    for _ in range(80):
+        if status_json().get("BackendState") not in ("NoState", "Starting"):
+            return
+        time.sleep(0.25)
+
+
+def _answering():
+    if not SOCKET.exists():
+        return False
+    try:
+        return bool(json.loads(tailscale("status", "--json", timeout=10).stdout).get("BackendState"))
+    except (ValueError, subprocess.TimeoutExpired):
+        return False
+
+
+def status_json():
+    return json.loads(tailscale("status", "--json", timeout=15).stdout)
+
+
+def up():
+    daemon()
+    found = status_json()
+    if found.get("BackendState") == "Running":
+        return status()
+    if not found.get("AuthURL"):
+        subprocess.Popen(
+            ["tailscale", f"--socket={SOCKET}", "up", "--hostname=dot", "--accept-dns=false"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        for _ in range(60):
+            found = status_json()
+            if found.get("AuthURL") or found.get("BackendState") == "Running":
+                break
+            time.sleep(0.5)
+    if found.get("BackendState") == "Running":
+        return status()
+    if not found.get("AuthURL"):
+        sys.exit("error: Tailscale gave no sign-in link; try again")
+    print(
+        "Not connected yet. Send the person this link, privately (it adds this container to whoever "
+        f"signs in's tailnet), and run `tailnet up` again once they have:\n{found['AuthURL']}"
+    )
+
+
+def status():
+    if not STATE.exists():
+        print("Not set up: run `tailnet up`.")
+        return
+    daemon()
+    found = status_json()
+    if found.get("BackendState") != "Running":
+        print(f"Not connected ({found.get('BackendState')}): run `tailnet up`.")
+        return
+    me = found.get("Self") or {}
+    print(f"Connected as {me.get('HostName')} ({(me.get('TailscaleIPs') or ['?'])[0]}). Machines:")
+    for peer in (found.get("Peer") or {}).values():
+        name = (peer.get("DNSName") or "").split(".")[0] or peer.get("HostName")
+        print(f"- {name} ({peer.get('OS')}){'' if peer.get('Online') else ' offline'}")
+
+
+def main(args):
+    command = args[0] if args else "status"
+    if command in ("-h", "--help", "help"):
+        print(__doc__.strip())
+    elif command == "up":
+        up()
+    elif command == "status":
+        status()
+    elif command == "nc" and len(args) == 3:
+        daemon()
+        os.execvp("tailscale", ["tailscale", f"--socket={SOCKET}", "nc", args[1], args[2]])
+    elif command == "down":
+        daemon()
+        tailscale("logout", timeout=30)
+        print("Left the tailnet.")
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
