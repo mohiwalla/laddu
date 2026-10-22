@@ -469,6 +469,13 @@ def xdo(*args):
     run("xdotool", *[str(a) for a in args], env=session_env())
 
 
+def move_to(x, y):
+    # `mousemove --sync` waits for the pointer to move, and when it's already there that takes
+    # xdotool 15 s to give up on (a second click on the same spot, every scroll at the centre).
+    if pointer_at(session_env()) != (x, y):
+        xdo("mousemove", "--sync", x, y)
+
+
 def point(args):
     if args.get("element") is not None:
         n = int(args["element"])
@@ -493,7 +500,7 @@ BUTTONS = {"left": 1, "middle": 2, "right": 3}
 def click(args):
     x, y = point(args)
     button = BUTTONS[args.get("button", "left")]
-    xdo("mousemove", "--sync", x, y)
+    move_to(x, y)
     xdo("click", "--repeat", int(args.get("clicks", 1)), "--delay", 80, button)
     emit("click", x=x, y=y)
     return "clicked ({},{})".format(*shown(x, y))
@@ -519,7 +526,7 @@ def scroll(args):
     x, y = point(args) if args.get("element") is not None or args.get("x") is not None else (VIEW["size"][0] // 2, VIEW["size"][1] // 2)
     direction = args.get("direction", "down")
     button = {"up": 4, "down": 5, "left": 6, "right": 7}[direction]
-    xdo("mousemove", "--sync", x, y)
+    move_to(x, y)
     xdo("click", "--repeat", int(args.get("amount", 5)), "--delay", 30, button)
     return "scrolled {} at ({},{})".format(direction, *shown(x, y))
 
@@ -846,7 +853,7 @@ def call_machine(host, name, args):
         lines.append(MACHINE_TOOLS[name](machine, args))
         if name not in SHOW_AFTER:
             return [{"type": "text", "text": "\n".join(lines)}]
-        time.sleep(0.6)
+        time.sleep(settle(name, args))
         machine.look()
     lines.append(machine.screen_line() if name == "screenshot" else machine.observe(bool(args.get("all_windows"))))
     data = base64.b64encode(machine.screenshot()).decode()
@@ -953,6 +960,16 @@ for _desc, _props, _required, _fn in TOOLS.values():
 # Actions that change the screen return what observe would (controls + screenshot), so the next
 # step can see the result without another call: each call re-sends the whole conversation.
 SHOW_AFTER = {"click", "type", "key", "scroll", "drag", "launch", "focus", "wait"}
+
+
+def settle(name, args):
+    """Seconds to let the screen settle before showing it: long enough for what the action can set
+    off (a click or Enter can load a page), none after `launch` and `wait`, which waited already."""
+    if name in ("launch", "wait"):
+        return 0
+    if name in ("scroll", "focus") or (name == "type" and not args.get("enter")):
+        return 0.25
+    return 0.6
 # Actions at a point on the screen, as Codex last saw it.
 AIMED = {"click", "scroll", "drag"}
 
@@ -995,7 +1012,7 @@ def call_tool(name, args):
         lines.append(TOOLS[name][3](args))
         if name not in SHOW_AFTER:
             return [{"type": "text", "text": "\n".join(lines)}]
-        time.sleep(0.6)  # let the screen settle
+        time.sleep(settle(name, args))
     look()
     if name == "screenshot":
         lines.append(screen_line())
