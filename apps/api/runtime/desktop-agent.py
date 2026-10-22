@@ -68,13 +68,13 @@ def dbus(service, path, iface, method, signature=None, args=None, timeout=5000):
 
 # ---- KWin scripts ------------------------------------------------------------------------------
 
-REPORT_NAME = f"org.dot.Desktop.p{os.getpid()}"
+REPORT_NAME = f"org.laddu.Desktop.p{os.getpid()}"
 REPORTS = []
 
 
 def _listen():
     xml = (
-        "<node><interface name='org.dot.Desktop'><method name='Report'>"
+        "<node><interface name='org.laddu.Desktop'><method name='Report'>"
         "<arg type='s' direction='in'/></method></interface></node>"
     )
 
@@ -98,10 +98,10 @@ def kwin(js):
         LISTENING = True
     with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
         f.write(
-            f"function report(v) {{ callDBus('{REPORT_NAME}', '/', 'org.dot.Desktop', 'Report', "
+            f"function report(v) {{ callDBus('{REPORT_NAME}', '/', 'org.laddu.Desktop', 'Report', "
             f"JSON.stringify(v)); }}\n{js}"
         )
-    plugin = f"dot-desktop-{time.time_ns()}"
+    plugin = f"laddu-desktop-{time.time_ns()}"
     try:
         (sid,) = dbus("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting", "loadScript",
                       "(ss)", (f.name, plugin))
@@ -257,11 +257,11 @@ def devices(size):
         POINTER.close()
         POINTER = None
     if not POINTER:
-        POINTER = Device("dot pointer", BTN.values(), size)
+        POINTER = Device("laddu pointer", BTN.values(), size)
         POINTER_SIZE = size
         fresh = True
     if not KEYBOARD:
-        KEYBOARD = Device("dot keyboard", range(1, 248))
+        KEYBOARD = Device("laddu keyboard", range(1, 248))
         fresh = True
     if fresh:
         time.sleep(0.6)  # until the compositor has picked the new devices up
@@ -503,7 +503,7 @@ def locked():
 
 
 def info():
-    """The desktop, and what's missing for dot to use it, with the fix for each."""
+    """The desktop, and what's missing for laddu to use it, with the fix for each."""
     missing = []
     if "KDE" not in DESKTOP.upper():
         missing.append(f"desktop {DESKTOP or SESSION or 'unknown'}: only KDE Plasma is supported for now")
@@ -517,7 +517,7 @@ def info():
             "access to /dev/uinput, for the virtual mouse and keyboard. Plasma grants it to whoever "
             "is logged in at the screen (KDE Connect's udev rule); without it, run: "
             "`echo 'KERNEL==\"uinput\", SUBSYSTEM==\"misc\", TAG+=\"uaccess\", OPTIONS+=\"static_node=uinput\"' "
-            "| sudo tee /etc/udev/rules.d/60-dot-uinput.rules && sudo udevadm control --reload && "
+            "| sudo tee /etc/udev/rules.d/60-laddu-uinput.rules && sudo udevadm control --reload && "
             "sudo udevadm trigger /dev/uinput`, then log out and back in"
         )
     try:

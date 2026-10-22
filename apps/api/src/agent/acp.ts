@@ -2,7 +2,7 @@
  * Runs a turn on any agent that speaks the Agent Client Protocol (https://agentclientprotocol.com)
  * over stdio: OpenCode today, and the others in the ACP registry (Claude, Antigravity, Gemini…)
  * the same way. This is the only file that knows the SDK; agents (opencode.ts) say how to start
- * theirs, and get back dot's steps, steering and Stop.
+ * theirs, and get back laddu's steps, steering and Stop.
  *
  * ACP has no way to add to a prompt that's running, so steering cancels it and sends the new
  * message as the next prompt in the same session, as T3 Code does.
@@ -70,7 +70,7 @@ export async function runAcpTurn(
 	const tools = new Map<string, acp.ToolCallUpdate>()
 
 	const connection = acp
-		.client({ name: "dot" })
+		.client({ name: "laddu" })
 		// Nobody is around to approve actions mid-turn; the container is the boundary.
 		.onRequest("session/request_permission", async ({ params }) => {
 			const option =
@@ -150,7 +150,7 @@ export async function runAcpTurn(
 			peer.request("initialize", {
 				protocolVersion: acp.PROTOCOL_VERSION,
 				clientCapabilities: {},
-				clientInfo: { name: "dot", version: "1" },
+				clientInfo: { name: "laddu", version: "1" },
 			}),
 		)
 		const session = { cwd: agent.cwd, mcpServers: agent.mcpServers }

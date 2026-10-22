@@ -29,7 +29,7 @@ let file: string
 let rules: SlackAutomations
 beforeEach(() => {
 	file = `${root}/${crypto.randomUUID()}.json`
-	rules = new SlackAutomations(client, "U_DOT", { file, task })
+	rules = new SlackAutomations(client, "U_LADDU", { file, task })
 	apiCall.mockClear()
 	apiCall.mockImplementation(async () => ({ ok: true }))
 	postMessage.mockClear()
@@ -51,7 +51,7 @@ test("welcome rules survive restart and duplicate event deliveries post once", a
 		rules.receive(owner.teamId, "Ev123", join),
 		rules.receive(owner.teamId, "Ev123", join),
 	])
-	const restarted = new SlackAutomations(client, "U_DOT", { file, task })
+	const restarted = new SlackAutomations(client, "U_LADDU", { file, task })
 	await restarted.tick()
 	await restarted.receive(owner.teamId, "Ev123", join)
 	await restarted.tick()
@@ -81,7 +81,7 @@ test("other people cannot read, disable or delete an owner's rules", async () =>
 test("bots, other channels and other workspaces never trigger a welcome", async () => {
 	await rules.manage(owner, welcome)
 	await rules.receive(owner.teamId, "bot", { ...join, user: "U_BOT" })
-	await rules.receive(owner.teamId, "self", { ...join, user: "U_DOT" })
+	await rules.receive(owner.teamId, "self", { ...join, user: "U_LADDU" })
 	await rules.receive(owner.teamId, "channel", {
 		...join,
 		channel: "C_OTHER",

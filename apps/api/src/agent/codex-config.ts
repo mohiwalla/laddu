@@ -3,7 +3,7 @@ import { RESOURCE } from "../auth/siwc"
 /**
  * Codex config.toml billing the owner's ChatGPT plan (SIWC).
  * Host runtime: straight to OpenAI with ACCESS_TOKEN. Docker runtime: via the model proxy,
- * authenticated with DOT_PROXY_KEY, so the real token never enters a container.
+ * authenticated with LADDU_PROXY_KEY, so the real token never enters a container.
  */
 export function codexConfig({
 	baseUrl = RESOURCE,
@@ -46,7 +46,7 @@ enabled = false
 ${
 	desktop
 		? `
-# dot's computer: a desktop in the container, driven by screenshots, the accessibility tree and
+# laddu's computer: a desktop in the container, driven by screenshots, the accessibility tree and
 # real mouse and keyboard input. Started on first use; see runtime/desktop.
 [mcp_servers.desktop]
 command = "${desktop}"

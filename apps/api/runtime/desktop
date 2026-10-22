@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-dot's own computer: an XFCE desktop on a virtual display (KasmVNC), started when first needed.
+laddu's own computer: an XFCE desktop on a virtual display (KasmVNC), started when first needed.
 Codex drives it through `desktop mcp`, an MCP server registered in its config; people watch it
 (and later take over) in the browser through KasmVNC's web viewer, which the bot proxies.
 
@@ -12,7 +12,7 @@ Codex drives it through `desktop mcp`, an MCP server registered in its config; p
   desktop exec [--] <command> [args...]  run a command with this desktop's display and session
   desktop mcp       MCP server on stdin/stdout (used by Codex)
   desktop control on|off  the person has taken control / handed it back (set by the bot's viewer)
-  desktop events    dot's pointer position and actions as JSON lines, for the viewer's dot cursor
+  desktop events    laddu's pointer position and actions as JSON lines, for the viewer's laddu cursor
   desktop check <host>  can the tools drive that computer of the person's (over SSH)? Says what's
                           missing there and the commands that fix it
 
@@ -54,11 +54,11 @@ VIEWER_FILE = STATE / "viewer.json"
 ACTIVITY = STATE / "last-action"
 LOG = STATE / "log"
 # Touched every 10 s while the person has control (their viewer page, through the bot); older than
-# CONTROL_STALE_S counts as returned, so a closed tab or a bot restart can't leave dot waiting.
+# CONTROL_STALE_S counts as returned, so a closed tab or a bot restart can't leave laddu waiting.
 CONTROL = STATE / "person-in-control"
 CONTROL_STALE_S = 30
 HANDBACK_WAIT_S = 75  # under Codex's 90 s tool timeout
-# What dot does, for the viewer to show on its own cursor (a click ripple, "typing…"); the pointer
+# What laddu does, for the viewer to show on its own cursor (a click ripple, "typing…"); the pointer
 # position itself is read from X by `desktop events`.
 EVENTS = STATE / "events"
 EVENTS_MAX_BYTES = 64_000
@@ -137,7 +137,7 @@ def start():
             "-rfbport", "-1", "-KasmPasswordFile", str(passwd), "-AlwaysShared",
             # The viewer sizes the screen to its window (see the module docstring for coordinates).
             "-AcceptSetDesktopSize", "1", "-FrameRate", "24",
-            # No cursor of its own (in the picture or sent to viewers): the viewer draws dot's, always
+            # No cursor of its own (in the picture or sent to viewers): the viewer draws laddu's, always
             # the same arrow, and people use their own cursor when they take control.
             "-nocursor",
         ], os.environ, log)
@@ -251,7 +251,7 @@ def pointer_at(env):
 
 
 def events():
-    """Streams {"t": "at", x, y} when the pointer moves, and what dot does, until stdout closes."""
+    """Streams {"t": "at", x, y} when the pointer moves, and what laddu does, until stdout closes."""
     STATE.mkdir(mode=0o700, exist_ok=True)
     EVENTS.touch()
     feed = open(EVENTS)
@@ -591,7 +591,7 @@ def wait(args):
 # kept for this MCP process, runs runtime/desktop-agent.py there with that machine's own Python
 # (sent over the connection, never installed), which answers one JSON request per line.
 # Machines on the person's tailnet are reached through runtime/tailnet (ProxyCommand).
-# Codex sees one screen of the machine at a time, scaled into MODEL_BOX like dot's own.
+# Codex sees one screen of the machine at a time, scaled into MODEL_BOX like laddu's own.
 
 AGENT_SOURCE = Path(__file__).resolve().parent / "desktop-agent.py"
 SSH_OPTIONS = [
@@ -613,7 +613,7 @@ class Machine:
         self.scale = 1
         self.elements = []
         self.windows = []
-        self.pointer = None  # where dot last left the pointer, to notice someone else moving it
+        self.pointer = None  # where laddu last left the pointer, to notice someone else moving it
 
     def connect(self):
         self.proc = subprocess.Popen(
@@ -833,7 +833,7 @@ def call_machine(host, name, args):
     known = machine.screens
     state = machine.look(args.get("screen") if name in ("observe", "screenshot") else None)
     if name not in ("observe", "screenshot", "windows", "clipboard", "wait"):
-        # Someone moved the mouse since dot last did: the person is at that computer.
+        # Someone moved the mouse since laddu last did: the person is at that computer.
         at = tuple(state["pointer"])
         moved = machine.pointer and max(abs(at[0] - machine.pointer[0]), abs(at[1] - machine.pointer[1])) > 3
         machine.pointer = at
@@ -864,7 +864,7 @@ def call_machine(host, name, args):
 
 
 def check(host):
-    """`desktop check <host>`: what dot can do on that machine, and what's missing."""
+    """`desktop check <host>`: what laddu can do on that machine, and what's missing."""
     if not host:
         sys.exit("usage: desktop check <ssh host>")
     try:
@@ -1069,12 +1069,12 @@ def mcp():
 
 def link(reason):
     """Asks the bot (which signs the links) to send them to the person; see agent/bot-api.ts."""
-    api, caller = os.environ.get("DOT_API"), os.environ.get("DOT_CALLER")
+    api, caller = os.environ.get("LADDU_API"), os.environ.get("LADDU_CALLER")
     if not api or not caller:
         sys.exit("error: links aren't available here (no connection to the bot in this turn).")
     request = urllib.request.Request(
         f"{api}/desktop/link", method="POST", data=json.dumps({"reason": reason}).encode(),
-        headers={"x-dot-caller": caller, "content-type": "application/json"},
+        headers={"x-laddu-caller": caller, "content-type": "application/json"},
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:

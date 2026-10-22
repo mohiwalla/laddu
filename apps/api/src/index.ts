@@ -47,7 +47,7 @@ const slack = {
 	}),
 	forms: new SlackForms(app.client),
 }
-// For dot's commands that need the bot (`schedule`, `ado`): next to the model proxy, where
+// For laddu's commands that need the bot (`schedule`, `ado`): next to the model proxy, where
 // containers can reach it; on localhost for the host runtime.
 startBotApi(
 	config.runtime === "docker"
@@ -59,7 +59,7 @@ startBotApi(
 nameContainersWith(userId => userFirstName(app.client, userId))
 const { slackSignIn } = config
 if (config.desktop || slackSignIn) {
-	// dot's Home tab in the Slack app, for the gateway's pages to send people back to.
+	// laddu's Home tab in the Slack app, for the gateway's pages to send people back to.
 	const appId = await app.client.bots
 		.info({ bot: auth.bot_id! })
 		.then(info => info.bot?.app_id)

@@ -1,6 +1,6 @@
 # Built-in skills
 
-How-to guides that ship with dot, one folder each with a `SKILL.md`:
+How-to guides that ship with laddu, one folder each with a `SKILL.md`:
 
 ```
 skills/<name>/SKILL.md
@@ -17,6 +17,6 @@ matches, so many skills cost little.
 
 - **Built-in** (`agent-home/skills/`, committed): generic, for every deployment.
 - **Team** (`agent-home/skills.local/`, git-ignored): your organization's own procedures.
-- **Personal**: dot writes these for each person in their container (`$CODEX_HOME/skills`).
+- **Personal**: laddu writes these for each person in their container (`$CODEX_HOME/skills`).
 
 All three apply from the next message; no restart. See docs/ARCHITECTURE.md (Skills).

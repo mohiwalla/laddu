@@ -2,7 +2,7 @@
  * `bun run login` — one-time Sign in with ChatGPT (with plan usage) for the bot.
  *
  * OAuth + PKCE with a loopback callback on 127.0.0.1. On a server without a browser, open the
- * link on any device and paste back the address the browser ends on. `slack-dot setup` uses
+ * link on any device and paste back the address the browser ends on. `laddu setup` uses
  * signIn() for the same flow.
  */
 import { createRemoteJWKSet, jwtVerify } from "jose"

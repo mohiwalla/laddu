@@ -66,7 +66,7 @@ class TurnFailed extends Error {
 	}
 }
 
-/** One request: a message, or someone's reaction, /dot or shortcut on it. */
+/** One request: a message, or someone's reaction, /laddu or shortcut on it. */
 const triggerKey = (trigger: Trigger) =>
 	trigger.via
 		? `${trigger.channel}:${trigger.ts}:${trigger.via}:${trigger.userId}`
@@ -97,7 +97,7 @@ const ownWords = (trigger: Trigger) =>
 		? ""
 		: (trigger.text ?? "").replace(/<@[A-Z0-9]+(?:\|[^>]*)?>/g, "").trim()
 
-/** "STOP" on its own, in capitals (a mention of dot around it is fine). */
+/** "STOP" on its own, in capitals (a mention of laddu around it is fine). */
 const isStop = (trigger: Trigger) => ownWords(trigger) === "STOP"
 
 /** Adds a reaction; false if Slack refused it (unknown emoji, no access). */
@@ -138,9 +138,9 @@ async function handle(
 				.catch(() => {})
 		return
 	}
-	// dot asked them something here (`slack ask`): a typed reply answers it, as their next message.
+	// laddu asked them something here (`slack ask`): a typed reply answers it, as their next message.
 	if (ownWords(trigger)) closeWithMessage(client, key)
-	// dot is already working on something of theirs here: this message goes into that turn.
+	// laddu is already working on something of theirs here: this message goes into that turn.
 	if (
 		steering.has(key) &&
 		(await steerInto(client, config, botUserId, trigger, key))
@@ -171,7 +171,7 @@ async function handle(
 				message => markReply(inflightKey, message).catch(() => {}),
 			)
 			const user = { teamId: trigger.teamId, userId: trigger.userId }
-			// The first time this turn uses dot's computer: a fresh link in their Home tab (and, the very
+			// The first time this turn uses laddu's computer: a fresh link in their Home tab (and, the very
 			// first time ever, a note saying where it is).
 			let linkSent = false
 			const onStep = (step: Step) => {
@@ -270,7 +270,7 @@ async function handle(
 					...new Set([...(session?.linked ?? []), ...turn.linked]),
 				],
 			})
-			// Nothing to say (e.g. "thanks"): Codex answers with just [REACT:emoji] and dot only reacts.
+			// Nothing to say (e.g. "thanks"): Codex answers with just [REACT:emoji] and laddu only reacts.
 			const reaction = result.files.length
 				? undefined
 				: result.text.trim().match(/^\[REACT:([a-z0-9_+'-]+)\]$/i)?.[1]
@@ -370,7 +370,7 @@ async function handle(
 
 /**
  * Adds the message to this person's running turn in the thread, if there is one that takes it;
- * dot reacts with :eyes: so they know it got through. False: it starts its own turn as usual.
+ * laddu reacts with :eyes: so they know it got through. False: it starts its own turn as usual.
  */
 async function steerInto(
 	client: WebClient,
@@ -414,7 +414,7 @@ async function notifyDirectly(
 ) {
 	const notInChannel = /not_in_channel|channel_not_found/.test(message)
 	const text = notInChannel
-		? `I couldn't answer in <#${trigger.channel}> because I'm not in it. Add me with \`/invite @dot\`, or ask me here.`
+		? `I couldn't answer in <#${trigger.channel}> because I'm not in it. Add me with \`/invite @laddu\`, or ask me here.`
 		: `I couldn't answer in <#${trigger.channel}>: ${message}`
 	const { channel } = await client.conversations
 		.open({ users: trigger.userId })
@@ -520,7 +520,7 @@ export function registerHandlers(
 		)
 	}
 
-	// dot's Home tab: their settings page (home.ts).
+	// laddu's Home tab: their settings page (home.ts).
 	registerHome(app, {
 		config,
 		agentSessions,
@@ -564,7 +564,7 @@ export function registerHandlers(
 		})
 	})
 
-	// Reacting with the trigger emoji to a user message asks dot to handle that message.
+	// Reacting with the trigger emoji to a user message asks laddu to handle that message.
 	app.event("reaction_added", async ({ event, client, context }) => {
 		if (
 			event.reaction !== config.triggerEmoji ||
@@ -603,8 +603,8 @@ export function registerHandlers(
 		})
 	})
 
-	// `/dot <request>`: dot posts the request where it was typed and answers in its thread. Any
-	// command name: `slack-dot setup` names it after the bot, and Slack only sends this app's own.
+	// `/laddu <request>`: laddu posts the request where it was typed and answers in its thread. Any
+	// command name: `laddu setup` names it after the bot, and Slack only sends this app's own.
 	app.command(/^\//, async ({ command, ack, respond, client, context }) => {
 		await ack()
 		if (!isAllowed(command.user_id)) {
@@ -618,7 +618,7 @@ export function registerHandlers(
 		if (!request) {
 			await respond({
 				response_type: "ephemeral",
-				text: "Tell me what you need, e.g. `/dot summarize this channel's last week`.",
+				text: "Tell me what you need, e.g. `/laddu summarize this channel's last week`.",
 			})
 			return
 		}
@@ -631,7 +631,7 @@ export function registerHandlers(
 		if (!echo?.ts) {
 			await respond({
 				response_type: "ephemeral",
-				text: "I can't post here. Add me with `/invite @dot`, or use `/dot` in our DM.",
+				text: "I can't post here. Add me with `/invite @laddu`, or use `/laddu` in our DM.",
 			})
 			return
 		}
@@ -646,16 +646,16 @@ export function registerHandlers(
 		})
 	})
 
-	// Message shortcut "Ask dot": asks what to do with the message, then answers in its thread.
-	app.shortcut("ask_dot", async ({ shortcut, ack, client }) => {
+	// Message shortcut "Ask laddu": asks what to do with the message, then answers in its thread.
+	app.shortcut("ask_laddu", async ({ shortcut, ack, client }) => {
 		await ack()
 		if (shortcut.type !== "message_action") return
 		await client.views.open({
 			trigger_id: shortcut.trigger_id,
 			view: {
 				type: "modal",
-				callback_id: "ask_dot",
-				title: { type: "plain_text", text: "Ask dot" },
+				callback_id: "ask_laddu",
+				title: { type: "plain_text", text: "Ask laddu" },
 				submit: { type: "plain_text", text: "Ask" },
 				close: { type: "plain_text", text: "Cancel" },
 				private_metadata: JSON.stringify({
@@ -686,7 +686,7 @@ export function registerHandlers(
 			},
 		})
 	})
-	app.view("ask_dot", async ({ ack, view, body, client, context }) => {
+	app.view("ask_laddu", async ({ ack, view, body, client, context }) => {
 		await ack()
 		if (!isAllowed(body.user.id)) return
 		const { channel, ts, threadTs } = JSON.parse(view.private_metadata) as {

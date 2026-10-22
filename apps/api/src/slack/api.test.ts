@@ -65,7 +65,7 @@ test("private bot access checks requester membership before reading or writing",
 		callSlack(client, person, {
 			method: "chat.postMessage",
 			args: { channel: "C00000001", text: "hello" },
-			as: "dot",
+			as: "laddu",
 		}),
 	).rejects.toThrow("aren't a member")
 	expect(apiCall).not.toHaveBeenCalled()
@@ -131,7 +131,7 @@ test("user-only operations never silently fall back to the bot", async () => {
 		callSlack(client, person, {
 			method: "conversations.create",
 			args: { name: "new-channel" },
-			as: "dot",
+			as: "laddu",
 		}),
 	).rejects.toThrow("requires --as user")
 	expect(apiCall).not.toHaveBeenCalled()
@@ -141,7 +141,7 @@ test("channel names resolve exactly and bot calls cannot impersonate a person", 
 	await callSlack(client, person, {
 		method: "chat.postMessage",
 		args: { channel: "#general", text: "hello" },
-		as: "dot",
+		as: "laddu",
 	})
 	expect(apiCall).toHaveBeenCalledWith("chat.postMessage", {
 		channel: "C00000001",

@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test"
 
-const root = `/tmp/dot-webfetch-tests-${crypto.randomUUID()}`
+const root = `/tmp/laddu-webfetch-tests-${crypto.randomUUID()}`
 const command = Bun.fileURLToPath(
 	new URL("../../runtime/webfetch", import.meta.url),
 )

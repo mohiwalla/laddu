@@ -10,7 +10,7 @@ import * as replies from "./reply"
 import * as learning from "../agent/learning"
 import { registerHandlers } from "./handlers"
 
-const botUserId = "U_DOT"
+const botUserId = "U_LADDU"
 const userId = "U_PERSON"
 const channel = "C_CHANNEL"
 let sequence = 0
@@ -71,7 +71,7 @@ async function reactTo(message: Message | null, lookupFails = false) {
 }
 
 test.each([
-	["dot's own reply", { user: botUserId }],
+	["laddu's own reply", { user: botUserId }],
 	["another bot's message", { user: "U_OTHER_BOT", bot_id: "B_OTHER" }],
 	["a bot profile", { user: "U_OTHER_BOT", bot_profile: { id: "B_OTHER" } }],
 	["a legacy bot message", { user: "U_OTHER_BOT", subtype: "bot_message" }],

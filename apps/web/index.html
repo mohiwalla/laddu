@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>laddu: a sweet little helper for your Slack</title>
+		<meta
+			name="description"
+			content="Tag @laddu in any channel, thread or DM. It reads the conversation, does the work on its own little computer, and answers right there in the thread."
+		/>
+		<meta
+			name="theme-color"
+			content="#fff1f4"
+			media="(prefers-color-scheme: light)"
+		/>
+		<meta
+			name="theme-color"
+			content="#24121c"
+			media="(prefers-color-scheme: dark)"
+		/>
+		<meta property="og:type" content="website" />
+		<meta property="og:url" content="https://laddu.wtf/" />
+		<meta
+			property="og:title"
+			content="laddu: a sweet little helper for your Slack"
+		/>
+		<meta
+			property="og:description"
+			content="Tag @laddu in any channel, thread or DM. It does the work on its own little computer and answers in the thread."
+		/>
+		<meta property="og:image" content="https://laddu.wtf/og.png" />
+		<meta property="og:image:width" content="1200" />
+		<meta property="og:image:height" content="630" />
+		<meta name="twitter:card" content="summary_large_image" />
+		<link rel="icon" href="./public/favicon.png" type="image/png" />
+		<link rel="apple-touch-icon" href="./public/apple-touch-icon.png" />
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			rel="stylesheet"
+			href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600&family=Fredoka:wght@500;600;700&family=Nunito:wght@500;700;800&display=swap"
+		/>
+		<link rel="stylesheet" href="./src/styles.css" />
+		<script type="module" src="./src/main.js"></script>
+	</head>
+	<body>
+		<svg width="0" height="0" class="defs" aria-hidden="true">
+			<symbol id="sparkle" viewBox="0 0 24 24">
+				<path
+					d="M12 0C13 7 17 11 24 12C17 13 13 17 12 24C11 17 7 13 0 12C7 11 11 7 12 0Z"
+				/>
+			</symbol>
+		</svg>
+
+		<a class="skip" href="#main">Skip to content</a>
+
+		<header class="top">
+			<div class="wrap top-inner">
+				<a class="brand" href="#top" aria-label="laddu, home">
+					<img
+						src="./public/mascots/laddu-160.webp"
+						width="160"
+						height="160"
+						alt=""
+					/>
+					<span>laddu</span>
+				</a>
+				<nav aria-label="Sections">
+					<a href="#does">What it does</a>
+					<a href="#computer">Its computer</a>
+					<a href="#gang">The gang</a>
+				</nav>
+				<a class="btn btn-small" href="#setup">Bring it home</a>
+			</div>
+		</header>
+
+		<main id="main">
+			<section class="hero" id="top">
+				<div class="wrap hero-inner">
+					<div class="hero-copy">
+						<p class="hello">
+							Hi, I’m laddu
+							<span lang="hi" class="deva">लड्डू</span>
+						</p>
+						<h1>A sweet little helper who lives in your Slack.</h1>
+						<p class="lede">
+							Tag <strong>@laddu</strong> in a channel, a thread
+							or a DM. It reads the conversation, does the work on
+							its own little computer, and answers right there in
+							the thread.
+						</p>
+						<div class="actions">
+							<a class="btn" href="#setup">Bring laddu home</a>
+							<a class="btn btn-soft" href="#does"
+								>See what it can do</a
+							>
+						</div>
+					</div>
+
+					<div class="stage">
+						<div class="plate" aria-hidden="true"></div>
+						<svg class="spark s1" aria-hidden="true">
+							<use href="#sparkle" />
+						</svg>
+						<svg class="spark s2" aria-hidden="true">
+							<use href="#sparkle" />
+						</svg>
+						<svg class="spark s3" aria-hidden="true">
+							<use href="#sparkle" />
+						</svg>
+						<svg class="spark s4" aria-hidden="true">
+							<use href="#sparkle" />
+						</svg>
+						<p class="bubble" aria-live="polite"></p>
+						<button
+							class="boop"
+							type="button"
+							aria-label="Boop laddu"
+						>
+							<img
+								src="./public/mascots/laddu-768.webp"
+								width="768"
+								height="743"
+								alt="laddu: a round, orange boondi laddoo with huge sparkly eyes, a happy open smile and a little black bow tie"
+								fetchpriority="high"
+							/>
+						</button>
+						<div class="floor-shadow" aria-hidden="true"></div>
+						<p class="hint" aria-hidden="true">psst, boop it</p>
+					</div>
+				</div>
+			</section>
+
+			<section class="convo" aria-labelledby="convo-title">
+				<div class="wrap">
+					<h2 id="convo-title" class="sr-only">
+						How a request looks in Slack
+					</h2>
+					<div class="thread" aria-hidden="true">
+						<div class="msg">
+							<span class="avatar you">Y</span>
+							<div>
+								<p class="who">You</p>
+								<p class="text">
+									<span class="mention">@laddu</span> what did
+									we decide in this thread, and what’s still
+									open on Boards?
+								</p>
+							</div>
+						</div>
+						<div class="msg">
+							<img
+								class="avatar"
+								src="./public/mascots/laddu-160.webp"
+								width="160"
+								height="160"
+								alt=""
+							/>
+							<div class="grow">
+								<p class="who">
+									laddu <span class="app">APP</span>
+								</p>
+								<ul class="steps">
+									<li class="done">Reading the thread</li>
+									<li class="done">
+										Checking the work items on Azure Boards
+									</li>
+									<li class="now">Putting it together</li>
+								</ul>
+								<p class="typing">
+									<span></span><span></span><span></span>
+								</p>
+							</div>
+						</div>
+					</div>
+					<p class="caption">
+						Every step shows up live, in plain words. (The three
+						dots stayed. They’re family.)
+					</p>
+				</div>
+			</section>
+
+			<section class="does" id="does" aria-labelledby="does-title">
+				<div class="wrap">
+					<p class="kicker">What it does</p>
+					<h2 id="does-title">Small, round, surprisingly capable.</h2>
+					<div class="cards">
+						<article class="card">
+							<span class="icon saffron" aria-hidden="true">
+								<svg viewBox="0 0 24 24">
+									<path d="M4 5h16v11H8l-4 4z" />
+									<path d="M8 9h8M8 12h5" />
+								</svg>
+							</span>
+							<h3>Reads the room</h3>
+							<p>
+								The thread, or the channel messages before your
+								tag, plus whatever’s attached: images, PDFs,
+								zips, documents and voice notes.
+							</p>
+						</article>
+						<article class="card">
+							<span class="icon pink" aria-hidden="true">
+								<svg viewBox="0 0 24 24">
+									<path d="M6 3h8l4 4v14H6z" />
+									<path d="M14 3v4h4M9 13h6M9 17h4" />
+								</svg>
+							</span>
+							<h3>Hands you real files</h3>
+							<p>
+								Ask for a CSV, a chart, a Word doc, a
+								spreadsheet, a PDF or a slide deck, and it lands
+								in the thread.
+							</p>
+						</article>
+						<article class="card">
+							<span class="icon pistachio" aria-hidden="true">
+								<svg viewBox="0 0 24 24">
+									<path
+										d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"
+									/>
+								</svg>
+							</span>
+							<h3>Remembers you</h3>
+							<p>
+								Who you are and how you like answers, without
+								you saying “remember this”. It can look back
+								through your past conversations, and writes
+								itself little how-tos when it works something
+								out.
+							</p>
+						</article>
+						<article class="card">
+							<span class="icon saffron" aria-hidden="true">
+								<svg viewBox="0 0 24 24">
+									<circle cx="12" cy="8" r="4" />
+									<path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" />
+								</svg>
+							</span>
+							<h3>Works as you</h3>
+							<p>
+								Connect once and it reads and acts in Azure
+								DevOps and Microsoft 365 (mail, calendar,
+								OneDrive, SharePoint, Teams, Planner) as you,
+								seeing only what you can.
+							</p>
+						</article>
+						<article class="card">
+							<span class="icon pink" aria-hidden="true">
+								<svg viewBox="0 0 24 24">
+									<path
+										d="M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 4l-3 16"
+									/>
+								</svg>
+							</span>
+							<h3>Ships code</h3>
+							<p>
+								Hand it a task on Azure Repos or AWS CodeCommit.
+								It works on its own branch, runs the repo’s
+								checks and opens a pull request as you.
+							</p>
+						</article>
+						<article class="card">
+							<span class="icon pistachio" aria-hidden="true">
+								<svg viewBox="0 0 24 24">
+									<circle cx="12" cy="13" r="8" />
+									<path d="M12 9v4l3 2M9 2h6" />
+								</svg>
+							</span>
+							<h3>Keeps time</h3>
+							<p>
+								Reminders and recurring work, like “every Monday
+								at 9, summarize #sales”. It can DM people for
+								you, too.
+							</p>
+						</article>
+					</div>
+				</div>
+			</section>
+
+			<section
+				class="computer"
+				id="computer"
+				aria-labelledby="computer-title"
+			>
+				<div class="wrap computer-inner">
+					<div class="desk" aria-hidden="true">
+						<img
+							class="peek"
+							src="./public/mascots/laddu-512.webp"
+							width="512"
+							height="495"
+							alt=""
+							loading="lazy"
+						/>
+						<div class="monitor">
+							<div class="screen">
+								<div class="window">
+									<div class="bar">
+										<i></i><i></i><i></i><b></b>
+									</div>
+									<div class="page">
+										<span class="line w70"></span>
+										<span class="line w45"></span>
+										<span class="blockish"></span>
+										<span class="line w60"></span>
+										<span class="cursor"></span>
+									</div>
+								</div>
+								<span class="takeover">Take over</span>
+							</div>
+						</div>
+						<div class="stand"></div>
+					</div>
+					<div class="computer-copy">
+						<p class="kicker">Its own little computer</p>
+						<h2 id="computer-title">
+							Everyone gets a private laddu, with a desktop of its
+							own.
+						</h2>
+						<p>
+							Each person who tags laddu gets their own computer:
+							a desktop with a browser, files that stick around
+							between conversations, and the internet. laddu
+							clicks and types its way through the things no API
+							reaches.
+						</p>
+						<ul class="sparkle-list">
+							<li>
+								<svg aria-hidden="true">
+									<use href="#sparkle" /></svg
+								>Watch from laddu’s Home tab in Slack, take over
+								with one click, and hand it back.
+							</li>
+							<li>
+								<svg aria-hidden="true">
+									<use href="#sparkle" /></svg
+								>Internet only: no way into your servers, your
+								network or anyone else’s computer.
+							</li>
+							<li>
+								<svg aria-hidden="true">
+									<use href="#sparkle" /></svg
+								>Your ChatGPT sign-in never goes inside; a small
+								proxy on the host adds it.
+							</li>
+						</ul>
+					</div>
+				</div>
+			</section>
+
+			<section class="brains" aria-labelledby="brains-title">
+				<div class="wrap">
+					<div class="brains-card">
+						<h2 id="brains-title">Brains, your pick.</h2>
+						<p>
+							Codex on your ChatGPT plan, or OpenCode’s free
+							models. Everyone chooses their own on laddu’s Home
+							tab, along with the model and how hard it thinks.
+						</p>
+					</div>
+				</div>
+			</section>
+
+			<section class="gang" id="gang" aria-labelledby="gang-title">
+				<div class="wrap">
+					<p class="kicker">The mithai gang</p>
+					<h2 id="gang-title">laddu doesn’t do this alone.</h2>
+					<p class="gang-lede">
+						Well, technically it does. But these four keep it
+						company.
+					</p>
+					<ul class="friends">
+						<li class="friend jalebi">
+							<div class="friend-plate">
+								<img
+									src="./public/mascots/jalebi-512.webp"
+									width="512"
+									height="499"
+									alt="Jalebi: a glossy orange spiral sweet with sparkly eyes and a bow tie"
+									loading="lazy"
+								/>
+							</div>
+							<h3>
+								Jalebi <span lang="hi" class="deva">जलेबी</span>
+							</h3>
+							<p>Goes round in circles so you don’t have to.</p>
+						</li>
+						<li class="friend kaju">
+							<div class="friend-plate">
+								<img
+									src="./public/mascots/kaju-katli-512.webp"
+									width="512"
+									height="500"
+									alt="Kaju Katli: a diamond-shaped cashew sweet with silver leaf, pistachios and a bow tie"
+									loading="lazy"
+								/>
+							</div>
+							<h3>
+								Kaju Katli
+								<span lang="hi" class="deva">काजू कतली</span>
+							</h3>
+							<p>Sharp edges, silver lining.</p>
+						</li>
+						<li class="friend gulab">
+							<div class="friend-plate">
+								<img
+									src="./public/mascots/gulab-jamun-512.webp"
+									width="512"
+									height="506"
+									alt="Gulab Jamun: a shiny, deep brown syrup-soaked ball with almond flakes and a bow tie"
+									loading="lazy"
+								/>
+							</div>
+							<h3>
+								Gulab Jamun
+								<span lang="hi" class="deva">गुलाब जामुन</span>
+							</h3>
+							<p>Soaks up every last detail.</p>
+						</li>
+						<li class="friend rasgulla">
+							<div class="friend-plate">
+								<img
+									src="./public/mascots/rasgulla-512.webp"
+									width="512"
+									height="488"
+									alt="Rasgulla: a soft, white spongy ball with saffron strands, pistachios and a bow tie"
+									loading="lazy"
+								/>
+							</div>
+							<h3>
+								Rasgulla
+								<span lang="hi" class="deva">रसगुल्ला</span>
+							</h3>
+							<p>Soft, squishy, always bounces back.</p>
+						</li>
+					</ul>
+				</div>
+			</section>
+
+			<section class="setup" id="setup" aria-labelledby="setup-title">
+				<div class="wrap">
+					<div class="setup-card">
+						<div class="setup-head">
+							<p class="kicker">Bring it home</p>
+							<h2 id="setup-title">
+								One command, then a few friendly questions.
+							</h2>
+							<p>
+								laddu runs on a Linux server with systemd. The
+								installer adds Docker and Bun if they’re
+								missing, then sets everything up.
+							</p>
+						</div>
+						<div class="cmd">
+							<code id="install-cmd"
+								>curl -fsSL https://laddu.wtf/install.sh |
+								sh</code
+							>
+							<button
+								class="btn btn-small btn-copy copy"
+								type="button"
+								data-copy="install-cmd"
+							>
+								Copy
+							</button>
+						</div>
+						<p class="cmd-alt">
+							Already have Bun and Docker?
+							<code>bun create laddu</code> does the same.
+						</p>
+						<ol class="steps-big">
+							<li>
+								<h3>Makes the Slack app</h3>
+								<p>
+									Send one command in Slack and type back the
+									code it shows.
+								</p>
+							</li>
+							<li>
+								<h3>Signs in to ChatGPT</h3>
+								<p>
+									Open a link on any device. On a server,
+									paste back the address the browser ends on.
+								</p>
+							</li>
+							<li>
+								<h3>Asks a few questions</h3>
+								<p>
+									Its name, who can use it, Docker or not, a
+									public address, and the model.
+								</p>
+							</li>
+							<li>
+								<h3>Says hi</h3>
+								<p>
+									It starts as a service and DMs you when it’s
+									up. At first it answers only you.
+								</p>
+							</li>
+						</ol>
+					</div>
+				</div>
+			</section>
+		</main>
+
+		<footer class="foot">
+			<div class="wrap foot-inner">
+				<a class="brand" href="#top" aria-label="laddu, back to top">
+					<img
+						src="./public/mascots/laddu-160.webp"
+						width="160"
+						height="160"
+						alt=""
+					/>
+					<span>laddu.wtf</span>
+				</a>
+				<p>Made with ghee, sugar and a little bit of Codex.</p>
+				<a href="https://github.com/mohiwalla/laddu"
+					>Source on GitHub</a
+				>
+			</div>
+		</footer>
+	</body>
+</html>

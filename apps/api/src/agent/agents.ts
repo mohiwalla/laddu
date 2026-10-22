@@ -1,5 +1,5 @@
 /**
- * The agents dot can run a turn on, one per person (picked on the Home tab, see preferences.ts):
+ * The agents laddu can run a turn on, one per person (picked on the Home tab, see preferences.ts):
  * Codex on the owner's ChatGPT plan (native app-server), or OpenCode's free models (over ACP).
  * Everything for a person runs on their pick, background memory reviews included.
  */

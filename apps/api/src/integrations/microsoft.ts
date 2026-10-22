@@ -2,10 +2,10 @@
  * One Microsoft connection per person, shared by Azure DevOps (`ado`) and Microsoft 365 through
  * Microsoft Graph (`ms`: Outlook, Calendar, OneDrive, SharePoint, Teams, Planner).
  *
- * Each person signs in with Microsoft's device code flow: dot DMs them a code for
+ * Each person signs in with Microsoft's device code flow: laddu DMs them a code for
  * microsoft.com/devicelogin, polls until they approve, and keeps the tokens here, on the host
  * (never in a container). A sign-in is only accepted when the Microsoft account's email matches
- * the person's Slack email, so nobody can link someone else's account to their own dot by getting
+ * the person's Slack email, so nobody can link someone else's account to their own laddu by getting
  * them to enter a code. Entra refresh tokens work for every API the app has consent for, so one
  * sign-in serves both; a token per API is minted from it on demand.
  */
@@ -20,7 +20,7 @@ type WebClient = App["client"]
 export type Settings = NonNullable<BotConfig["microsoft"]>
 export type Person = { teamId: string; userId: string }
 
-/** The APIs dot calls, by Entra resource. A token request names one of them. */
+/** The APIs laddu calls, by Entra resource. A token request names one of them. */
 export const RESOURCES = {
 	graph: "https://graph.microsoft.com/.default",
 	devops: "499b84ac-1321-427f-aa17-267ca6975798/.default",
@@ -261,7 +261,7 @@ export async function connect(
 		.finally(() => {
 			if (current()) signingIn.delete(id)
 		})
-	return `Sent them a Microsoft sign-in link and code in a DM with dot. Once they approve it, ${LABELS[resource]} is connected and dot confirms in that DM; then ask again.`
+	return `Sent them a Microsoft sign-in link and code in a DM with laddu. Once they approve it, ${LABELS[resource]} is connected and laddu confirms in that DM; then ask again.`
 }
 
 async function poll(
@@ -392,7 +392,7 @@ export async function accessToken(
 			// AADSTS65001: no consent for this API yet (it was added after they signed in).
 			if (/AADSTS65001|consent_required/i.test(description))
 				throw new ConsentError(
-					`dot isn't approved for ${LABELS[resource]} on their account yet. Run \`${COMMANDS[resource]} connect\` so they can sign in and approve it (or an admin grants consent for the app in Microsoft Entra).`,
+					`laddu isn't approved for ${LABELS[resource]} on their account yet. Run \`${COMMANDS[resource]} connect\` so they can sign in and approve it (or an admin grants consent for the app in Microsoft Entra).`,
 				)
 			// Revoked, expired (90 days unused) or password changed: sign in again.
 			if (body.error === "invalid_grant") {

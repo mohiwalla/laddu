@@ -2,7 +2,7 @@
 
 A personal Slack assistant. You tag it in a channel (or DM it); it reads the conversation around the
 tag, hands the job to an agent, and replies in the thread. The agent is the brain for every request:
-Codex on the owner's ChatGPT plan, or OpenCode's free models, each person's pick on dot's Home tab.
+Codex on the owner's ChatGPT plan, or OpenCode's free models, each person's pick on laddu's Home tab.
 The bot itself only moves messages between Slack and the agent.
 
 Status: **V0**, with per-person integrations, computer use and Azure Repos coding tasks.
@@ -14,8 +14,10 @@ Turborepo monorepo on Bun workspaces. Bun APIs only, no `node:*` imports (see `A
 
 ```text
 apps/
-  cli/                 `slack-dot`, the installer and admin CLI (docs/INSTALLER.md), published to
+  cli/                 `laddu`, the installer and admin CLI (docs/INSTALLER.md), published to
                        npm with the bot inside; install.sh is its one-command bootstrap
+  web/                 laddu.wtf, the static marketing site (`bun run build` → dist/, serves
+                       install.sh too); mascot cutouts in public/mascots, sources in brand-source/
   api/                 the bot backend (this doc)
     src/
       index.ts         boot: config, ChatGPT token check, Slack Socket Mode
@@ -40,7 +42,7 @@ apps/
       agent/tools.ts   runs runtime/ commands for a user (container or host)
       agent/bot-api.ts API for container commands that need the bot (`schedule`, `ado`, `ms`,
                        `slack`, `desktop link`), signed per turn
-      agent/desktop.ts dot's computer, bot side: signed watch/control links, viewer gateway, idle stop
+      agent/desktop.ts laddu's computer, bot side: signed watch/control links, viewer gateway, idle stop
       scheduler.ts     scheduled tasks: store, cron/time-zone maths, 30-second check
       integrations/microsoft.ts one Microsoft sign-in per person: device code, tokens per API
       integrations/azure-devops.ts Azure DevOps requests as the person
@@ -50,7 +52,7 @@ apps/
       slack/context.ts Slack messages → transcript for Codex
       slack/attachments.ts Slack files in (downloads) and out (outbox uploads)
       slack/handlers.ts mention/DM handling
-      slack/messaging.ts `slack find` / `slack dm`: dot DMs people for the person
+      slack/messaging.ts `slack find` / `slack dm`: laddu DMs people for the person
       slack/api.ts      Slack Free method catalog + bot/user identity and channel access checks
       slack/transfers.ts user-authorized file downloads and external uploads
       slack/automations.ts persisted event rules, delivery queue, retries and history
@@ -67,7 +69,7 @@ apps/
     runtime/           commands for Codex (Python, stdlib): `memory` (per-user memory),
                        `recall` (search past conversations), `schedule` (scheduled tasks),
                        `ado` (Azure DevOps), `code` (Azure Repos / CodeCommit coding tasks),
-                       `ms` (Microsoft 365), `slack` (Slack Free tools and event rules), `desktop` (dot's computer:
+                       `ms` (Microsoft 365), `slack` (Slack Free tools and event rules), `desktop` (laddu's computer:
                        starts it, and serves Codex the tools that drive it, over MCP; with
                        `desktop-agent.py`, the person's own computers over SSH), `tailnet`
                        (the container on the person's Tailscale network)
@@ -122,13 +124,13 @@ The message is saved for restart recovery when it is actually posted, rather tha
 ## Isolation: one container per user
 
 Everything Codex executes runs in a Docker container dedicated to the Slack user who asked
-(`dot-<first name>-<team>-<user>`, created on first use, `--restart unless-stopped`; found by its
+(`laddu-<first name>-<team>-<user>`, created on first use, `--restart unless-stopped`; found by its
 labels and renamed in place when the name changes):
 
-- Non-root user `dot`, all Linux capabilities dropped, `no-new-privileges`, no sudo; 3 GB memory
+- Non-root user `laddu`, all Linux capabilities dropped, `no-new-privileges`, no sudo; 3 GB memory
   (2 GB without the desktop), 2 CPUs, 4096 threads (512 without the desktop), 1 GB shared memory for Chromium.
 - No host files except the persona and Codex config, both read-only. A named volume
-  (`dot-home-<team>-<user>`) keeps the user's workspace and Codex sessions; nobody else sees it.
+  (`laddu-home-<team>-<user>`) keeps the user's workspace and Codex sessions; nobody else sees it.
 - Internet access on (Codex needs it to reach the model proxy; users need it for `curl`).
 - **Internet only** (`ISOLATE_NETWORK`, on by default). Firewall
   rules in the container's own network namespace refuse this machine's services (databases, SSH…),
@@ -143,8 +145,8 @@ labels and renamed in place when the name changes):
   Verified: no token in any process environment inside the container; other API paths get 403.
 - The image (~3.8 GB) carries tools for files people send and ask for: pandas, matplotlib,
   python-docx, openpyxl, reportlab, pypdf, Pillow, pandoc, poppler, qpdf, ImageMagick, ffmpeg; and
-  dot's computer (below, about 1 GB of it). Local speech-to-text uses faster-whisper in
-  `/opt/dot/audio`, with compatible pinned PyAV and CTranslate2 versions and a bundled multilingual
+  laddu's computer (below, about 1 GB of it). Local speech-to-text uses faster-whisper in
+  `/opt/laddu/audio`, with compatible pinned PyAV and CTranslate2 versions and a bundled multilingual
   base model. Audio attachments (including Slack recorder `.m4a` files) need no per-turn installs
   or model downloads; the persona gives the exact transcription recipe.
 - The image bundles the exact codex build the SDK ships (`node_modules/@openai/codex-linux-*`),
@@ -153,9 +155,9 @@ labels and renamed in place when the name changes):
 `CODEX_RUNTIME="host"` runs Codex on the host instead (Codex sandbox only: blocks writes outside
 `agent-home`, but can read your files). Only for yourself, at most.
 
-## dot's computer
+## laddu's computer
 
-Each person's dot has a full desktop in their container (`DESKTOP`, on by default in Docker), which
+Each person's laddu has a full desktop in their container (`DESKTOP`, on by default in Docker), which
 Codex drives and the person can watch or take over in the browser. Native computer use isn't on the
 plan route, so it's our own tools over MCP; the approach is borrowed from computer-use-linux (the
 computer-use plugin of a Linux build of Codex Desktop) and Bytebot.
@@ -172,11 +174,11 @@ computer-use plugin of a Linux build of Codex Desktop) and Bytebot.
   browser UI, extensions and native dialogs work like anything else; `launch`, `windows`, `focus`,
   `clipboard`, `wait`. Every action returns the new controls and screenshot, saving a call per step.
   Consecutive actions show as one "Using my computer" row in Slack, with a count.
-- **Watching and taking over** (`agent/desktop.ts`): each person's link lives in dot's **Home tab**
+- **Watching and taking over** (`agent/desktop.ts`): each person's link lives in laddu's **Home tab**
   in Slack (private to them): a banner, the computer's status (on / asleep / not set up), an
-  **Open dot's computer** button and how taking over works. It's redrawn with a fresh signed link
-  (valid 12 hours) whenever they open the tab (`app_home_opened`) and whenever dot starts using the
-  computer for them. Threads stay clean: only the first time someone's dot uses its computer
+  **Open laddu's computer** button and how taking over works. It's redrawn with a fresh signed link
+  (valid 12 hours) whenever they open the tab (`app_home_opened`) and whenever laddu starts using the
+  computer for them. Threads stay clean: only the first time someone's laddu uses its computer
   does the thread get a note, visible only to them, saying where to find it
   (`.data/…/desktop-introduced.json`). `desktop link "<why>"` still sends the link privately on
   request (e.g. to sign in to a site, so passwords never go through Slack). The link opens a
@@ -190,17 +192,17 @@ computer-use plugin of a Linux build of Codex Desktop) and Bytebot.
   listener (`DESKTOP_TAILNET_PORT`, local, never behind the tunnel). ~7 ms a round trip where the
   Cloudflare tunnel took ~150 ms (it answers from Marseille for us). There the address opens without
   a link: Tailscale sets the person's login on every request, and that login is their grant.
-- **The page** (restyled as it's served, KasmVNC's files untouched): dot's picture and name, the
+- **The page** (restyled as it's served, KasmVNC's files untouched): laddu's picture and name, the
   desktop at actual size in a rounded bezel, KasmVNC's toolbar, toasts and routine banners hidden
   (errors still show). It starts view-only, on one connection: a click on the screen (or **Take
   over**) turns view-only off and that click lands too; clicking outside the screen, leaving the
   tab or window, or **Give back** turns it back on, like OpenAI's dots. While the person has
-  control the page tells the bot every 10 s (`/_dot/control` → `desktop control on`; 30 s without
-  word counts as given back), dot's actions wait up to 75 s per call, and an action interrupted by
+  control the page tells the bot every 10 s (`/_laddu/control` → `desktop control on`; 30 s without
+  word counts as given back), laddu's actions wait up to 75 s per call, and an action interrupted by
   a give-back returns the new screen instead of acting.
 - **Cursors.** The person always sees their own cursor, and it does nothing on the desktop until
-  they take control. The desktop has no cursor of its own (Xvnc `-nocursor`); dot's is drawn by
-  the page where dot's pointer really is (`desktop events` → `/_dot/events`, server-sent events,
+  they take control. The desktop has no cursor of its own (Xvnc `-nocursor`); laddu's is drawn by
+  the page where laddu's pointer really is (`desktop events` → `/_laddu/events`, server-sent events,
   one feed per container while someone watches): always the same coral arrow with its name,
   gliding between positions, a ripple on clicks, "typing…" while it types.
 - Spike results (2026-10-16, on the plan's model): searching Wikipedia and reading an infobox (24
@@ -212,7 +214,7 @@ computer-use plugin of a Linux build of Codex Desktop) and Bytebot.
 
 The same tools take `machine`, an SSH host in the container's `~/.ssh/config`, and then drive that
 computer instead (KDE Plasma for now; macOS, Windows and GNOME later). It's for when the person
-isn't using it: there's one pointer, so dot stops when it moves under it.
+isn't using it: there's one pointer, so laddu stops when it moves under it.
 
 - **Reach.** `runtime/tailnet` runs Tailscale in userspace in the container (state on the volume,
   the person signs it in once), since the network rules close the tailnet's addresses to the
@@ -227,26 +229,26 @@ isn't using it: there's one pointer, so dot stops when it moves under it.
   AT-SPI, turned on for the session (Qt apps share nothing until it is) and moved by each window's
   place from KWin, since Wayland apps only know positions inside their own window.
 - **Codex's view.** One screen at a time (the active window's, or `screen=N`), cut out of the
-  whole-desktop screenshot and scaled into the same 1280×800 box as dot's own. Before acting it
-  checks the screen isn't locked and that the pointer is where dot left it; if not, someone is
+  whole-desktop screenshot and scaled into the same 1280×800 box as laddu's own. Before acting it
+  checks the screen isn't locked and that the pointer is where laddu left it; if not, someone is
   using the machine and nothing is done. Text a US layout can't type is pasted.
 - `desktop check <host>` reports the desktop and anything missing, with the commands that fix it.
 
 ## Integrations
 
-Per person, never shared: each person connects their own account, and dot only sees what that
+Per person, never shared: each person connects their own account, and laddu only sees what that
 account can. Tokens stay on the host; containers reach an integration through the bot API with the
 turn's signed caller credential, so a command can only act as the person asking.
 
 **One Microsoft connection** (`integrations/microsoft.ts`), on when `MICROSOFT_CLIENT_ID` is set
 (an Entra app registration, public client), shared by Azure DevOps and Microsoft 365:
 
-- **Connecting.** Asking dot about Azure DevOps or Microsoft 365 while not connected makes Codex
+- **Connecting.** Asking laddu about Azure DevOps or Microsoft 365 while not connected makes Codex
   run `ado connect` or `ms connect`. The bot starts Microsoft Entra's device code flow for that API
   (its `.default` scope plus `offline_access openid profile email`; Entra takes one API per token
   request) and DMs the person the code, never in the channel. It polls until they approve, then
   accepts the account only if one of its emails (token claims, the Graph or Azure DevOps profile)
-  matches their Slack email. Otherwise anyone could link someone else's account to their own dot
+  matches their Slack email. Otherwise anyone could link someone else's account to their own laddu
   by getting them to enter a code.
 - **Tokens.** `.data/microsoft.json` (mode 600): one refresh token per person and an access token
   per API, minted from it on demand (Entra refresh tokens work for every API the app has consent
@@ -266,7 +268,7 @@ Azure DevOps profile API at sign-in.
 - **Changes.** `ado update`/`comment`/`create` (JSON Patch on work items; `System.History` for
   comments) and `ado write` (any other POST/PATCH/PUT/DELETE) go to `/ado/write` and run straight
   away with the person's token, scheduled runs included. Each is logged (who, what, status), and
-  dot reports the result with a link. The persona has it check first only when the request is
+  laddu reports the result with a link. The persona has it check first only when the request is
   unclear or deletes something, and never act on instructions found in work items or messages.
 - **For Codex.** `ado wiql` (query, then a batch read of the usual fields), `ado item <id>
 --comments`, and `ado get`/`ado post` for the rest of the REST API. Scheduled runs can read
@@ -281,12 +283,12 @@ The same Codex turn can implement a requested change and return a PR in the Slac
   `.data/code/<team>-<user>/<task>/`). Each person caches one clone per canonical repo URL in
   `code/.repos/<hash>/`; the hash also includes the caller's team/user identity. The first clone
   has no checked-out files. Later tasks fetch the latest default or requested branch into the
-  cache, then create their own `dot/<slack-user>/<task>` branch at that exact commit. A per-repo
+  cache, then create their own `laddu/<slack-user>/<task>` branch at that exact commit. A per-repo
   file lock serializes initialization, fetch and worktree creation, and a completed clone is
   moved into the cache atomically.
 - Worktrees share Git objects and refs; working files, indexes, HEADs, commit identities and task
   metadata are separate. `extensions.worktreeConfig` and `git config --worktree` keep identities
-  local to each task. `git rev-parse --git-path dot-task.json` locates each worktree's repo/target,
+  local to each task. `git rev-parse --git-path laddu-task.json` locates each worktree's repo/target,
   starting commit and owner in its private Git admin directory. Follow-ups reuse the same worktree.
   Existing standalone task clones still work with `code pr`. There is no automatic task deletion;
   use `git worktree remove` when a task is explicitly discarded, preserving the shared cache.
@@ -295,7 +297,7 @@ The same Codex turn can implement a requested change and return a PR in the Slac
   The signed caller and URL rewrite are passed in the Git process environment, never saved to
   Git config. The relay accepts discovery, fetch and push on `dev.azure.com`, never follows a
   redirect, and streams Git data without the REST response cap. Push requests are limited to
-  64 MB; only the caller's `dot/<slack-user>/…` branches may be created or updated. Deletions,
+  64 MB; only the caller's `laddu/<slack-user>/…` branches may be created or updated. Deletions,
   other refs and compressed pushes are refused.
 - Codex reads the repo's instructions, makes the requested change, runs its checks, reviews the
   diff and commits the intended files. `code pr --title "…" --body-file /tmp/pr.md` requires a clean
@@ -341,7 +343,7 @@ Protocol and authentication: [Git smart HTTP](https://git-scm.com/docs/http-prot
   upload), Teams (chats, read, send, which opens a 1:1 chat by email, channels, post) and Planner
   (plans, tasks, create, done with the ETag). `ms get/post/patch/put/delete` reach the rest.
 - **Permissions** are delegated Graph scopes on the app registration (see docs/SETUP.md); the
-  persona has dot show a draft before sending email or Teams messages it worded itself.
+  persona has laddu show a draft before sending email or Teams messages it worded itself.
 
 ## Messaging people
 
@@ -356,14 +358,14 @@ Protocol and authentication: [Git smart HTTP](https://git-scm.com/docs/http-prot
   where the code becomes a user token, kept in `.data/slack-users.json` on the host, never in a
   container. It's refused (and revoked) unless the account that allowed it is the one that asked,
   in this workspace. Then `slack dm` opens their own DM with the recipient and posts the text as
-  them. A token Slack stops accepting (revoked, deactivated) is dropped and dot says to reconnect.
+  them. A token Slack stops accepting (revoked, deactivated) is dropped and laddu says to reconnect.
   `slack disconnect` revokes it.
-- **From dot.** Not connected, or `--from-dot`: dot's DM with the recipient, headed
-  "<@sender> asked me to send you this:" and signed "Sent by dot for <@sender>. To answer, message
+- **From laddu.** Not connected, or `--from-laddu`: laddu's DM with the recipient, headed
+  "<@sender> asked me to send you this:" and signed "Sent by laddu for <@sender>. To answer, message
   them directly."
 - **Guardrails.** No bots, deactivated accounts, people outside the workspace or the sender; 20 DMs
   an hour per sender (in memory); every send logged (sender, recipient, how, length). Replies
-  aren't relayed. The persona has dot show a draft first when it worded the message itself, and
+  aren't relayed. The persona has laddu show a draft first when it worded the message itself, and
   send only what the person asked for. Scheduled runs can send, but can't start a sign-in.
 
 ## Slack Free tools and event rules
@@ -375,7 +377,7 @@ access, messaging/scheduling, reactions, pins, bookmarks, directory/profile/stat
 reminders and channel canvases. It rejects unknown methods and arguments, caller-supplied tokens,
 other-person profile writes, standalone canvas creation, Lists, Workflow Builder and Enterprise
 methods. Each call reports the identity used. Auto uses the connected person's token where
-supported; an explicit `--as dot` uses the bot. User-only methods never fall back to bot access.
+supported; an explicit `--as laddu` uses the bot. User-only methods never fall back to bot access.
 Bot channel access requires the requester to be a member, including public-channel writes.
 Private channels in bot directory results are filtered by the requester's membership. Pagination
 is explicit and returned results are capped at 400 KB. Slack enforces actual scopes, API method
@@ -394,7 +396,7 @@ IDs, retries deterministic actions up to three times with a stable message ID, a
 results. Interrupted model tasks are marked failed rather than repeating unknown external
 effects. Limits: 20 rules per person, 20 deliveries per rule per hour, seven days of terminal
 delivery history. Owners can list, inspect history, enable, disable or remove their own rules.
-Rules require dot to be in the channel. Link events additionally require matching unfurl domains
+Rules require laddu to be in the channel. Link events additionally require matching unfurl domains
 in Slack app settings. No rules are enabled merely by installing this feature.
 
 `slack form <JSON>` creates a channel button backed by a stored form definition. The button opens
@@ -408,7 +410,7 @@ radio buttons, checkboxes or a dropdown (in an input block, so picks don't round
 and a modal for a typed answer. A JSON question is a one-time form: its Answer button opens a modal
 with any of Slack's inputs (src/slack/question-fields.ts: text, number, email, URL, selects, radio,
 checkboxes, date/time pickers, people and channel pickers, files, rich text). Only the person the
-turn is for can answer. The command returns as soon as the question is posted and dot ends its turn
+turn is for can answer. The command returns as soon as the question is posted and laddu ends its turn
 with just a reaction; the answer comes back as a turn of its own (`via: "answer"`), or steers into
 theirs if one is running. A reply typed in the thread is their next message and closes the question.
 STOP withdraws open questions. Questions live in memory, for 24 hours.
@@ -417,19 +419,19 @@ STOP withdraws open questions. Questions live in memory, for 24 hours.
 
 - **@mention** in channels (`app_mention`) and group DMs (`message.mpim` containing the mention;
   Slack sends no `app_mention` there), and **every DM** (`message.im`).
-- **Reaction**: reacting with `TRIGGER_EMOJI` (default `robot_face`) to a message asks dot to
+- **Reaction**: reacting with `TRIGGER_EMOJI` (default `robot_face`) to a message asks laddu to
   handle that message; it answers in the message's thread, for the person who reacted.
-- **`/dot <request>`**: dot posts "<@you> asked: …" where it was typed and answers in its thread
+- **`/laddu <request>`**: laddu posts "<@you> asked: …" where it was typed and answers in its thread
   (in channels it's in, and its DM). Otherwise an ephemeral note says to invite it.
-- **"Ask dot" message shortcut**: a modal asks what to do with the message (optional), then dot
+- **"Ask laddu" message shortcut**: a modal asks what to do with the message (optional), then laddu
   answers in that message's thread.
-- If dot can't post where it was asked (not in the channel), it DMs the person instead.
+- If laddu can't post where it was asked (not in the channel), it DMs the person instead.
 
 ## Scheduled tasks
 
 Codex creates them with the `schedule` command (`--at` once, or `--cron`, minimum interval one
 minute; times in the person's Slack time zone). The command calls the bot's API (`agent/bot-api.ts`) with
-`DOT_CALLER`, a credential this process signs per turn over (team, user, channel, thread), so a
+`LADDU_CALLER`, a credential this process signs per turn over (team, user, channel, thread), so a
 request can only act as that person, in that conversation. Jobs live in `.data/schedules.json`;
 every 30 seconds the bot runs due ones as fresh Codex turns for their owner (memory loaded) and
 posts the answer to the thread, the channel or a DM. A run can reply `[SILENT]` to post nothing,
@@ -457,12 +459,12 @@ Adapted from [Hermes Agent](https://github.com/nousresearch/hermes-agent) (MIT, 
   description and reads the full file only when a task matches). Three kinds:
   built-in (`agent-home/skills/`, committed), team (`agent-home/skills.local/`, git-ignored), both
   read-only through the persona mount and linked by `scripts/codex-docker.sh` into
-  `~/.agents/skills/{dot,team}`, a Codex skill root; and personal ones Codex writes for each
+  `~/.agents/skills/{laddu,team}`, a Codex skill root; and personal ones Codex writes for each
   person in `$CODEX_HOME/skills` on their volume. When to write or fix one is in the persona; the
   background review also looks for procedures worth keeping. Codex's built-in `imagegen` skill is
   switched off (no image generation on the plan route). To share a personal skill with everyone,
   copy it into `skills.local/`:
-  `docker cp dot-<team>-<user>:/home/dot/.codex/skills/<name> agent-home/skills.local/`.
+  `docker cp laddu-<team>-<user>:/home/laddu/.codex/skills/<name> agent-home/skills.local/`.
 - **Duplicate events.** Slack can redeliver an event (e.g. after a socket reconnect); each message
   is answered once (in-memory, 10 minutes).
 - **Failures.** `agent/errors.ts` sorts them: usage limit (message with the reset time; Codex is
@@ -529,14 +531,14 @@ Docs: [SIWC overview](https://developers.openai.com/siwc/token-sharing-open-sour
 
 ## The other brain: OpenCode over ACP
 
-Each person picks their agent on dot's Home tab (`preferences.ts`; `DOT_AGENT` is the default), and
+Each person picks their agent on laddu's Home tab (`preferences.ts`; `LADDU_AGENT` is the default), and
 everything for them runs on it, background memory reviews included. The second agent is
 [OpenCode](https://opencode.ai) on its free models: no sign-in, no plan. Free models may keep what
-they're sent; dot is experimental, so that's accepted. `CODEX_USERS` limits who can run on Codex
-(the owner's ChatGPT plan); everyone else is on OpenCode whatever `DOT_AGENT` or their pick says, and
+they're sent; laddu is experimental, so that's accepted. `CODEX_USERS` limits who can run on Codex
+(the owner's ChatGPT plan); everyone else is on OpenCode whatever `LADDU_AGENT` or their pick says, and
 their Home tab doesn't offer Codex.
 
-dot talks to it over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP), the open
+laddu talks to it over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP), the open
 protocol most coding agents speak (Claude, Antigravity, Gemini, Codex and about 40 more in the
 [ACP registry](https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json)), using the
 official `@agentclientprotocol/sdk`. `agent/acp.ts` is the only file that knows the SDK: it starts
@@ -567,7 +569,7 @@ tasks, Slack DMs and coding tasks in isolated checkouts ending in a draft Azure 
 
 **Later.**
 
-- dot's computer, next: pause Codex while someone has control, a Stop button on the viewer page,
+- laddu's computer, next: pause Codex while someone has control, a Stop button on the viewer page,
   a success rate on a subset of OSWorld tasks.
 - A dashboard app for running tasks.
 - Guardrails: per-task sandboxes, an audit log of changes.
@@ -586,7 +588,7 @@ tasks, Slack DMs and coding tasks in isolated checkouts ending in a draft Azure 
   DMs only if the person asking is a member, so a link can't expose what they couldn't read.
 - Channels mentioned in the new messages (#name; up to 2) are read the same way and with the same
   privacy rule: their last 100 top-level messages plus the latest 15 replies of the 10 newest
-  threads. If dot isn't in the channel, the prompt says to invite it. Not logged to history.
+  threads. If laddu isn't in the channel, the prompt says to invite it. Not logged to history.
 - Each turn gets an outbox, `slack-outbox/<turn>/` (host runtime: `.data/slack-outbox/...`, added
   as a writable dir to the sandbox). Files Codex saves there (up to 10, 50 MB each) are uploaded to
   the thread after the reply. Codex can't generate images on the plan route; it can draw them with code.

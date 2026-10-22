@@ -10,7 +10,7 @@ type Run = {
 }
 type Session = { runs: Set<Run>; updates: Promise<void> }
 
-/** Slack has one agent status per thread, even when several people ask dot at once. */
+/** Slack has one agent status per thread, even when several people ask laddu at once. */
 export class AgentSessions {
 	private sessions = new Map<string, Session>()
 

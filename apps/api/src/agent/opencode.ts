@@ -1,9 +1,9 @@
 /**
- * OpenCode (https://opencode.ai) as dot's agent, on its free models: no sign-in, no plan. It runs
+ * OpenCode (https://opencode.ai) as laddu's agent, on its free models: no sign-in, no plan. It runs
  * as an ACP agent inside the person's container (scripts/opencode-docker.sh, acp.ts), with the
  * same persona, commands, skills and computer as Codex. Docker runtime only.
  *
- * Free models may log what they're sent; dot is experimental, so that's accepted for now.
+ * Free models may log what they're sent; laddu is experimental, so that's accepted for now.
  */
 import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk"
 import { runAcpTurn } from "./acp"
@@ -33,7 +33,7 @@ import {
 	type TurnResult,
 } from "./turn"
 
-/** OpenCode's own config for dot's runs; the container is the boundary, so everything is allowed. */
+/** OpenCode's own config for laddu's runs; the container is the boundary, so everything is allowed. */
 const CONFIG = JSON.stringify({
 	$schema: "https://opencode.ai/config.json",
 	permission: { "*": "allow" },
@@ -185,7 +185,7 @@ export async function runOpenCodeTurn(
 		{
 			command: [OPENCODE_DOCKER_WRAPPER],
 			env: childEnv({
-				DOT_CONTAINER: container,
+				LADDU_CONTAINER: container,
 				OPENCODE_CONFIG_CONTENT: CONFIG,
 				...turnEnv(turnId, user, options.slack),
 			}),

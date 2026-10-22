@@ -59,7 +59,7 @@ export async function prepareCodexHome(
 	const skills = `${paths.codexHome}/skills`
 	await Bun.$`mkdir -p ${skills}`.quiet()
 	for (const [link, dir] of [
-		["dot", `${workdir}/skills`],
+		["laddu", `${workdir}/skills`],
 		["team", `${localDir}/skills.local`],
 	] as const) {
 		const stat = await Bun.file(dir)
@@ -103,7 +103,7 @@ export function listCodexModels(): Promise<ModelOption[]> {
 			await server.request("initialize", {
 				clientInfo: {
 					name: "codex_sdk_ts",
-					title: "dot",
+					title: "laddu",
 					version: "1",
 				},
 				capabilities: null,
@@ -130,7 +130,7 @@ export function listCodexModels(): Promise<ModelOption[]> {
 							description: string
 						}[]) ?? []
 					)
-						// "ultra" hands work to sub-agents, which dot switches off (writeModelCatalog).
+						// "ultra" hands work to sub-agents, which laddu switches off (writeModelCatalog).
 						.filter(effort => effort.reasoningEffort !== "ultra")
 						.map(effort => ({
 							id: effort.reasoningEffort,
@@ -205,7 +205,7 @@ async function createCodex(
 			await Bun.file(`${paths.codexHome}/AGENTS.md`)
 				.delete()
 				.catch(() => {})
-		await Bun.$`mkdir -p ${outbox} ${toolEnv.DOT_MEMORY_DIR} ${toolEnv.DOT_HISTORY_DIR} ${toolEnv.DOT_CODE_DIR}`.quiet()
+		await Bun.$`mkdir -p ${outbox} ${toolEnv.LADDU_MEMORY_DIR} ${toolEnv.LADDU_HISTORY_DIR} ${toolEnv.LADDU_CODE_DIR}`.quiet()
 		const codex = hostCodex()
 		return {
 			command: [codex.executablePath],
@@ -224,9 +224,9 @@ async function createCodex(
 					network_access: config.network,
 					writable_roots: [
 						outbox,
-						toolEnv.DOT_MEMORY_DIR,
-						toolEnv.DOT_HISTORY_DIR,
-						toolEnv.DOT_CODE_DIR,
+						toolEnv.LADDU_MEMORY_DIR,
+						toolEnv.LADDU_HISTORY_DIR,
+						toolEnv.LADDU_CODE_DIR,
 					],
 				},
 			},
@@ -260,8 +260,8 @@ async function createCodex(
 		...workspace,
 		command: [CODEX_DOCKER_WRAPPER],
 		env: childEnv({
-			DOT_CONTAINER: container,
-			DOT_PROXY_KEY: proxy.key,
+			LADDU_CONTAINER: container,
+			LADDU_PROXY_KEY: proxy.key,
 			...turnEnv,
 		}),
 		overrides: {
@@ -341,7 +341,7 @@ export async function runCodexTurn(options: TurnOptions): Promise<TurnResult> {
 	options.signal?.addEventListener("abort", onAbort, { once: true })
 	try {
 		await server.request("initialize", {
-			clientInfo: { name: "codex_sdk_ts", title: "dot", version: "1" },
+			clientInfo: { name: "codex_sdk_ts", title: "laddu", version: "1" },
 			capabilities: null,
 		})
 		server.notify("initialized")

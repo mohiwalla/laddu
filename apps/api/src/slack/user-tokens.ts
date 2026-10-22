@@ -1,7 +1,7 @@
 /**
  * Each person's own Slack sign-in for Free tools and sending DMs as them. Slack's OAuth flow,
- * user scopes only: dot DMs a link, they allow it on slack.com, and Slack sends them back to
- * /slack/oauth on dot's web address (the gateway), where the code becomes a user token kept here,
+ * user scopes only: laddu DMs a link, they allow it on slack.com, and Slack sends them back to
+ * /slack/oauth on laddu's web address (the gateway), where the code becomes a user token kept here,
  * on the host (never in a container). Accepted only when the account that allowed it is the person
  * who asked, in this workspace.
  */
@@ -14,7 +14,7 @@ type WebClient = App["client"]
 export type Settings = NonNullable<BotConfig["slackSignIn"]>
 type Person = { teamId: string; userId: string }
 
-/** Only scopes used by dot's Slack Free tools. Existing connections must consent again. */
+/** Only scopes used by laddu's Slack Free tools. Existing connections must consent again. */
 const USER_SCOPES = [
 	"chat:write",
 	"im:write",
@@ -91,13 +91,13 @@ export async function status(person: Person): Promise<string> {
 	const connection = (await load())[key(person)]
 	return connection
 		? `Connected since ${connection.connectedAt.slice(0, 10)}: DMs go out as them. Granted scopes: ${connection.scopes.join(", ")}. Run slack connect to grant the expanded Slack Free tools.`
-		: "Not connected: DMs can only come from dot (`slack dm --from-dot`). `slack connect` sends them a link to connect."
+		: "Not connected: DMs can only come from laddu (`slack dm --from-laddu`). `slack connect` sends them a link to connect."
 }
 
 /** Sign-in links waiting to be used, by their `state`. One per person; a newer one replaces it. */
 const pending = new Map<string, { person: Person; expires: number }>()
 
-/** DMs them a link to allow dot to post as them. Returns what to tell Codex. */
+/** DMs them a link to allow laddu to post as them. Returns what to tell Codex. */
 export async function connect(
 	settings: Settings,
 	client: WebClient,
@@ -122,9 +122,9 @@ export async function connect(
 	})}`
 	await client.chat.postMessage({
 		channel: person.userId,
-		text: `To use Slack tools through dot, <${link}|connect your Slack account> and allow it. This grants access to search and read conversations you can access, send messages, manage channels and files, and update your status, reminders and channel canvases when you ask. The link works for ${LINK_MINUTES} minutes; if you didn't ask for this, ignore it.`,
+		text: `To use Slack tools through laddu, <${link}|connect your Slack account> and allow it. This grants access to search and read conversations you can access, send messages, manage channels and files, and update your status, reminders and channel canvases when you ask. The link works for ${LINK_MINUTES} minutes; if you didn't ask for this, ignore it.`,
 	})
-	return "Sent them a link in a DM with dot to connect their Slack account. Once they allow it, dot confirms in that DM; then ask again."
+	return "Sent them a link in a DM with laddu to connect their Slack account. Once they allow it, laddu confirms in that DM; then ask again."
 }
 
 export async function disconnect(
@@ -140,7 +140,7 @@ export async function disconnect(
 
 const page = (status: number, text: string) =>
 	new Response(
-		`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>dot</title><body style="font:16px system-ui;margin:3em auto;max-width:32em;padding:0 1em">${text}</body>`,
+		`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>laddu</title><body style="font:16px system-ui;margin:3em auto;max-width:32em;padding:0 1em">${text}</body>`,
 		{ status, headers: { "content-type": "text/html; charset=utf-8" } },
 	)
 
@@ -157,7 +157,7 @@ export async function oauthCallback(
 	if (!waiting || waiting.expires < Date.now())
 		return page(
 			400,
-			"This link has expired or was already used. Ask dot to connect Slack again.",
+			"This link has expired or was already used. Ask laddu to connect Slack again.",
 		)
 	const { person } = waiting
 	const code = url.searchParams.get("code")
@@ -183,14 +183,14 @@ export async function oauthCallback(
 		console.warn("[slack sign-in] failed:", result.error)
 		return page(
 			502,
-			`Slack didn't finish the sign-in (${result.error ?? "no token"}). Ask dot to connect again.`,
+			`Slack didn't finish the sign-in (${result.error ?? "no token"}). Ask laddu to connect again.`,
 		)
 	}
 	if (user.id !== person.userId || result.team?.id !== person.teamId) {
 		await client.auth.revoke({ token: user.access_token }).catch(() => {})
 		return page(
 			403,
-			"You allowed it from a different Slack account than the one that asked dot, so it isn't connected.",
+			"You allowed it from a different Slack account than the one that asked laddu, so it isn't connected.",
 		)
 	}
 	;(await load())[key(person)] = {
@@ -208,6 +208,6 @@ export async function oauthCallback(
 		.catch(() => {})
 	return page(
 		200,
-		"Connected. dot can now send Slack messages as you when you ask it to. You can close this tab.",
+		"Connected. laddu can now send Slack messages as you when you ask it to. You can close this tab.",
 	)
 }

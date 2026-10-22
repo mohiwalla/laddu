@@ -1,12 +1,12 @@
 /**
- * dot's computer, from the bot's side. The desktop itself (display, XFCE, the tools Codex drives it
+ * laddu's computer, from the bot's side. The desktop itself (display, XFCE, the tools Codex drives it
  * with) is runtime/desktop, in each person's container. This file:
  *
  * - signs links that open a person's desktop in their browser (one link, sent only to them);
  * - runs the gateway those links point to: it serves KasmVNC's web viewer from that person's
  *   container, logged in on this side (the login never reaches the browser). The page is
  *   view-only until the person takes control by clicking on the screen, and
- *   dot's actions wait until they return it (VIEWER_CONTROL, runtime/desktop `control`).
+ *   laddu's actions wait until they return it (VIEWER_CONTROL, runtime/desktop `control`).
  *   Nothing in a container is published.
  * - stops desktops nobody has used or watched for a while (files and browser logins stay).
  */
@@ -29,100 +29,100 @@ type DesktopMode = "watch" | "drive"
 type Owner = { teamId: string; userId: string }
 
 const LINK_HOURS = 12
-const COOKIE = "dot_desktop"
+const COOKIE = "laddu_desktop"
 
 /**
  * Changes to KasmVNC's viewer page (GPL/MPL; its files are left as they are, the page is restyled
  * as it's served):
  * - Size. The desktop fills the window, at the window's own size: the viewer asks the desktop to
- *   match it (VIEWER_CONTROL), and runtime/desktop keeps dot's coordinates right. Nothing else is
+ *   match it (VIEWER_CONTROL), and runtime/desktop keeps laddu's coordinates right. Nothing else is
  *   drawn on it.
  * - Branding. Its title, tab icon, loading screen, splash image, side toolbar, banners and toasts
- *   are replaced or hidden: people are looking at dot's computer, not at a VNC product. When the
+ *   are replaced or hidden: people are looking at laddu's computer, not at a VNC product. When the
  *   connection ends, the page says so and offers to reconnect (VIEWER_CONTROL).
  * - Settings (VIEWER_SETTINGS) and taking control (VIEWER_CONTROL).
  */
 /**
  * The page shown instead of the desktop when it can't be (these pages, and the viewer's own when
- * the connection ends): dot, then what happened and what to do, like dot's Home tab banner, on
+ * the connection ends): laddu, then what happened and what to do, like laddu's Home tab banner, on
  * the banner's flat #282828.
  */
 const NOTE_STYLE = [
-	".dot_screen{position:fixed;inset:0;display:grid;place-items:center;padding:32px;background:#282828;color:#a3a3a0;font:16px/1.5 Inter,system-ui,sans-serif;letter-spacing:normal;-webkit-font-smoothing:antialiased}",
-	".dot_note{display:flex;align-items:center;gap:36px;max-width:720px}",
-	".dot_note img{flex:none;width:152px;height:auto}",
-	".dot_note h1{margin:0 0 8px;color:#f2f2f0;font-size:30px;font-weight:600;line-height:1.15;letter-spacing:-.02em}",
-	".dot_note p{margin:0;max-width:30em}",
-	".dot_button{display:inline-block;margin-top:24px;padding:10px 18px;border:0;border-radius:8px;background:#f2f2f0;color:#1f1f1f;font:600 15px/1.2 Inter,system-ui,sans-serif;text-decoration:none;cursor:pointer}",
-	".dot_button:hover{background:#fff}",
-	".dot_button:focus-visible{outline:2px solid #f2f2f0;outline-offset:3px}",
-	".dot_note details{margin-top:20px;color:#76766f;font-size:14px}",
-	".dot_note summary{width:max-content;cursor:pointer}",
-	".dot_note summary:hover{color:#a3a3a0}",
-	".dot_note details p{margin-top:6px;color:#a3a3a0;overflow-wrap:anywhere;white-space:pre-line}",
-	"@media (max-width:560px){.dot_note{flex-direction:column;align-items:flex-start;gap:20px}.dot_note img{width:104px}.dot_note h1{font-size:25px}}",
+	".laddu_screen{position:fixed;inset:0;display:grid;place-items:center;padding:32px;background:#282828;color:#a3a3a0;font:16px/1.5 Inter,system-ui,sans-serif;letter-spacing:normal;-webkit-font-smoothing:antialiased}",
+	".laddu_note{display:flex;align-items:center;gap:36px;max-width:720px}",
+	".laddu_note img{flex:none;width:152px;height:auto}",
+	".laddu_note h1{margin:0 0 8px;color:#f2f2f0;font-size:30px;font-weight:600;line-height:1.15;letter-spacing:-.02em}",
+	".laddu_note p{margin:0;max-width:30em}",
+	".laddu_button{display:inline-block;margin-top:24px;padding:10px 18px;border:0;border-radius:8px;background:#f2f2f0;color:#1f1f1f;font:600 15px/1.2 Inter,system-ui,sans-serif;text-decoration:none;cursor:pointer}",
+	".laddu_button:hover{background:#fff}",
+	".laddu_button:focus-visible{outline:2px solid #f2f2f0;outline-offset:3px}",
+	".laddu_note details{margin-top:20px;color:#76766f;font-size:14px}",
+	".laddu_note summary{width:max-content;cursor:pointer}",
+	".laddu_note summary:hover{color:#a3a3a0}",
+	".laddu_note details p{margin-top:6px;color:#a3a3a0;overflow-wrap:anywhere;white-space:pre-line}",
+	"@media (max-width:560px){.laddu_note{flex-direction:column;align-items:flex-start;gap:20px}.laddu_note img{width:104px}.laddu_note h1{font-size:25px}}",
 ].join("")
 const VIEWER_STYLE = [
 	NOTE_STYLE,
-	// The desktop: the whole window, on dot's charcoal where its shape doesn't fill it.
+	// The desktop: the whole window, on laddu's charcoal where its shape doesn't fill it.
 	"html,body{background:#282828!important;font-family:Inter,system-ui,sans-serif}",
 	"#noVNC_container{position:fixed;inset:0;width:auto;height:auto;margin:0;padding:0;background:#282828!important;overflow:hidden!important}",
-	"#noVNC_container>div:not([id^=dot_]){background:transparent!important}",
+	"#noVNC_container>div:not([id^=laddu_]){background:transparent!important}",
 	// The person's own cursor, always: the desktop has none of its own (runtime/desktop), and the
-	// viewer would otherwise hide theirs over the screen or draw a stand-in that follows it. dot's
-	// is drawn where dot's pointer really is (#dot_cursor). Nothing they do reaches the desktop
+	// viewer would otherwise hide theirs over the screen or draw a stand-in that follows it. laddu's
+	// is drawn where laddu's pointer really is (#laddu_cursor). Nothing they do reaches the desktop
 	// until they take control.
 	"#noVNC_container canvas{cursor:default!important}",
 	"canvas[style*='65535']{display:none!important}",
-	// dot's cursor: Codex's arrow, moved by VIEWER_CONTROL (springs, not transitions), with a ripple
+	// laddu's cursor: Codex's arrow, moved by VIEWER_CONTROL (springs, not transitions), with a ripple
 	// on each click. Hidden while the person has control, and whenever there's no desktop to draw it on.
-	"#dot_cursor{position:absolute;left:0;top:0;z-index:3;pointer-events:none;opacity:0;transition:opacity .25s ease;will-change:transform}",
-	// Turned and squashed about the tip, which is #dot_cursor's corner: the tip stays on dot's point.
-	".dot_body{transform-origin:0 0;will-change:transform}",
-	"#dot_cursor.appear .dot_body{animation:dot_appear .35s cubic-bezier(.2,.8,.3,1)}",
-	"@keyframes dot_appear{from{scale:.4;filter:blur(5px)}}",
-	"#dot_cursor.seen{opacity:1}",
-	":root.dot_in_control #dot_cursor,:root:not(.noVNC_connected) #dot_cursor{opacity:0!important}",
-	"#dot_cursor svg{display:block;margin:-4.15px 0 0 -4.15px;filter:drop-shadow(0 2px 6px rgba(15,40,90,.35));transition:transform .12s ease}",
-	"#dot_cursor.press svg{transform:scale(.8)}",
+	"#laddu_cursor{position:absolute;left:0;top:0;z-index:3;pointer-events:none;opacity:0;transition:opacity .25s ease;will-change:transform}",
+	// Turned and squashed about the tip, which is #laddu_cursor's corner: the tip stays on laddu's point.
+	".laddu_body{transform-origin:0 0;will-change:transform}",
+	"#laddu_cursor.appear .laddu_body{animation:laddu_appear .35s cubic-bezier(.2,.8,.3,1)}",
+	"@keyframes laddu_appear{from{scale:.4;filter:blur(5px)}}",
+	"#laddu_cursor.seen{opacity:1}",
+	":root.laddu_in_control #laddu_cursor,:root:not(.noVNC_connected) #laddu_cursor{opacity:0!important}",
+	"#laddu_cursor svg{display:block;margin:-4.15px 0 0 -4.15px;filter:drop-shadow(0 2px 6px rgba(15,40,90,.35));transition:transform .12s ease}",
+	"#laddu_cursor.press svg{transform:scale(.8)}",
 	// When it first shows, a wiggle about its middle (VIEWER_CONTROL), so it's easy to find.
-	"#dot_cursor svg{transform-origin:50% 50%}",
-	"#dot_cursor.wiggle svg{animation:dot_wiggle .6s ease-in-out}",
-	"@keyframes dot_wiggle{0%,100%{rotate:0deg}30%{rotate:-14deg}70%{rotate:14deg}}",
-	"#dot_cursor i{position:absolute;left:-15px;top:-15px;width:30px;height:30px;border-radius:50%;border:2px solid rgba(255,255,255,.9);animation:dot_ripple .6s ease-out forwards}",
-	"@keyframes dot_ripple{from{transform:scale(.25);opacity:1}to{transform:scale(1.5);opacity:0}}",
-	"@media (prefers-reduced-motion:reduce){#dot_cursor i,#dot_cursor.wiggle svg,#dot_cursor.appear .dot_body{animation:none}}",
+	"#laddu_cursor svg{transform-origin:50% 50%}",
+	"#laddu_cursor.wiggle svg{animation:laddu_wiggle .6s ease-in-out}",
+	"@keyframes laddu_wiggle{0%,100%{rotate:0deg}30%{rotate:-14deg}70%{rotate:14deg}}",
+	"#laddu_cursor i{position:absolute;left:-15px;top:-15px;width:30px;height:30px;border-radius:50%;border:2px solid rgba(255,255,255,.9);animation:laddu_ripple .6s ease-out forwards}",
+	"@keyframes laddu_ripple{from{transform:scale(.25);opacity:1}to{transform:scale(1.5);opacity:0}}",
+	"@media (prefers-reduced-motion:reduce){#laddu_cursor i,#laddu_cursor.wiggle svg,#laddu_cursor.appear .laddu_body{animation:none}}",
 	// Disconnected: what happened, over everything.
-	"#dot_lost{display:none;z-index:20}",
-	":root.noVNC_disconnected #dot_lost,:root.dot_failed #dot_lost{display:grid}",
-	// The loading screen (KasmVNC's logo on white): dot bobbing on its charcoal instead, and our words.
+	"#laddu_lost{display:none;z-index:20}",
+	":root.noVNC_disconnected #laddu_lost,:root.laddu_failed #laddu_lost{display:grid}",
+	// The loading screen (KasmVNC's logo on white): laddu bobbing on its charcoal instead, and our words.
 	"#noVNC_transition{z-index:10;background:#282828!important;color:#a3a3a0!important;flex-direction:column;align-items:center;justify-content:center;gap:20px;font-family:Inter,system-ui,sans-serif}",
-	"#noVNC_transition::before{content:'';width:152px;height:152px;background:url(/_dot/dot-mark.webp?v=2) center/contain no-repeat;animation:dot_bob 1.6s ease-in-out infinite}",
+	"#noVNC_transition::before{content:'';width:152px;height:152px;background:url(/_laddu/laddu-mark.webp?v=2) center/contain no-repeat;animation:laddu_bob 1.6s ease-in-out infinite}",
 	"@media (prefers-reduced-motion:reduce){#noVNC_transition::before{animation:none}}",
-	"@keyframes dot_bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}",
+	"@keyframes laddu_bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}",
 	"#noVNC_transition .noVNC_spinner{display:none}",
 	"#noVNC_transition_text{margin:0!important;font-size:16px!important;letter-spacing:normal!important}",
 	".noVNC_loading #noVNC_transition_text,:root.noVNC_connecting #noVNC_transition_text{font-size:0!important;display:block!important;text-align:center}",
-	".noVNC_loading #noVNC_transition_text::after,:root.noVNC_connecting #noVNC_transition_text::after{content:'Starting dot’s computer…';font-size:16px}",
+	".noVNC_loading #noVNC_transition_text::after,:root.noVNC_connecting #noVNC_transition_text::after{content:'Starting laddu’s computer…';font-size:16px}",
 	// The side toolbar (keys, clipboard, settings, disconnect…) and its logo, the connect dialog,
 	// the toast naming the stream mode on connect ("JPEG/WEBP (Images)") and the status banner
 	// ("Connected (encrypted) to x11", errors): nobody needs them here. Errors go on the card.
 	"#noVNC_control_bar_anchor,#noVNC_control_bar_hint,.noVNC_logo,#noVNC_notification_overlay,#noVNC_connect_dlg,#noVNC_status{display:none!important}",
 ].join("")
-const VIEWER_ICON = "/_dot/dot-mark-64.png?v=2"
+const VIEWER_ICON = "/_laddu/laddu-mark-64.png?v=2"
 const VIEWER_FONT =
 	'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400..700&display=swap">'
 
-/** dot's picture for the viewer (tab icon, loading screen), served without a link: nothing private. */
+/** laddu's picture for the viewer (tab icon, loading screen), served without a link: nothing private. */
 const ASSETS = Bun.fileURLToPath(new URL("../../assets/", import.meta.url))
 const ASSET_NAMES = new Set([
-	"dot-mark.webp",
-	"dot-mark-64.png",
+	"laddu-mark.webp",
+	"laddu-mark-64.png",
 	"home-banner.png",
 ])
 
 /** The viewer retitles the tab once connected ("x11 - KasmVNC"); this puts it back. */
-const VIEWER_TITLE = `<script>new MutationObserver(() => { if (document.title !== "dot's computer") document.title = "dot's computer" }).observe(document.querySelector("title"), { childList: true, characterData: true, subtree: true })</script>`
+const VIEWER_TITLE = `<script>new MutationObserver(() => { if (document.title !== "laddu's computer") document.title = "laddu's computer" }).observe(document.querySelector("title"), { childList: true, characterData: true, subtree: true })</script>`
 
 /**
  * The viewer's settings, which it reads from the address (?view_only=…) or else from its saved
@@ -142,15 +142,15 @@ const VIEWER_TITLE = `<script>new MutationObserver(() => { if (document.title !=
  * for the page to show if the viewer never connects (VIEWER_CONTROL). Losing the connection is
  * shown by the page either way.
  */
-const VIEWER_ERRORS = `<script>window.dotErrors = []
+const VIEWER_ERRORS = `<script>window.ladduErrors = []
 for (const type of ["error", "unhandledrejection"])
 	addEventListener(type, event => {
 		event.stopImmediatePropagation()
 		event.preventDefault()
 		const error = type === "error" ? event.error ?? event.message : event.reason
 		const text = error instanceof Error ? error.name + ": " + error.message : String(error)
-		if (dotErrors.length < 5) dotErrors.push(text)
-		console.warn("[dot] viewer error:", error)
+		if (ladduErrors.length < 5) ladduErrors.push(text)
+		console.warn("[laddu] viewer error:", error)
 	})</script>`
 
 const VIEWER_SETTINGS = `<script>try { for (const [name, value] of Object.entries({ enable_threading: "false", view_only: "true", resize: "remote" })) localStorage.setItem(name, value) } catch {}
@@ -160,7 +160,7 @@ if (location.search) history.replaceState(null, "", location.pathname)</script>`
  * Taking control, on the same connection: the page starts view-only (the viewer's own setting, so
  * nothing it sends reaches the desktop) and turns that off the moment the person clicks on the
  * screen; clicking outside it (the bars around it), or leaving the tab or window, turns it back on.
- * While they have control the page tells the bot every 10 s (/_dot/control), and dot's actions
+ * While they have control the page tells the bot every 10 s (/_laddu/control), and laddu's actions
  * wait (runtime/desktop `control`).
  *
  * The viewer only asks the desktop to match its window when it isn't view-only, so while the
@@ -174,7 +174,7 @@ const VIEWER_CONTROL = `<script>addEventListener("DOMContentLoaded", () => {
 	const make = (id, html = "") => Object.assign(document.createElement("div"), { id, innerHTML: html })
 	let mine = false
 	let beat = 0
-	const tell = on => fetch("/_dot/control", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ on }), keepalive: true }).catch(() => {})
+	const tell = on => fetch("/_laddu/control", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ on }), keepalive: true }).catch(() => {})
 	const looking = on => {
 		viewOnly.checked = on
 		viewOnly.dispatchEvent(new Event("change"))
@@ -182,7 +182,7 @@ const VIEWER_CONTROL = `<script>addEventListener("DOMContentLoaded", () => {
 	const set = on => {
 		if (on === mine) return
 		mine = on
-		root.classList.toggle("dot_in_control", on)
+		root.classList.toggle("laddu_in_control", on)
 		looking(!on)
 		clearInterval(beat)
 		if (on) beat = setInterval(() => tell(true), 10000)
@@ -221,8 +221,8 @@ const VIEWER_CONTROL = `<script>addEventListener("DOMContentLoaded", () => {
 	// Disconnected: what happened, and Reconnect (a fresh page: if the link has run out meanwhile,
 	// that's the page saying so). The viewer's own error, if any, is its status banner's text.
 	// Never connected, with errors (VIEWER_ERRORS): the viewer broke, and the same, to reload.
-	const lost = make("dot_lost", '<div class="dot_note" role="alert"><img src="/_dot/dot-mark.webp?v=2" alt=""><div><h1></h1><p></p><button class="dot_button" type="button">Reconnect</button><details hidden><summary>Error details</summary><p></p></details></div></div>')
-	lost.className = "dot_screen"
+	const lost = make("laddu_lost", '<div class="laddu_note" role="alert"><img src="/_laddu/laddu-mark.webp?v=2" alt=""><div><h1></h1><p></p><button class="laddu_button" type="button">Reconnect</button><details hidden><summary>Error details</summary><p></p></details></div></div>')
+	lost.className = "laddu_screen"
 	document.body.append(lost)
 	lost.querySelector("button").addEventListener("click", () => location.reload())
 	const tellLost = (title, text, error, action = "Reconnect") => {
@@ -234,9 +234,9 @@ const VIEWER_CONTROL = `<script>addEventListener("DOMContentLoaded", () => {
 	}
 	let connected = false
 	setTimeout(() => {
-		if (connected || root.classList.contains("noVNC_disconnected") || !dotErrors.length) return
-		tellLost("Couldn’t open dot’s computer", "Something went wrong while loading it. Reload to try again.", dotErrors.join("\\n"), "Reload")
-		root.classList.add("dot_failed")
+		if (connected || root.classList.contains("noVNC_disconnected") || !ladduErrors.length) return
+		tellLost("Couldn’t open laddu’s computer", "Something went wrong while loading it. Reload to try again.", ladduErrors.join("\\n"), "Reload")
+		root.classList.add("laddu_failed")
 	}, 20000)
 	new MutationObserver(() => {
 		// Once connected, the desktop takes the window's size (once the viewer knows it can ask).
@@ -247,19 +247,19 @@ const VIEWER_CONTROL = `<script>addEventListener("DOMContentLoaded", () => {
 		const status = document.getElementById("noVNC_status")
 		const error = status.classList.contains("noVNC_status_error") ? status.textContent.trim() : ""
 		const [title, text] = !error
-			? ["Disconnected", "The connection to dot’s computer closed. Reconnect to keep watching."]
+			? ["Disconnected", "The connection to laddu’s computer closed. Reconnect to keep watching."]
 			: connected
-				? ["Connection lost", "dot’s computer stopped responding. Reconnect to pick up where you left off."]
-				: ["Couldn’t reach dot’s computer", "It may still be starting up. Wait a few seconds, then reconnect."]
+				? ["Connection lost", "laddu’s computer stopped responding. Reconnect to pick up where you left off."]
+				: ["Couldn’t reach laddu’s computer", "It may still be starting up. Wait a few seconds, then reconnect."]
 		tellLost(title, text, error)
 	}).observe(root, { attributes: true, attributeFilter: ["class"] })
 
-	// dot's cursor, from the desktop's events (/_dot/events): where its pointer is, and its clicks.
+	// laddu's cursor, from the desktop's events (/_laddu/events): where its pointer is, and its clicks.
 	// Codex's computer-use cursor: its arrow (the ChatGPT app's cursor icon), glassy pale blue in a white rim.
-	// #dot_cursor sits on the tip; .dot_body turns and squashes about the tip; the svg presses and wiggles.
-	const cursor = make("dot_cursor", '<div class="dot_body"><svg width="27" height="27" viewBox="0 0 24 24"><path d="M3.10042 6.29005C2.40168 4.30935 4.30916 2.40186 6.28987 3.1006L18.8719 7.54103C20.9168 8.263 21.1141 11.0361 19.2801 12.0693L19.0965 12.1641L14.535 14.293C14.4552 14.3302 14.3867 14.3878 14.3367 14.459L14.2928 14.5352L12.1639 19.0967C11.2172 21.1253 8.2861 20.9829 7.54084 18.8721L3.10042 6.29005Z" fill="#c4d8fb" fill-opacity=".72"/><path d="M3.10042 6.29005C2.40168 4.30935 4.30916 2.40186 6.28987 3.1006L18.8719 7.54103C20.9168 8.263 21.1141 11.0361 19.2801 12.0693L19.0965 12.1641L14.535 14.293C14.4552 14.3302 14.3867 14.3878 14.3367 14.459L14.2928 14.5352L12.1639 19.0967C11.2172 21.1253 8.2861 20.9829 7.54084 18.8721L3.10042 6.29005ZM5.62483 4.98732C5.22864 4.84749 4.8473 5.22882 4.98713 5.62501L9.42756 18.2061C9.57668 18.6281 10.162 18.6566 10.3514 18.251L12.4803 13.6895L12.5819 13.4942C12.8374 13.0525 13.2237 12.6977 13.6893 12.4805L18.2508 10.3516C18.6564 10.1622 18.6279 9.57686 18.2059 9.42775L5.62483 4.98732Z" fill="#fff" fill-rule="evenodd"/></svg></div>')
+	// #laddu_cursor sits on the tip; .laddu_body turns and squashes about the tip; the svg presses and wiggles.
+	const cursor = make("laddu_cursor", '<div class="laddu_body"><svg width="27" height="27" viewBox="0 0 24 24"><path d="M3.10042 6.29005C2.40168 4.30935 4.30916 2.40186 6.28987 3.1006L18.8719 7.54103C20.9168 8.263 21.1141 11.0361 19.2801 12.0693L19.0965 12.1641L14.535 14.293C14.4552 14.3302 14.3867 14.3878 14.3367 14.459L14.2928 14.5352L12.1639 19.0967C11.2172 21.1253 8.2861 20.9829 7.54084 18.8721L3.10042 6.29005Z" fill="#c4d8fb" fill-opacity=".72"/><path d="M3.10042 6.29005C2.40168 4.30935 4.30916 2.40186 6.28987 3.1006L18.8719 7.54103C20.9168 8.263 21.1141 11.0361 19.2801 12.0693L19.0965 12.1641L14.535 14.293C14.4552 14.3302 14.3867 14.3878 14.3367 14.459L14.2928 14.5352L12.1639 19.0967C11.2172 21.1253 8.2861 20.9829 7.54084 18.8721L3.10042 6.29005ZM5.62483 4.98732C5.22864 4.84749 4.8473 5.22882 4.98713 5.62501L9.42756 18.2061C9.57668 18.6281 10.162 18.6566 10.3514 18.251L12.4803 13.6895L12.5819 13.4942C12.8374 13.0525 13.2237 12.6977 13.6893 12.4805L18.2508 10.3516C18.6564 10.1622 18.6279 9.57686 18.2059 9.42775L5.62483 4.98732Z" fill="#fff" fill-rule="evenodd"/></svg></div>')
 	box.append(cursor)
-	const body = cursor.querySelector(".dot_body")
+	const body = cursor.querySelector(".laddu_body")
 	let at = null
 	const screen = () => [...box.querySelectorAll("canvas")].find(canvas => canvas.width > 100)
 	// Where the desktop's point is on the page, relative to the box.
@@ -292,8 +292,8 @@ const VIEWER_CONTROL = `<script>addEventListener("DOMContentLoaded", () => {
 		cursor.classList.add("wiggle")
 	}
 	cursor.addEventListener("animationend", event => {
-		if (event.animationName === "dot_wiggle") cursor.classList.remove("wiggle")
-		if (event.animationName === "dot_appear") cursor.classList.remove("appear")
+		if (event.animationName === "laddu_wiggle") cursor.classList.remove("wiggle")
+		if (event.animationName === "laddu_appear") cursor.classList.remove("appear")
 	})
 
 	// Moving, like Codex's cursor (its motion, rebuilt): no CSS transition, springs stepped each frame.
@@ -446,7 +446,7 @@ const VIEWER_CONTROL = `<script>addEventListener("DOMContentLoaded", () => {
 		if (motion || !resting(turn)) frame = requestAnimationFrame(tick)
 	}
 
-	const events = new EventSource("/_dot/events")
+	const events = new EventSource("/_laddu/events")
 	events.onmessage = message => {
 		const event = JSON.parse(message.data)
 		if (event.x !== undefined) {
@@ -475,7 +475,7 @@ const VIEWER_CONTROL = `<script>addEventListener("DOMContentLoaded", () => {
 
 function viewerPage(html: string): string {
 	return html
-		.replace(/<title>[^<]*<\/title>/, "<title>dot's computer</title>")
+		.replace(/<title>[^<]*<\/title>/, "<title>laddu's computer</title>")
 		.replace(/<link[^>]*kasm_logo[^>]*>/g, "")
 		.replace(
 			"</head>",
@@ -572,16 +572,16 @@ function tailnetOwner(
 // ---- where people find their link ---------------------------------------------------------
 
 /**
- * dot's Home tab in Slack (private to each person, slack/home.ts) is where the link lives: redrawn
- * with a fresh one every time they open it, and whenever dot uses the computer for them. Threads
- * only get a note the first time someone's dot uses its computer, so links don't pile up.
+ * laddu's Home tab in Slack (private to each person, slack/home.ts) is where the link lives: redrawn
+ * with a fresh one every time they open it, and whenever laddu uses the computer for them. Threads
+ * only get a note the first time someone's laddu uses its computer, so links don't pile up.
  */
 
 /** People who've had the note about their computer: `{ "team/user": ISO date }`. */
 const introducedFile = `${paths.dataDir}/desktop-introduced.json`
 
 /**
- * dot started using its computer for someone: their Home tab gets a fresh link, and the very
+ * laddu started using its computer for someone: their Home tab gets a fresh link, and the very
  * first time, the thread gets a note (only they see it) saying where to find it.
  */
 export async function computerInUse(
@@ -669,7 +669,7 @@ const lastViewed = new Map<string, number>()
 /**
  * The page reports when the person takes or returns control, and every 10 s while they have it;
  * runtime/desktop treats 30 s without word as returned, so a closed tab or a bot restart can't
- * leave dot waiting. dot's actions wait meanwhile.
+ * leave laddu waiting. laddu's actions wait meanwhile.
  */
 const tellControl = (container: string, on: boolean) =>
 	Bun.$`docker exec ${container} ${desktop()} control ${on ? "on" : "off"}`
@@ -677,7 +677,7 @@ const tellControl = (container: string, on: boolean) =>
 		.nothrow()
 
 /**
- * dot's pointer and actions for the page's dot cursor (VIEWER_CONTROL), as server-sent events:
+ * laddu's pointer and actions for the page's laddu cursor (VIEWER_CONTROL), as server-sent events:
  * one `desktop events` process per container, shared by everyone watching it, and stopped when
  * the last page goes.
  */
@@ -772,7 +772,7 @@ type Socket = {
 	queue: (string | ArrayBuffer | Uint8Array)[]
 }
 
-/** A page instead of the desktop: dot, what happened, and what to do (`action`, a link). */
+/** A page instead of the desktop: laddu, what happened, and what to do (`action`, a link). */
 const page = (
 	status: number,
 	title: string,
@@ -780,7 +780,7 @@ const page = (
 	action?: { href: string; label: string },
 ) =>
 	new Response(
-		`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>dot's computer</title><link rel="icon" href="${VIEWER_ICON}">${VIEWER_FONT}<style>body{margin:0}${NOTE_STYLE}</style><main class="dot_screen"><div class="dot_note"><img src="/_dot/dot-mark.webp?v=2" alt=""><div><h1>${title}</h1><p>${text}</p>${action ? `<a class="dot_button" href="${action.href}">${action.label}</a>` : ""}</div></div></main></html>`,
+		`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>laddu's computer</title><link rel="icon" href="${VIEWER_ICON}">${VIEWER_FONT}<style>body{margin:0}${NOTE_STYLE}</style><main class="laddu_screen"><div class="laddu_note"><img src="/_laddu/laddu-mark.webp?v=2" alt=""><div><h1>${title}</h1><p>${text}</p>${action ? `<a class="laddu_button" href="${action.href}">${action.label}</a>` : ""}</div></div></main></html>`,
 		{
 			status,
 			headers: {
@@ -798,8 +798,8 @@ function cookie(request: Request, name: string): string | undefined {
 }
 
 /**
- * dot's web address: the desktop viewer, and `slackOAuth` (Slack's redirect back after someone
- * connects their Slack account) at /slack/oauth. Started for either. `slackHome` opens dot's Home
+ * laddu's web address: the desktop viewer, and `slackOAuth` (Slack's redirect back after someone
+ * connects their Slack account) at /slack/oauth. Started for either. `slackHome` opens laddu's Home
  * tab in Slack, where people get a fresh link.
  */
 export function startDesktopGateway(
@@ -815,7 +815,7 @@ export function startDesktopGateway(
 		[publicUrl, tailnetUrl].flatMap(url => (url ? [new URL(url).origin] : [])),
 	)
 	const toSlack = slackHome
-		? { href: slackHome, label: "Open dot in Slack" }
+		? { href: slackHome, label: "Open laddu in Slack" }
 		: undefined
 
 	/** `tailnet`: the listener behind `tailscale serve`, where Tailscale says who's asking. */
@@ -831,7 +831,7 @@ export function startDesktopGateway(
 					return slackOAuth(request)
 				if (!config.desktop)
 					return new Response("not found", { status: 404 })
-				const asset = url.pathname.match(/^\/_dot\/([^/]+)$/)?.[1]
+				const asset = url.pathname.match(/^\/_laddu\/([^/]+)$/)?.[1]
 				if (asset && ASSET_NAMES.has(asset))
 					return new Response(Bun.file(`${ASSETS}${asset}`), {
 						headers: { "cache-control": "public, max-age=86400" },
@@ -843,7 +843,7 @@ export function startDesktopGateway(
 						return page(
 							403,
 							"This link has expired",
-							`Links last ${LINK_HOURS} hours. dot’s Home tab in Slack always has a fresh one.`,
+							`Links last ${LINK_HOURS} hours. laddu’s Home tab in Slack always has a fresh one.`,
 							toSlack,
 						)
 					// The viewer's requests (page, assets, its websocket) carry this instead of the link.
@@ -865,7 +865,7 @@ export function startDesktopGateway(
 					return page(
 						401,
 						"Open your computer from Slack",
-						"It opens from dot’s Home tab in Slack, where only you can see the link.",
+						"It opens from laddu’s Home tab in Slack, where only you can see the link.",
 						toSlack,
 					)
 
@@ -882,7 +882,7 @@ export function startDesktopGateway(
 					return new Response("wrong origin", { status: 403 })
 
 				if (
-					url.pathname === "/_dot/control" &&
+					url.pathname === "/_laddu/control" &&
 					request.method === "POST"
 				) {
 					const { on } = (await request.json().catch(() => ({}))) as {
@@ -896,7 +896,7 @@ export function startDesktopGateway(
 					return new Response(null, { status: 204 })
 				}
 
-				if (url.pathname === "/_dot/events") {
+				if (url.pathname === "/_laddu/events") {
 					const target = await upstream(config, grant).catch(
 						() => null,
 					)
@@ -971,7 +971,7 @@ export function startDesktopGateway(
 						console.warn("[desktop] viewer failed", error)
 						return page(
 							502,
-							"Couldn’t start dot’s computer",
+							"Couldn’t start laddu’s computer",
 							"It didn’t start in time. Wait a moment, then try again.",
 							{ href: "", label: "Try again" },
 						)
@@ -1030,7 +1030,7 @@ export function startDesktopGateway(
 		serve(port, false)
 		if (tailnetUrl) serve(tailnetPort, true)
 	} catch (error) {
-		// Most likely another bot process (another workspace) has the port: dot still works, but
+		// Most likely another bot process (another workspace) has the port: laddu still works, but
 		// its links won't open. Each workspace needs its own DESKTOP_VIEWER_PORT.
 		console.warn(
 			`[desktop] couldn't start the viewer gateway on ${host}:${port}; links won't open (set DESKTOP_VIEWER_PORT):`,

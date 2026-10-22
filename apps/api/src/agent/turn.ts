@@ -87,7 +87,7 @@ export const newTurnId = () =>
 	new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-").toLowerCase() +
 	`-${crypto.randomUUID().slice(0, 4)}`
 
-/** Env for dot's commands in this turn (`slack`, `schedule`…): who it's for and where. */
+/** Env for laddu's commands in this turn (`slack`, `schedule`…): who it's for and where. */
 export function turnEnv(
 	turnId: string,
 	user: TurnUser,
@@ -95,17 +95,17 @@ export function turnEnv(
 ): Record<string, string> {
 	const api = botApiUrl()
 	return {
-		DOT_TURN: turnId,
+		LADDU_TURN: turnId,
 		...(slack
 			? {
-					DOT_CALLER: callerCredential({
+					LADDU_CALLER: callerCredential({
 						...user,
 						channel: slack.channel,
 						threadTs: slack.threadTs,
 						scheduled: slack.scheduled ?? false,
 					}),
-					DOT_TIMEZONE: slack.timezone,
-					...(api ? { DOT_API: api } : {}),
+					LADDU_TIMEZONE: slack.timezone,
+					...(api ? { LADDU_API: api } : {}),
 				}
 			: {}),
 	}

@@ -1,8 +1,8 @@
 /**
- * Questions dot asks in a thread (`slack ask`): choices right in the message (one-click buttons,
+ * Questions laddu asks in a thread (`slack ask`): choices right in the message (one-click buttons,
  * radio buttons, checkboxes, or a dropdown for many), a typed answer in a modal, or a whole form
  * of fields in a modal (question-fields.ts). Only the person the turn is for can answer. The
- * command doesn't wait: dot ends its turn, and the answer comes back as a turn of its own (or goes
+ * command doesn't wait: laddu ends its turn, and the answer comes back as a turn of its own (or goes
  * into theirs, if one is running). A reply typed in the thread is just their next message, and
  * closes the question. Kept in memory: a restart drops open questions.
  */
@@ -71,7 +71,7 @@ function openBlocks(question: Question): types.KnownBlock[] {
 	}))
 	const typed = {
 		type: "button" as const,
-		action_id: "dot_ask_type",
+		action_id: "laddu_ask_type",
 		text: plain(choices.length ? "Something else…" : "Answer"),
 		...(choices.length ? {} : { style: "primary" as const }),
 		value: id,
@@ -80,7 +80,7 @@ function openBlocks(question: Question): types.KnownBlock[] {
 		? [
 				...choices.map((choice, index) => ({
 					type: "button" as const,
-					action_id: `dot_ask_choice_${index}`,
+					action_id: `laddu_ask_choice_${index}`,
 					text: plain(choice),
 					...(index === 0 ? { style: "primary" as const } : {}),
 					value: `${id}:${index}`,
@@ -92,7 +92,7 @@ function openBlocks(question: Question): types.KnownBlock[] {
 					? [
 							{
 								type: "button" as const,
-								action_id: "dot_ask_send",
+								action_id: "laddu_ask_send",
 								text: plain("Send"),
 								style: "primary" as const,
 								value: id,
@@ -106,12 +106,12 @@ function openBlocks(question: Question): types.KnownBlock[] {
 	const picker = question.multiple
 		? {
 				type: many ? "multi_static_select" : "checkboxes",
-				action_id: "dot_ask_pick",
+				action_id: "laddu_ask_pick",
 				options,
 			}
 		: {
 				type: many ? "static_select" : "radio_buttons",
-				action_id: "dot_ask_pick",
+				action_id: "laddu_ask_pick",
 				options,
 			}
 	return [
@@ -122,7 +122,7 @@ function openBlocks(question: Question): types.KnownBlock[] {
 						// An input block, not actions: ticking a box then stays in Slack (no round trip, no
 						// spinner); Send reads the state.
 						type: "input" as const,
-						block_id: "dot_ask_choices",
+						block_id: "laddu_ask_choices",
 						label: plain(
 							question.multiple ? "Pick any" : "Pick one",
 						),
@@ -166,7 +166,7 @@ async function close(client: WebClient, question: Question, outcome: string) {
 		)
 }
 
-/** Their answer: goes to dot as a turn (or into the one running for them there). */
+/** Their answer: goes to laddu as a turn (or into the one running for them there). */
 type Answered = (question: Asker & { ts: string }, request: string) => void
 let answered: Answered = () => {}
 
@@ -243,7 +243,7 @@ export async function ask(
 	const title =
 		typeof input.title === "string" && input.title.trim()
 			? input.title.trim()
-			: "Answer dot"
+			: "Answer laddu"
 	if (title.length > 24)
 		throw new QuestionError("The title is at most 24 characters.")
 	const key = sessionKey(asker.channel, asker.threadTs, asker.userId)
@@ -280,7 +280,7 @@ export async function ask(
 }
 
 /**
- * A message from them in the thread: their reply to whatever dot asked them there, so it closes
+ * A message from them in the thread: their reply to whatever laddu asked them there, so it closes
  * those questions and goes on as their next message. Whether any were open.
  */
 export function closeWithMessage(client: WebClient, key: string): boolean {
@@ -294,7 +294,7 @@ export function closeWithMessage(client: WebClient, key: string): boolean {
 	return open.length > 0
 }
 
-/** They stopped dot's work in this thread: its questions there are withdrawn. */
+/** They stopped laddu's work in this thread: its questions there are withdrawn. */
 export function withdrawQuestions(client: WebClient, key: string) {
 	for (const question of questions.values()) {
 		if (question.key !== key) continue
@@ -335,8 +335,8 @@ export function registerQuestions(app: App, onAnswer: Answered) {
 	}
 
 	// Questions posted before choices moved into an input block still send each pick.
-	app.action("dot_ask_pick", async ({ ack }) => ack())
-	app.action("dot_ask_send", async ({ ack, body, action, client }) => {
+	app.action("laddu_ask_pick", async ({ ack }) => ack())
+	app.action("laddu_ask_send", async ({ ack, body, action, client }) => {
 		await ack()
 		if (
 			body.type !== "block_actions" ||
@@ -351,7 +351,7 @@ export function registerQuestions(app: App, onAnswer: Answered) {
 			body.channel?.id,
 		)
 		if (!question) return
-		const picked = body.state?.values?.dot_ask_choices?.dot_ask_pick
+		const picked = body.state?.values?.laddu_ask_choices?.laddu_ask_pick
 		const indexes = (
 			question.multiple
 				? (picked?.selected_options ?? [])
@@ -378,7 +378,7 @@ export function registerQuestions(app: App, onAnswer: Answered) {
 		settle(client, question, answer.join(", "))
 	})
 	app.action(
-		/^dot_ask_choice_\d+$/,
+		/^laddu_ask_choice_\d+$/,
 		async ({ ack, body, action, client }) => {
 			await ack()
 			if (
@@ -399,7 +399,7 @@ export function registerQuestions(app: App, onAnswer: Answered) {
 				settle(client, question, choice)
 		},
 	)
-	app.action("dot_ask_type", async ({ ack, body, action, client }) => {
+	app.action("laddu_ask_type", async ({ ack, body, action, client }) => {
 		await ack()
 		if (
 			body.type !== "block_actions" ||
@@ -419,7 +419,7 @@ export function registerQuestions(app: App, onAnswer: Answered) {
 				trigger_id: body.trigger_id,
 				view: {
 					type: "modal",
-					callback_id: "dot_ask_submit",
+					callback_id: "laddu_ask_submit",
 					private_metadata: question.id,
 					title: plain(question.title),
 					submit: plain("Send"),
@@ -449,7 +449,7 @@ export function registerQuestions(app: App, onAnswer: Answered) {
 				console.warn("[ask] couldn't open the answer form", error),
 			)
 	})
-	app.view("dot_ask_submit", async ({ ack, body, view, client }) => {
+	app.view("laddu_ask_submit", async ({ ack, body, view, client }) => {
 		await ack()
 		const question = questions.get(view.private_metadata)
 		if (!question || question.userId !== body.user.id) return

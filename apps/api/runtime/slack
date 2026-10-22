@@ -2,17 +2,17 @@
 """
 Slack, for the person you're working for: find people in the workspace and DM them. Once they've
 connected their Slack account, a DM goes out as them, in their own DM with that person, exactly as
-if they typed it. Otherwise (or with --from-dot) it comes from dot, headed "<person> asked me to
+if they typed it. Otherwise (or with --from-laddu) it comes from laddu, headed "<person> asked me to
 send you this:".
 
   slack status | connect | disconnect      their Slack connection (connect DMs them a link)
   slack find "<name or email>"             people in the workspace: Slack ID, name, title, email
-  slack dm <@U123 | U123 | email> "text" [--from-dot]
+  slack dm <@U123 | U123 | email> "text" [--from-laddu]
   slack methods [method] | capabilities
-  slack api <method> '<JSON arguments>' [--as auto|user|dot]
+  slack api <method> '<JSON arguments>' [--as auto|user|laddu]
   slack search "in:general decision" [--files] [--page 1]
   slack channels | history <channel> | thread <channel> <ts>
-  slack send <channel> "text" [--thread <ts>] [--as auto|user|dot]
+  slack send <channel> "text" [--thread <ts>] [--as auto|user|laddu]
   slack upload <channel> <path> [--thread <ts>] | download <file ID> <path>
   slack automate welcome <channel> "Welcome <@{user}>!"
   slack automate add '<JSON rule>' | list | history | remove|enable|disable <id>
@@ -52,8 +52,8 @@ import urllib.error
 import urllib.request
 import urllib.parse
 
-API = os.environ.get("DOT_API")
-CALLER = os.environ.get("DOT_CALLER")
+API = os.environ.get("LADDU_API")
+CALLER = os.environ.get("LADDU_CALLER")
 
 
 def call(path, body=None, method="POST"):
@@ -63,7 +63,7 @@ def call(path, body=None, method="POST"):
         f"{API}{path}",
         method=method,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"x-dot-caller": CALLER, "content-type": "application/json"},
+        headers={"x-laddu-caller": CALLER, "content-type": "application/json"},
     )
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
@@ -81,7 +81,7 @@ def call(path, body=None, method="POST"):
 def ask(body):
     if not API or not CALLER:
         sys.exit("error: Slack isn't available here (no connection to the bot in this turn).")
-    headers = {"x-dot-caller": CALLER, "content-type": "application/json"}
+    headers = {"x-laddu-caller": CALLER, "content-type": "application/json"}
 
     def send(request):
         try:
@@ -123,7 +123,7 @@ def file_transfer(path, destination=None, upload=None):
         except OSError as error:
             sys.exit(f"error: {error}")
     request = urllib.request.Request(f"{API}{path}", method="PUT" if upload else "GET", data=data,
-                                     headers={"x-dot-caller": CALLER, "content-type": "application/octet-stream"})
+                                     headers={"x-laddu-caller": CALLER, "content-type": "application/octet-stream"})
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
             if destination:
@@ -154,14 +154,14 @@ def main():
     dm = commands.add_parser("dm")
     dm.add_argument("to")
     dm.add_argument("text")
-    dm.add_argument("--from-dot", action="store_true", help="send from dot instead of as them")
+    dm.add_argument("--from-laddu", action="store_true", help="send from laddu instead of as them")
     methods = commands.add_parser("methods")
     methods.add_argument("method", nargs="?")
     commands.add_parser("capabilities")
     api = commands.add_parser("api")
     api.add_argument("method")
     api.add_argument("arguments", nargs="?", default="{}")
-    api.add_argument("--as", dest="identity", choices=["auto", "user", "dot"], default="auto")
+    api.add_argument("--as", dest="identity", choices=["auto", "user", "laddu"], default="auto")
     search = commands.add_parser("search")
     search.add_argument("query")
     search.add_argument("--files", action="store_true")
@@ -181,7 +181,7 @@ def main():
     send.add_argument("channel")
     send.add_argument("text")
     send.add_argument("--thread")
-    send.add_argument("--as", dest="identity", choices=["auto", "user", "dot"], default="auto")
+    send.add_argument("--as", dest="identity", choices=["auto", "user", "laddu"], default="auto")
     upload = commands.add_parser("upload")
     upload.add_argument("channel")
     upload.add_argument("path")
@@ -219,7 +219,7 @@ def main():
     elif args.command == "find":
         call("/slack/find", {"query": args.query})
     elif args.command == "dm":
-        call("/slack/dm", {"to": args.to, "text": args.text, "fromDot": args.from_dot})
+        call("/slack/dm", {"to": args.to, "text": args.text, "fromLaddu": args.from_laddu})
     elif args.command in ("methods", "capabilities"):
         query = urllib.parse.urlencode({"method": args.method}) if args.command == "methods" and args.method else ""
         call(f"/slack/{args.command}?{query}", method="GET")

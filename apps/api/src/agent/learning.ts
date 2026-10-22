@@ -1,5 +1,5 @@
 /**
- * What dot keeps from each turn, adapted from Hermes Agent (MIT, Nous Research): the turn goes
+ * What laddu keeps from each turn, adapted from Hermes Agent (MIT, Nous Research): the turn goes
  * into the person's searchable history, and every few turns a background run on their agent
  * reviews the recent ones and updates their memory and personal skills, catching what the turns
  * themselves didn't save.

@@ -1,5 +1,5 @@
 /**
- * Each person's own settings, picked on dot's Home tab: the agent, its model, how hard it thinks,
+ * Each person's own settings, picked on laddu's Home tab: the agent, its model, how hard it thinks,
  * and fast mode. Unset ones fall back to the bot's (.env). A pick the model no longer supports is
  * ignored, so a catalog change never breaks a turn.
  */

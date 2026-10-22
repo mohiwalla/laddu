@@ -22,7 +22,7 @@ const caller = {
 const settings = {
 	clientId: "test-client",
 	clientSecret: "test-secret",
-	redirectUrl: "https://dot.example.com/slack/oauth",
+	redirectUrl: "https://laddu.example.com/slack/oauth",
 }
 const posts: Record<string, unknown>[] = []
 const opens: Record<string, unknown>[] = []
@@ -66,7 +66,7 @@ const client = {
 const { SlackAutomations } = await import("../slack/automations")
 const { SlackForms } = await import("../slack/forms")
 const slackFeatures = {
-	automations: new SlackAutomations(client, "U_DOT", {
+	automations: new SlackAutomations(client, "U_LADDU", {
 		file: `${dataDir}/rules.json`,
 	}),
 	forms: new SlackForms(client, `${dataDir}/forms.json`),
@@ -103,7 +103,7 @@ function dm(scheduled = false, text = "Please send a status update.") {
 		method: "POST",
 		headers: {
 			"content-type": "application/json",
-			"x-dot-caller": callerCredential({ ...caller, scheduled }),
+			"x-laddu-caller": callerCredential({ ...caller, scheduled }),
 		},
 		body: JSON.stringify({ to: "U00000002", text }),
 	})
@@ -119,7 +119,7 @@ test("unconnected DM exits cleanly and sends only the sender a sign-in link", as
 			"Please send a status update.",
 		],
 		{
-			env: { ...Bun.env, DOT_API: api.url, DOT_CALLER: credential },
+			env: { ...Bun.env, LADDU_API: api.url, LADDU_CALLER: credential },
 			stdout: "pipe",
 			stderr: "pipe",
 		},
@@ -206,7 +206,7 @@ test("expanded Slack CLI commands reach signed API tools and persisted rules", a
 				...args,
 			],
 			{
-				env: { ...Bun.env, DOT_API: api.url, DOT_CALLER: signed },
+				env: { ...Bun.env, LADDU_API: api.url, LADDU_CALLER: signed },
 				stdout: "pipe",
 				stderr: "pipe",
 			},
@@ -226,7 +226,7 @@ test("expanded Slack CLI commands reach signed API tools and persisted rules", a
 		"C00000001",
 		"Requested message",
 		"--as",
-		"dot",
+		"laddu",
 	])
 	expect(sent.exit, sent.err).toBe(0)
 	expect(slackCalls).toEqual([
@@ -399,9 +399,9 @@ test("coding tasks share cached repos, isolate worktrees and update PRs in both 
 	const ado = Bun.fileURLToPath(new URL("../../runtime/ado", import.meta.url))
 	const env = {
 		...Bun.env,
-		DOT_API: api.url,
-		DOT_CALLER: credential,
-		DOT_CODE_DIR: `${dataDir}/code`,
+		LADDU_API: api.url,
+		LADDU_CALLER: credential,
+		LADDU_CODE_DIR: `${dataDir}/code`,
 	}
 	async function command(args: string[], cwd?: string, extraEnv = env) {
 		const child = Bun.spawn(args, {
@@ -583,13 +583,13 @@ test("coding tasks share cached repos, isolate worktrees and update PRs in both 
 			GIT_CONFIG_KEY_0: `url.${api.url}/ado/git/test/Project/_git/Repo.insteadOf`,
 			GIT_CONFIG_VALUE_0: "https://dev.azure.com/test/Project/_git/Repo",
 			GIT_CONFIG_KEY_1: `http.${api.url}/ado/git/test/Project/_git/Repo.extraHeader`,
-			GIT_CONFIG_VALUE_1: `x-dot-caller: ${credential}`,
+			GIT_CONFIG_VALUE_1: `x-laddu-caller: ${credential}`,
 		}
 		const pushesBefore = upstreamPushes
 		for (const refspec of [
 			"HEAD:main",
 			`:refs/heads/${branch}`,
-			"HEAD:refs/heads/dot/another-user/task",
+			"HEAD:refs/heads/laddu/another-user/task",
 		])
 			expect(
 				(
@@ -611,11 +611,11 @@ test("coding tasks share cached repos, isolate worktrees and update PRs in both 
 			),
 		).toBe(true)
 		expect(
-			upstreamHeaders.every(headers => !headers.has("x-dot-caller")),
+			upstreamHeaders.every(headers => !headers.has("x-laddu-caller")),
 		).toBe(true)
 		const redirects = await fetch(
 			`${api.url}/ado/git/test/Project/_git/Redirect/info/refs?service=git-upload-pack`,
-			{ headers: { "x-dot-caller": credential } },
+			{ headers: { "x-laddu-caller": credential } },
 		)
 		expect(redirects.status).toBe(502)
 		const unsigned = await fetch(
@@ -628,7 +628,7 @@ test("coding tasks share cached repos, isolate worktrees and update PRs in both 
 				{
 					method: "POST",
 					headers: {
-						"x-dot-caller": credential,
+						"x-laddu-caller": credential,
 						"content-type":
 							"application/x-git-receive-pack-request",
 					},
@@ -705,7 +705,7 @@ test("coding tasks share cached repos, isolate worktrees and update PRs in both 
 			undefined,
 			{
 				...env,
-				DOT_CALLER: callerCredential({
+				LADDU_CALLER: callerCredential({
 					...caller,
 					userId: "U00000099",
 				}),
@@ -726,7 +726,7 @@ test("coding tasks share cached repos, isolate worktrees and update PRs in both 
 		).not.toBe(commonDir)
 		const legacy = `${dataDir}/legacy`
 		await checked(["git", "clone", "--branch", "main", bare, legacy])
-		const legacyBranch = `dot/${caller.userId.toLowerCase()}/legacy`
+		const legacyBranch = `laddu/${caller.userId.toLowerCase()}/legacy`
 		await checked(["git", "checkout", "-b", legacyBranch], legacy)
 		const taskFile = await checked(
 			[
@@ -734,7 +734,7 @@ test("coding tasks share cached repos, isolate worktrees and update PRs in both 
 				"rev-parse",
 				"--path-format=absolute",
 				"--git-path",
-				"dot-task.json",
+				"laddu-task.json",
 			],
 			path,
 		)
@@ -744,7 +744,7 @@ test("coding tasks share cached repos, isolate worktrees and update PRs in both 
 			start: await checked(["git", "rev-parse", "HEAD"], legacy),
 		}
 		await Bun.write(
-			`${legacy}/.git/dot-task.json`,
+			`${legacy}/.git/laddu-task.json`,
 			JSON.stringify(legacyTask),
 		)
 		expect((await command(publish, legacy)).err).toContain(
@@ -753,7 +753,7 @@ test("coding tasks share cached repos, isolate worktrees and update PRs in both 
 		token.mockResolvedValueOnce(null)
 		const disconnected = await fetch(
 			`${api.url}/ado/git/test/Project/_git/Repo/info/refs?service=git-upload-pack`,
-			{ headers: { "x-dot-caller": credential } },
+			{ headers: { "x-laddu-caller": credential } },
 		)
 		expect(disconnected.status).toBe(409)
 		pullRequests[0]!.status = "completed"
@@ -836,9 +836,9 @@ else if (action === "create-pull-request") {
 					`Basic ${btoa("test-aws-user:test-aws-signature")}`,
 			),
 		).toBe(true)
-		expect(awsHeaders.every(headers => !headers.has("x-dot-caller"))).toBe(
-			true,
-		)
+		expect(
+			awsHeaders.every(headers => !headers.has("x-laddu-caller")),
+		).toBe(true)
 		const awsCommonDir = await checked(
 			["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
 			awsPath,
@@ -849,7 +849,7 @@ else if (action === "create-pull-request") {
 		const unassigned = await fetch(`${api.url}/codecommit/repository`, {
 			method: "POST",
 			headers: {
-				"x-dot-caller": callerCredential({
+				"x-laddu-caller": callerCredential({
 					...caller,
 					userId: "U00000099",
 				}),

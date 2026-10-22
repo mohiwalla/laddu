@@ -184,7 +184,7 @@ export class SlackAutomations {
 		const details = await requireMember(this.client, person, channel)
 		if (!details.is_member)
 			throw new SlackToolError(
-				"Invite dot to that channel with /invite @dot before creating a rule.",
+				"Invite laddu to that channel with /invite @laddu before creating a rule.",
 				409,
 			)
 		const rule: Rule = {

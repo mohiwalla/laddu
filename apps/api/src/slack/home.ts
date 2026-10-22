@@ -1,7 +1,7 @@
 /**
- * dot's Home tab: each person's own settings page. Their agent and model, a link to their
- * computer, the accounts they've connected, what dot is working on for them, their scheduled tasks and
- * automations, and what dot remembers. Redrawn whenever they open it and after every change made
+ * laddu's Home tab: each person's own settings page. Their agent and model, a link to their
+ * computer, the accounts they've connected, what laddu is working on for them, their scheduled tasks and
+ * automations, and what laddu remembers. Redrawn whenever they open it and after every change made
  * here; only they can see it, and every control acts only on their own things.
  */
 import type { App, types } from "@slack/bolt"
@@ -242,7 +242,7 @@ async function placeLabel(client: WebClient, channel: string): Promise<string> {
 	const info = await client.conversations.info({ channel }).catch(() => null)
 	const found = info?.channel
 	if (!found) return "A conversation"
-	if (found.is_im) return "Your DM with dot"
+	if (found.is_im) return "Your DM with laddu"
 	if (found.is_mpim) return "A group DM"
 	return `#${found.name}`
 }
@@ -271,7 +271,7 @@ async function workingSection(
 					style: "danger",
 					confirm: {
 						title: "Stop this?",
-						text: "dot stops working on it there, along with anything else you asked there that hasn't started.",
+						text: "laddu stops working on it there, along with anything else you asked there that hasn't started.",
 						yes: "Stop",
 					},
 				}),
@@ -300,7 +300,7 @@ async function connectionsSection(
 					? button("Disconnect", "home_disconnect", "slack", {
 							confirm: {
 								title: "Disconnect Slack?",
-								text: "dot will only be able to message people as itself.",
+								text: "laddu will only be able to message people as itself.",
 								yes: "Disconnect",
 							},
 						})
@@ -318,7 +318,7 @@ async function connectionsSection(
 			{
 				confirm: {
 					title: "Disconnect Microsoft?",
-					text: "This signs dot out of Microsoft 365 *and* Azure DevOps; they share one sign-in.",
+					text: "This signs laddu out of Microsoft 365 *and* Azure DevOps; they share one sign-in.",
 					yes: "Disconnect",
 				},
 			},
@@ -338,7 +338,7 @@ async function connectionsSection(
 	return [
 		header(":link:  Connections"),
 		...rows,
-		hint("Connecting sends you a sign-in link in your DMs with dot."),
+		hint("Connecting sends you a sign-in link in your DMs with laddu."),
 	]
 }
 
@@ -369,7 +369,7 @@ async function scheduledSection(person: Person): Promise<Block[]> {
 				)
 			: [
 					hint(
-						"Nothing scheduled. Ask dot, e.g. _“every Monday at 9, summarise #sales”_.",
+						"Nothing scheduled. Ask laddu, e.g. _“every Monday at 9, summarise #sales”_.",
 					),
 				]),
 	]
@@ -401,9 +401,9 @@ const EVENTS: Record<string, string> = {
 	link_shared: "a link is shared",
 }
 const ACTIONS: Record<Rule["action"], string> = {
-	message: "dot posts a message",
-	reaction: "dot reacts",
-	task: "dot works on it",
+	message: "laddu posts a message",
+	reaction: "laddu reacts",
+	task: "laddu works on it",
 }
 
 function describeRule(rule: Rule): string {
@@ -454,7 +454,7 @@ async function automationsSection(
 				)
 			: [
 					hint(
-						"No automations. Ask dot, e.g. _“when someone joins #general, welcome them”_.",
+						"No automations. Ask laddu, e.g. _“when someone joins #general, welcome them”_.",
 					),
 				]),
 	]
@@ -464,7 +464,7 @@ function memorySection(): Block[] {
 	return [
 		header(":thought_balloon:  Memory"),
 		row(
-			"*What dot remembers about you*\nYour role, preferences and how you like answers",
+			"*What laddu remembers about you*\nYour role, preferences and how you like answers",
 			button("View", "home_memory", "view"),
 		),
 	]
@@ -503,12 +503,12 @@ export async function refreshHome(
 	// Slack fetches images itself, so only with a public address (assets/home-banner.png; bump ?v
 	// when it changes, Slack caches it).
 	const banner = config.desktopViewer.publicUrl.startsWith("https:")
-		? `${config.desktopViewer.publicUrl}/_dot/home-banner.png?v=2`
+		? `${config.desktopViewer.publicUrl}/_laddu/home-banner.png?v=3`
 		: null
 	const blocks: Block[] = [
 		banner
-			? { type: "image", image_url: banner, alt_text: "dot" }
-			: header("dot"),
+			? { type: "image", image_url: banner, alt_text: "laddu" }
+			: header("laddu"),
 		row(
 			`*Hi ${escape(firstName || "there")}* :wave:\nOnly you can see this page.`,
 		),
@@ -577,7 +577,7 @@ function memoryView(memory: Memory | null, problem?: string): types.ModalView {
 	return {
 		type: "modal",
 		callback_id: "home_memory",
-		title: plain("What dot remembers"),
+		title: plain("What laddu remembers"),
 		close: plain("Done"),
 		blocks: problem
 			? [row(`:warning:  ${escape(problem)}`)]
@@ -586,12 +586,12 @@ function memoryView(memory: Memory | null, problem?: string): types.ModalView {
 				: empty
 					? [
 							row(
-								"dot doesn't remember anything about you yet. It saves things as you work together: who you are, how you like answers, the tools you use.",
+								"laddu doesn't remember anything about you yet. It saves things as you work together: who you are, how you like answers, the tools you use.",
 							),
 						]
 					: [
 							...entries("user", "About you"),
-							...entries("notes", "dot's notes"),
+							...entries("notes", "laddu's notes"),
 							divider,
 							{
 								type: "actions",
@@ -604,7 +604,7 @@ function memoryView(memory: Memory | null, problem?: string): types.ModalView {
 											style: "danger",
 											confirm: {
 												title: "Forget everything?",
-												text: "dot starts over and learns about you again from scratch.",
+												text: "laddu starts over and learns about you again from scratch.",
 												yes: "Forget everything",
 											},
 										},
@@ -723,7 +723,7 @@ export function registerHome(app: App, given: Deps) {
 		else if ((value === "graph" || value === "devops") && config.microsoft)
 			await microsoft.connect(config.microsoft, client, person, value)
 		else return
-		return ":envelope_with_arrow:  Sent you a sign-in link in your DMs with dot. Come back here once you're done."
+		return ":envelope_with_arrow:  Sent you a sign-in link in your DMs with laddu. Come back here once you're done."
 	})
 	control("home_disconnect", async ({ person, client, value }) => {
 		if (value === "slack") await slackSignIn.disconnect(client, person)
@@ -756,7 +756,7 @@ export function registerHome(app: App, given: Deps) {
 			view_id: view.id!,
 			view: memory
 				? memoryView(memory)
-				: memoryView(null, "Couldn't read dot's memory right now."),
+				: memoryView(null, "Couldn't read laddu's memory right now."),
 		})
 	})
 	const changeMemory = async (

@@ -64,7 +64,7 @@ test("a button opens a persisted form and duplicate submissions run once as the 
 	)
 	// New instance proves the definition isn't held only in the creating process.
 	new SlackForms(client, path).register(app, () => true, submit)
-	await callbacks.dot_form_open!({
+	await callbacks.laddu_form_open!({
 		ack: mock(async () => {}),
 		body: {
 			team: { id: owner.teamId },
@@ -76,7 +76,10 @@ test("a button opens a persisted form and duplicate submissions run once as the 
 	})
 	expect(views.open.mock.calls[0]?.[0]).toMatchObject({
 		trigger_id: "trigger",
-		view: { callback_id: "dot_form_submit", private_metadata: created.id },
+		view: {
+			callback_id: "laddu_form_submit",
+			private_metadata: created.id,
+		},
 	})
 	const submission = {
 		ack: mock(async () => {}),
@@ -93,8 +96,8 @@ test("a button opens a persisted form and duplicate submissions run once as the 
 		},
 		client,
 	}
-	await callbacks.dot_form_submit!(submission)
-	await callbacks.dot_form_submit!(submission)
+	await callbacks.laddu_form_submit!(submission)
+	await callbacks.laddu_form_submit!(submission)
 	expect(submit).toHaveBeenCalledTimes(1)
 	expect(submit.mock.calls[0]?.[0]).toEqual({
 		teamId: owner.teamId,
@@ -104,7 +107,7 @@ test("a button opens a persisted form and duplicate submissions run once as the 
 	expect(submit.mock.calls[0]?.[4]).toContain("Something broke")
 	expect(postMessage).toHaveBeenCalledTimes(2)
 	members.mockResolvedValue({ members: [owner.userId] })
-	await callbacks.dot_form_open!({
+	await callbacks.laddu_form_open!({
 		ack: mock(async () => {}),
 		body: {
 			team: { id: owner.teamId },

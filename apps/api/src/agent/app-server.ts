@@ -2,7 +2,7 @@
  * A Codex app-server, one per turn: JSON-RPC over the child's stdio, one JSON object per line.
  * Unlike `codex exec`, it takes more input while a turn runs (`turn/steer`) and ends a turn
  * cleanly (`turn/interrupt`). The protocol is Codex's own (`codex app-server generate-ts`); only
- * the parts dot uses are typed here.
+ * the parts laddu uses are typed here.
  */
 import type { ThreadItem } from "@openai/codex-sdk"
 
@@ -112,7 +112,7 @@ export class AppServer {
 				result === undefined
 					? {
 							id: message.id,
-							error: { code: -32601, message: "not supported by dot" },
+							error: { code: -32601, message: "not supported by laddu" },
 						}
 					: { id: message.id, result },
 			)
@@ -135,7 +135,7 @@ export class AppServer {
 }
 
 /**
- * Its requests to us. dot has full access, so every approval is granted (the thread asks for
+ * Its requests to us. laddu has full access, so every approval is granted (the thread asks for
  * none, "never", but MCP tools can still ask to confirm a call). Questions for the person get no
  * answer (undefined): nobody is there mid-turn.
  */

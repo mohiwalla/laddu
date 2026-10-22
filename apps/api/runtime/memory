@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-dot's long-term memory about one person: two small files loaded into every new conversation.
+laddu's long-term memory about one person: two small files loaded into every new conversation.
 Design adapted from Hermes Agent's memory tool (MIT License, Copyright (c) Nous Research):
 capped stores, entries separated by a line with "§", and writes refused if they look like
 prompt injection, since memory is fed back into future prompts.
@@ -10,7 +10,7 @@ prompt injection, since memory is fed back into future prompts.
   memory replace <user|notes> "<text from one entry>" "<new entry>"
   memory remove <user|notes> "<text from one entry>"
 
-For dot's Home tab (the person's own controls, not for you to use): memory json, memory forget
+For laddu's Home tab (the person's own controls, not for you to use): memory json, memory forget
 <user|notes> <number>, memory clear.
 
 user  = who the person is: name, role, team, preferences, how they like answers.
@@ -22,7 +22,7 @@ import sys
 import unicodedata
 from pathlib import Path
 
-DIR = Path(os.environ.get("DOT_MEMORY_DIR") or Path.home() / "memory")
+DIR = Path(os.environ.get("LADDU_MEMORY_DIR") or Path.home() / "memory")
 STORES = {
     "user": ("USER.md", 1375, "USER PROFILE (who they are)"),
     "notes": ("MEMORY.md", 2200, "MEMORY (your notes)"),

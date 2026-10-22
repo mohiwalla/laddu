@@ -16,7 +16,7 @@ const CLI_VERSION = "v4.10.0"
  * Slack answers the ticket calls only for its CLI's user agent (anything else gets
  * `internal_error`), so we send that, followed by our own name.
  */
-const USER_AGENT = `slack-cli/${CLI_VERSION} (os: linux) slack-dot`
+const USER_AGENT = `slack-cli/${CLI_VERSION} (os: linux) laddu`
 
 export class SlackError extends Error {
 	constructor(
@@ -169,7 +169,7 @@ export async function buildManifest(identity: AppIdentity): Promise<Manifest> {
 	if (manifest.features.agent_view?.agent_description)
 		manifest.features.agent_view.agent_description =
 			manifest.features.agent_view.agent_description.replace(
-				/\bdot\b/g,
+				/\bladdu\b/g,
 				name,
 			)
 	const command = `/${commandName(name)}`
@@ -194,7 +194,7 @@ export const commandName = (name: string) =>
 		.toLowerCase()
 		.replace(/[^a-z0-9_-]+/g, "-")
 		.replace(/^-+|-+$/g, "")
-		.slice(0, 31) || "dot"
+		.slice(0, 31) || "laddu"
 
 export type AppCredentials = {
 	client_id: string

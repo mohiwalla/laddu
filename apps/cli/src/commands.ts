@@ -37,7 +37,7 @@ import {
 	yellow,
 } from "./terminal"
 
-const APP_NAME = "slack-dot"
+const APP_NAME = "laddu"
 
 export async function configure(instance: Instance): Promise<boolean> {
 	say("", bold(`Settings for ${instance.name}`))
@@ -224,18 +224,18 @@ export async function doctor(instance: Instance): Promise<boolean> {
 	check(
 		!missing.length,
 		"Settings complete",
-		`Missing ${missing.join(", ")}; run \`slack-dot setup --name ${instance.name}\``,
+		`Missing ${missing.join(", ")}; run \`laddu setup --name ${instance.name}\``,
 	)
 
 	const unit = Bun.file(
 		(await Bun.$`id -u`.text()).trim() === "0"
-			? "/etc/systemd/system/slack-dot@.service"
-			: `${Bun.env.HOME}/.config/systemd/user/slack-dot@.service`,
+			? "/etc/systemd/system/laddu@.service"
+			: `${Bun.env.HOME}/.config/systemd/user/laddu@.service`,
 	)
 	check(
 		(await unit.exists()) && (await unit.text()) === unitText(),
 		"Service definition current",
-		"Service definition missing or out of date; `slack-dot restart` rewrites it",
+		"Service definition missing or out of date; `laddu restart` rewrites it",
 	)
 	const running = await state(instance.name)
 	check(running === "active", `Service ${running}`, `Service ${running}`)
@@ -275,13 +275,13 @@ export async function doctor(instance: Instance): Promise<boolean> {
 	check(
 		!!chatgpt,
 		`ChatGPT: ${chatgpt?.email ?? "signed in"}`,
-		`ChatGPT sign-in missing or ended; run \`slack-dot login --name ${instance.name}\``,
+		`ChatGPT sign-in missing or ended; run \`laddu login --name ${instance.name}\``,
 	)
 	if (chatgpt?.models.length && env.CODEX_MODEL)
 		check(
 			chatgpt.models.some(model => model.slug === env.CODEX_MODEL),
 			`Model ${env.CODEX_MODEL}`,
-			`Model ${env.CODEX_MODEL} isn't on your plan; \`slack-dot configure\` picks another`,
+			`Model ${env.CODEX_MODEL} isn't on your plan; \`laddu configure\` picks another`,
 		)
 
 	if (running !== "active") {
@@ -299,9 +299,9 @@ export async function doctor(instance: Instance): Promise<boolean> {
 export async function update(finishing: boolean): Promise<boolean> {
 	if (!finishing) {
 		if (fromPackage) {
-			step("Updating slack-dot")
+			step("Updating laddu")
 			const install = await Bun.spawn(
-				[bun, "add", "-g", "slack-dot@latest"],
+				[bun, "add", "-g", "create-laddu@latest"],
 				{
 					stdio: ["inherit", "inherit", "inherit"],
 				},
@@ -311,7 +311,7 @@ export async function update(finishing: boolean): Promise<boolean> {
 				return false
 			}
 			// The rest runs on the new version's code.
-			const cli = Bun.which("slack-dot") ?? "slack-dot"
+			const cli = Bun.which("laddu") ?? "laddu"
 			return (
 				(await Bun.spawn([cli, "update", "--finish"], {
 					stdio: ["inherit", "inherit", "inherit"],
@@ -344,7 +344,7 @@ async function pushManifest(instance: Instance) {
 	const cli = await refreshCliAuth(app.cli)
 	if (!cli) {
 		warn(
-			"Slack app settings weren't updated: its Slack login expired. `slack-dot setup` signs in again.",
+			"Slack app settings weren't updated: its Slack login expired. `laddu setup` signs in again.",
 		)
 		return
 	}
@@ -368,7 +368,7 @@ async function pushManifest(instance: Instance) {
 export async function list() {
 	const names = await instanceNames()
 	if (!names.length) {
-		say("No bots set up here yet. Run `slack-dot setup`.")
+		say("No bots set up here yet. Run `laddu setup`.")
 		return
 	}
 	for (const name of names) {
@@ -430,7 +430,7 @@ export async function uninstall(instance: Instance, yes: boolean) {
 	done(`Stopped ${unitName(name)}`)
 
 	const containers = (
-		await Bun.$`docker ps -aq --filter label=dot.instance=${name}`
+		await Bun.$`docker ps -aq --filter label=laddu.instance=${name}`
 			.quiet()
 			.nothrow()
 			.text()
@@ -464,7 +464,7 @@ export async function uninstall(instance: Instance, yes: boolean) {
 		))
 	) {
 		const volumes = (
-			await Bun.$`docker volume ls -q --filter name=${`dot-home-${name.replace(/[^a-z0-9]/g, "")}-`}`
+			await Bun.$`docker volume ls -q --filter name=${`laddu-home-${name.replace(/[^a-z0-9]/g, "")}-`}`
 				.quiet()
 				.nothrow()
 				.text()

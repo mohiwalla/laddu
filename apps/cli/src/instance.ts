@@ -87,6 +87,6 @@ export async function pickInstance(
 	}
 	if (names.length === 1) return new Instance(names[0]!)
 	if (!names.length)
-		return "No bots set up on this machine yet. Run `slack-dot setup`."
+		return "No bots set up on this machine yet. Run `laddu setup`."
 	return `Several bots here (${names.join(", ")}); say which with --name.`
 }

@@ -157,7 +157,7 @@ export class SlackForms {
 							{
 								type: "button",
 								text: { type: "plain_text", text: "Open form" },
-								action_id: "dot_form_open",
+								action_id: "laddu_form_open",
 								value: form.id,
 							},
 						],
@@ -185,7 +185,7 @@ export class SlackForms {
 			request: string,
 		) => void,
 	) {
-		app.action("dot_form_open", async ({ ack, body, action, client }) => {
+		app.action("laddu_form_open", async ({ ack, body, action, client }) => {
 			await ack()
 			if (
 				!("trigger_id" in body) ||
@@ -211,17 +211,17 @@ export class SlackForms {
 					trigger_id: body.trigger_id,
 					view: {
 						type: "modal",
-						callback_id: "dot_form_submit",
+						callback_id: "laddu_form_submit",
 						private_metadata: form.id,
 						title: { type: "plain_text", text: form.title },
-						submit: { type: "plain_text", text: "Submit to dot" },
+						submit: { type: "plain_text", text: "Submit to laddu" },
 						close: { type: "plain_text", text: "Cancel" },
 						blocks: [
 							{
 								type: "section",
 								text: {
 									type: "plain_text",
-									text: `Submitting asks dot to: ${form.instruction}\nYour answers and dot's reply will be shared in the original channel.`,
+									text: `Submitting asks laddu to: ${form.instruction}\nYour answers and laddu's reply will be shared in the original channel.`,
 								},
 							},
 							...form.fields.map(field => ({
@@ -266,7 +266,7 @@ export class SlackForms {
 				console.warn("[slack form] open failed", error)
 			}
 		})
-		app.view("dot_form_submit", async ({ ack, body, view, client }) => {
+		app.view("laddu_form_submit", async ({ ack, body, view, client }) => {
 			await this.chain
 			const form = (await this.read()).forms.find(
 				form =>
@@ -323,7 +323,7 @@ export class SlackForms {
 				await client.chat
 					.postMessage({
 						channel: body.user.id,
-						text: "Your form submission couldn't be processed. Please ask dot in the original channel.",
+						text: "Your form submission couldn't be processed. Please ask laddu in the original channel.",
 					})
 					.catch(() => {})
 			}

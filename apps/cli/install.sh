@@ -1,14 +1,14 @@
 #!/bin/sh
-# slack-dot installer: everything from a blank Linux server to a bot answering in Slack.
+# laddu installer: everything from a blank Linux server to a bot answering in Slack.
 #
 #   curl -fsSL https://<install-host>/install.sh | sh
 #   curl -fsSL https://<install-host>/install.sh | sh -s -- --name support
 #
-# Installs what's missing (Docker, Bun), installs the slack-dot CLI, then runs `slack-dot setup`
+# Installs what's missing (Docker, Bun), installs the laddu CLI, then runs `laddu setup`
 # with any arguments given. As root, the bot runs as a system service; as anyone else, as that
 # user's service. Safe to run again: it repairs or resumes an install.
 #
-# SLACK_DOT_VERSION picks a version (default: latest).
+# LADDU_VERSION picks a version (default: latest).
 
 set -eu
 
@@ -50,8 +50,8 @@ packages() {
 }
 
 check_system() {
-	[ "$(uname -s)" = Linux ] || die "slack-dot runs on Linux servers (this is $(uname -s))."
-	has systemctl || die "slack-dot needs systemd to run the bot as a service."
+	[ "$(uname -s)" = Linux ] || die "laddu runs on Linux servers (this is $(uname -s))."
+	has systemctl || die "laddu needs systemd to run the bot as a service."
 	case "$(uname -m)" in
 	x86_64 | amd64 | aarch64 | arm64) ;;
 	*) die "Unsupported CPU: $(uname -m) (needs x86_64 or arm64)." ;;
@@ -123,11 +123,11 @@ enable_linger() {
 }
 
 install_cli() {
-	say "Installing slack-dot"
-	"$BUN" add -g "slack-dot@${SLACK_DOT_VERSION:-latest}" >/dev/null
-	CLI="$("$BUN" pm bin -g)/slack-dot"
-	[ -x "$CLI" ] || die "slack-dot didn't install."
-	ok "slack-dot $("$CLI" version)"
+	say "Installing laddu"
+	"$BUN" add -g "create-laddu@${LADDU_VERSION:-latest}" >/dev/null
+	CLI="$("$BUN" pm bin -g)/laddu"
+	[ -x "$CLI" ] || die "laddu didn't install."
+	ok "laddu $("$CLI" version)"
 }
 
 run_setup() {

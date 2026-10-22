@@ -1,5 +1,5 @@
 /**
- * Runs dot's own commands (runtime/: `memory`, `recall`) for a user, where their Codex runs:
+ * Runs laddu's own commands (runtime/: `memory`, `recall`) for a user, where their Codex runs:
  * inside their container, or on the host against that user's data directories.
  */
 import type { BotConfig } from "../config"
@@ -11,9 +11,9 @@ import { CONTAINER_TOOLS_DIR, ensureContainer, TOOLS_DIR } from "./containers"
 export function hostToolEnv(user: TurnUser) {
 	const owner = `${user.teamId}-${user.userId}`
 	return {
-		DOT_MEMORY_DIR: `${paths.dataDir}/memory/${owner}`,
-		DOT_HISTORY_DIR: `${paths.dataDir}/history/${owner}`,
-		DOT_CODE_DIR: `${paths.dataDir}/code/${owner}`,
+		LADDU_MEMORY_DIR: `${paths.dataDir}/memory/${owner}`,
+		LADDU_HISTORY_DIR: `${paths.dataDir}/history/${owner}`,
+		LADDU_CODE_DIR: `${paths.dataDir}/code/${owner}`,
 	}
 }
 

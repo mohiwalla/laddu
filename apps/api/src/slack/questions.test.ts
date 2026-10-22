@@ -51,7 +51,7 @@ test("bad choices are refused", async () => {
 	).rejects.toThrow(QuestionError)
 })
 
-/** Registers the handlers; returns the answers sent on to dot and the modal submit handler. */
+/** Registers the handlers; returns the answers sent on to laddu and the modal submit handler. */
 function register() {
 	const answers: string[] = []
 	const views: Record<string, (args: unknown) => Promise<void>> = {}
@@ -63,7 +63,7 @@ function register() {
 		} as unknown as App,
 		(_question, request) => answers.push(request),
 	)
-	return { answers, submit: (args: unknown) => views.dot_ask_submit!(args) }
+	return { answers, submit: (args: unknown) => views.laddu_ask_submit!(args) }
 }
 
 test("a reply typed in the thread closes the question and is their next message", async () => {
@@ -84,7 +84,7 @@ test("STOP withdraws the question", async () => {
 	expect(closeWithMessage(client, key)).toBe(false)
 })
 
-test("a typed answer in the modal goes to dot", async () => {
+test("a typed answer in the modal goes to laddu", async () => {
 	const { client, updated } = fakeClient()
 	const { answers, submit } = register()
 	const id = await ask(client, asker, { text: "Which?" })
@@ -124,7 +124,7 @@ test("buttons answer in one click; many choices make a dropdown", async () => {
 		choices: ["Yes", "No"],
 		buttons: true,
 	})
-	expect(JSON.stringify(posted[0]!.blocks)).toContain('"dot_ask_choice_1"')
+	expect(JSON.stringify(posted[0]!.blocks)).toContain('"laddu_ask_choice_1"')
 	await ask(client, asker, {
 		text: "Which city?",
 		choices: Array.from({ length: 20 }, (_, i) => `City ${i}`),

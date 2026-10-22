@@ -1,5 +1,5 @@
 /**
- * `slack-dot setup`: from a machine with Bun and Docker to a bot answering in Slack. Safe to run
+ * `laddu setup`: from a machine with Bun and Docker to a bot answering in Slack. Safe to run
  * again; every step keeps what already works.
  */
 import { existingChatGpt, signInWithChatGpt } from "./chatgpt"
@@ -43,7 +43,7 @@ import {
 } from "./terminal"
 
 /** The ChatGPT consent screen shows this name at the first sign-in. */
-const APP_NAME = "slack-dot"
+const APP_NAME = "laddu"
 const MEMBER_ID = /^[UW][A-Z0-9]{2,}$/
 
 export async function setup(name: string): Promise<boolean> {
@@ -64,7 +64,7 @@ export async function setup(name: string): Promise<boolean> {
 
 	step("Basics")
 	const botName = await ask("The bot's name in Slack", {
-		default: saved?.name ?? "dot",
+		default: saved?.name ?? "laddu",
 		check: value =>
 			value.length <= 35 && /\S/.test(value)
 				? undefined
@@ -109,7 +109,7 @@ export async function setup(name: string): Promise<boolean> {
 				check: value =>
 					!value || /^https?:\/\/[^\s/]+(\/[^\s]*)?$/.test(value)
 						? undefined
-						: "An address like https://dot.example.com",
+						: "An address like https://laddu.example.com",
 			})
 		).replace(/\/$/, "") || null
 
@@ -175,7 +175,7 @@ export async function setup(name: string): Promise<boolean> {
 			})
 
 	await instance.setEnv({
-		DOT_INSTANCE: name,
+		LADDU_INSTANCE: name,
 		DATA_DIR: instance.dataDir,
 		CODEX_LOCAL_DIR: instance.dir,
 		APP_NAME,
@@ -212,8 +212,8 @@ export async function setup(name: string): Promise<boolean> {
 			: bold("Setup is saved, but the bot didn't start."),
 		"",
 		`  Invite it to channels:   /invite @${botName}`,
-		`  Change settings:         slack-dot configure${name === "dot" ? "" : ` --name ${name}`}`,
-		`  See what it's doing:     slack-dot logs -f${name === "dot" ? "" : ` --name ${name}`}`,
+		`  Change settings:         laddu configure${name === "laddu" ? "" : ` --name ${name}`}`,
+		`  See what it's doing:     laddu logs -f${name === "laddu" ? "" : ` --name ${name}`}`,
 		`  Private instructions:    ${instance.dir}/AGENTS.local.md`,
 		...(publicUrl
 			? [`  Web pages:               ${publicUrl} → 127.0.0.1:${port}`]
@@ -231,7 +231,7 @@ async function preflight(): Promise<boolean> {
 		done("systemd")
 	else
 		throw new Error(
-			"slack-dot runs the bot as a systemd service, and this machine has no systemd.",
+			"laddu runs the bot as a systemd service, and this machine has no systemd.",
 		)
 	if (!isRoot) {
 		if (await ensureLinger())
@@ -256,7 +256,7 @@ async function preflight(): Promise<boolean> {
 	)
 	if (denied && !(await confirm("Continue without Docker?", false)))
 		throw new Error(
-			"Stopped; run `slack-dot setup` again after logging back in.",
+			"Stopped; run `laddu setup` again after logging back in.",
 		)
 	return false
 }
@@ -484,7 +484,7 @@ export async function start(instance: Instance): Promise<boolean> {
 	if (outcome.ok) done(outcome.line)
 	else
 		fail(
-			`It's not up: ${outcome.reason}. See \`slack-dot logs --name ${instance.name}\`.`,
+			`It's not up: ${outcome.reason}. See \`laddu logs --name ${instance.name}\`.`,
 		)
 	return outcome.ok
 }

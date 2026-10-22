@@ -18,8 +18,8 @@ import urllib.parse
 import urllib.request
 import uuid
 
-API = os.environ.get("DOT_API")
-CALLER = os.environ.get("DOT_CALLER")
+API = os.environ.get("LADDU_API")
+CALLER = os.environ.get("LADDU_CALLER")
 RESOURCE = "ado"
 
 
@@ -31,7 +31,7 @@ def call(method, path, body=None, quiet=False):
         f"{API}/{RESOURCE}/{path}",
         method=method,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"x-dot-caller": CALLER, "content-type": "application/json"},
+        headers={"x-laddu-caller": CALLER, "content-type": "application/json"},
     )
     try:
         with urllib.request.urlopen(request, timeout=90) as response:
@@ -94,7 +94,7 @@ def transport(remote):
         proxy = f"{API}/ado/git/{suffix}"
     env = os.environ.copy()
     values = [(f"url.{proxy}.insteadOf", remote),
-              (f"http.{proxy}.extraHeader", f"x-dot-caller: {CALLER}"),
+              (f"http.{proxy}.extraHeader", f"x-laddu-caller: {CALLER}"),
               ("http.followRedirects", "false"), ("credential.helper", "")]
     env["GIT_CONFIG_COUNT"] = str(len(values))
     for index, (key, value) in enumerate(values):
@@ -148,8 +148,8 @@ def task_worktree(root, remote, target, branch, path):
 
 def task_metadata(path):
     # Linked worktrees have a .git file; their private metadata is in the shared repo's admin dir.
-    # This also resolves the original .git/dot-task.json for existing standalone task clones.
-    return git(["rev-parse", "--path-format=absolute", "--git-path", "dot-task.json"], cwd=path)
+    # This also resolves the original .git/laddu-task.json for existing standalone task clones.
+    return git(["rev-parse", "--path-format=absolute", "--git-path", "laddu-task.json"], cwd=path)
 
 
 def checkout(args):
@@ -177,8 +177,8 @@ def checkout(args):
     if not identity.get("email"):
         sys.exit("error: the connected account has no email for commits.")
     task_id = uuid.uuid4().hex[:12]
-    branch = f"dot/{CALLER.split('.')[1].lower()}/{task_id}"
-    root = os.path.abspath(os.environ.get("DOT_CODE_DIR", os.path.expanduser("~/workspace/code")))
+    branch = f"laddu/{CALLER.split('.')[1].lower()}/{task_id}"
+    root = os.path.abspath(os.environ.get("LADDU_CODE_DIR", os.path.expanduser("~/workspace/code")))
     os.makedirs(root, exist_ok=True)
     path = os.path.join(root, task_id)
     start = task_worktree(root, remote, target, branch, path)
@@ -198,7 +198,7 @@ def pull_request(args):
     path = git(["rev-parse", "--show-toplevel"])
     task_file = task_metadata(path)
     if not os.path.isfile(task_file):
-        sys.exit("error: this isn't a dot coding task; start with code checkout.")
+        sys.exit("error: this isn't a laddu coding task; start with code checkout.")
     with open(task_file) as file:
         task = json.load(file)
     if task["owner"] != caller_owner():

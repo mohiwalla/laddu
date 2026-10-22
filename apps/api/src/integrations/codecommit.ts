@@ -177,12 +177,12 @@ export async function check(
 	validate(input)
 	profile(settings, person)
 	if (
-		!input.source?.startsWith(`dot/${person.userId.toLowerCase()}/`) ||
+		!input.source?.startsWith(`laddu/${person.userId.toLowerCase()}/`) ||
 		!input.target ||
 		input.source === input.target
 	)
 		throw new CodeCommitError(
-			"Use your own dot task branch and a different target branch.",
+			"Use your own laddu task branch and a different target branch.",
 		)
 	let ids: string[]
 	if (input.id) ids = [input.id]

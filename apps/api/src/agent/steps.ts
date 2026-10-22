@@ -22,7 +22,7 @@ export type Step = {
 	title: string
 	status: "in_progress" | "complete" | "error"
 	details?: string
-	/** A step on dot's computer (the desktop tools), so the bot can offer the watch link. */
+	/** A step on laddu's computer (the desktop tools), so the bot can offer the watch link. */
 	computer?: boolean
 }
 
@@ -175,7 +175,7 @@ function toStep(item: AgentItem, done: boolean): Step | null {
 
 /**
  * Feed it every item event; it reports each step's latest state, keeping its first title.
- * Back-to-back actions on dot's computer (dozens of clicks and keys) share one row, with a count.
+ * Back-to-back actions on laddu's computer (dozens of clicks and keys) share one row, with a count.
  */
 export function stepTracker(onStep: (step: Step) => void) {
 	const titles = new Map<string, string>()

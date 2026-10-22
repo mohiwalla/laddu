@@ -3,9 +3,10 @@
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
-	"description": "slack-dot: set up and run dot, the Slack assistant backed by Codex",
+	"description": "laddu: set up and run laddu, the Slack assistant backed by Codex",
 	"bin": {
-		"slack-dot": "src/index.ts"
+		"laddu": "src/index.ts",
+		"create-laddu": "src/create.ts"
 	},
 	"scripts": {
 		"build": "bun run build.ts",

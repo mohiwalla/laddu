@@ -1,0 +1,11 @@
+{
+	"name": "@repo/web",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "laddu.wtf, the marketing site",
+	"scripts": {
+		"dev": "bun ./index.html",
+		"build": "rm -rf dist && bun build ./index.html --outdir dist --minify && cp public/og.png public/robots.txt public/favicon.ico dist/ && cp ../cli/install.sh dist/install.sh"
+	}
+}

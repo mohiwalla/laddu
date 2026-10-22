@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-dot's log of past conversations with one person, searchable across all their Slack threads.
+laddu's log of past conversations with one person, searchable across all their Slack threads.
 Design adapted from Hermes Agent's session search (MIT License, Copyright (c) Nous Research):
 SQLite full-text search over raw messages, no summaries in between.
 
@@ -18,7 +18,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-DIR = Path(os.environ.get("DOT_HISTORY_DIR") or Path.home() / "history")
+DIR = Path(os.environ.get("LADDU_HISTORY_DIR") or Path.home() / "history")
 SNIPPET_WORDS = 24
 
 

@@ -43,8 +43,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-API = os.environ.get("DOT_API")
-CALLER = os.environ.get("DOT_CALLER")
+API = os.environ.get("LADDU_API")
+CALLER = os.environ.get("LADDU_CALLER")
 
 
 def call(method, path, body=None, quiet=False):
@@ -55,7 +55,7 @@ def call(method, path, body=None, quiet=False):
         f"{API}/ado/{path}",
         method=method,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"x-dot-caller": CALLER, "content-type": "application/json"},
+        headers={"x-laddu-caller": CALLER, "content-type": "application/json"},
     )
     try:
         with urllib.request.urlopen(request, timeout=90) as response:

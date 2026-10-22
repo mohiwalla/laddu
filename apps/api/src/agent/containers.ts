@@ -14,18 +14,18 @@ const appRoot = Bun.fileURLToPath(new URL("../../", import.meta.url))
 const dirname = (path: string) => path.slice(0, path.lastIndexOf("/"))
 
 /** Paths inside the container. */
-export const CONTAINER_HOME = "/home/dot"
+export const CONTAINER_HOME = "/home/laddu"
 export const CONTAINER_WORKDIR = `${CONTAINER_HOME}/workspace`
 
 /** Commands for Codex (`memory`, `recall`) in runtime/; the host runtime uses them in place. */
 export const TOOLS_DIR = `${appRoot}runtime`
 /** The same commands in the runtime mount; scripts/codex-docker.sh puts them on PATH. */
-export const CONTAINER_TOOLS_DIR = "/opt/dot/runtime/bin"
+export const CONTAINER_TOOLS_DIR = "/opt/laddu/runtime/bin"
 
 /** Port of the desktop's web viewer inside each container (runtime/desktop). */
 export const DESKTOP_VIEWER_PORT = 6901
 
-/** Stand-in `codex` executable that forwards into the container named by $DOT_CONTAINER. */
+/** Stand-in `codex` executable that forwards into the container named by $LADDU_CONTAINER. */
 export const CODEX_DOCKER_WRAPPER = `${appRoot}scripts/codex-docker.sh`
 /** The same for OpenCode, as an ACP agent (`opencode acp`). */
 export const OPENCODE_DOCKER_WRAPPER = `${appRoot}scripts/opencode-docker.sh`
@@ -106,7 +106,7 @@ export async function writeModelCatalog(path: string): Promise<void> {
 export async function ensureImage(): Promise<string> {
 	const dockerfile = await Bun.file(`${appRoot}docker/Dockerfile`).text()
 	const { version, dir } = await codexDistribution()
-	const tag = `dot-runtime:${version}-${Bun.hash(dockerfile).toString(16).slice(0, 8)}`
+	const tag = `laddu-runtime:${version}-${Bun.hash(dockerfile).toString(16).slice(0, 8)}`
 
 	const exists = await Bun.$`docker image inspect ${tag}`.quiet().nothrow()
 	if (exists.exitCode !== 0) {
@@ -157,8 +157,8 @@ export async function prepareDocker(config: BotConfig): Promise<{
 		hostConfigToml,
 		codexConfig({
 			baseUrl: proxy.baseUrl,
-			envKey: "DOT_PROXY_KEY",
-			modelCatalog: "/opt/dot/runtime/models.json",
+			envKey: "LADDU_PROXY_KEY",
+			modelCatalog: "/opt/laddu/runtime/models.json",
 			desktop: config.desktop
 				? `${CONTAINER_TOOLS_DIR}/desktop`
 				: undefined,
@@ -170,11 +170,11 @@ export async function prepareDocker(config: BotConfig): Promise<{
 
 const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "")
 
-/** `docker ps` filter for this bot's containers: all dot containers, or just this instance's. */
+/** `docker ps` filter for this bot's containers: all laddu containers, or just this instance's. */
 export const ownContainers = [
 	"--filter",
-	"label=dot.bot=1",
-	...(instance ? ["--filter", `label=dot.instance=${instance}`] : []),
+	"label=laddu.bot=1",
+	...(instance ? ["--filter", `label=laddu.instance=${instance}`] : []),
 ]
 
 /** First name for a Slack user ID, set at startup (index.ts); only used to make names readable. */
@@ -186,7 +186,7 @@ export function nameContainersWith(
 }
 
 /**
- * `dot-[<instance>-]<first name>-<team>-<user>`, e.g. dot-alex-t0123abcd-u0456efgh; the IDs keep
+ * `laddu-[<instance>-]<first name>-<team>-<user>`, e.g. laddu-alex-t0123abcd-u0456efgh; the IDs keep
  * it unique.
  */
 export const containerName = (
@@ -195,7 +195,7 @@ export const containerName = (
 	firstName = "",
 ) => {
 	const name = slug(firstName.normalize("NFKD")).slice(0, 20)
-	return ["dot", slug(instance), name, slug(teamId), slug(userId)]
+	return ["laddu", slug(instance), name, slug(teamId), slug(userId)]
 		.filter(Boolean)
 		.join("-")
 }
@@ -224,7 +224,7 @@ export function ensureContainer(
 		// Found by its labels, so a container from before names had first names (or from before a
 		// rename in Slack) is renamed in place rather than recreated.
 		const existing = (
-			await Bun.$`docker ps --all ${ownContainers} --filter ${`label=dot.team=${teamId}`} --filter ${`label=dot.user=${userId}`} --format ${"{{.Names}}"}`.text()
+			await Bun.$`docker ps --all ${ownContainers} --filter ${`label=laddu.team=${teamId}`} --filter ${`label=laddu.user=${userId}`} --format ${"{{.Names}}"}`.text()
 		)
 			.trim()
 			.split("\n")[0]
@@ -235,20 +235,20 @@ export function ensureContainer(
 		const options = [
 			"--init", // PID 1 reaps finished child processes
 			"--hostname",
-			"dot",
+			"laddu",
 			"--label",
-			"dot.bot=1",
+			"laddu.bot=1",
 			"--label",
-			`dot.team=${teamId}`,
+			`laddu.team=${teamId}`,
 			"--label",
-			`dot.user=${userId}`,
-			...(instance ? ["--label", `dot.instance=${instance}`] : []),
-			// Groups them as one "dot" app in Docker Desktop and editor container views.
+			`laddu.user=${userId}`,
+			...(instance ? ["--label", `laddu.instance=${instance}`] : []),
+			// Groups them as one "laddu" app in Docker Desktop and editor container views.
 			"--label",
-			"com.docker.compose.project=dot",
+			"com.docker.compose.project=laddu",
 			// Part of the spec, so turning isolation off recreates the container without the rules.
 			"--label",
-			`dot.isolated=${isolated ? 1 : 0}`,
+			`laddu.isolated=${isolated ? 1 : 0}`,
 			"--restart",
 			"unless-stopped",
 			"--memory",
@@ -267,23 +267,24 @@ export function ensureContainer(
 			// Always networked: Codex reaches the model through the proxy on the bridge gateway. With
 			// ISOLATE_NETWORK on, it's then limited to the internet (see isolate()).
 			"--volume",
-			`${["dot-home", slug(instance), slug(teamId), slug(userId)].filter(Boolean).join("-")}:${CONTAINER_HOME}`,
+			`${["laddu-home", slug(instance), slug(teamId), slug(userId)].filter(Boolean).join("-")}:${CONTAINER_HOME}`,
 			// Directories, not files: a file bind mount keeps the old inode when an editor replaces the
 			// file. scripts/codex-docker.sh links these into CODEX_HOME before every run.
 			"--volume",
-			`${config.workdir}:/opt/dot/persona:ro`,
+			`${config.workdir}:/opt/laddu/persona:ro`,
 			// The deployment's AGENTS.local.md and skills.local/, when kept outside the persona folder.
 			...(config.localDir !== config.workdir
-				? ["--volume", `${config.localDir}:/opt/dot/persona-local:ro`]
+				? ["--volume", `${config.localDir}:/opt/laddu/persona-local:ro`]
 				: []),
 			"--volume",
-			`${runtimeDir}:/opt/dot/runtime:ro`,
+			`${runtimeDir}:/opt/laddu/runtime:ro`,
 			imageTag,
 		]
 		// Fingerprint of image + options; a container created from different ones gets recreated.
 		const spec = Bun.hash(options.join("\n")).toString(16)
 
-		const format = '{{.State.Running}} {{index .Config.Labels "dot.spec"}}'
+		const format =
+			'{{.State.Running}} {{index .Config.Labels "laddu.spec"}}'
 		const inspect = await Bun.$`docker inspect --format ${format} ${name}`
 			.quiet()
 			.nothrow()
@@ -297,7 +298,7 @@ export function ensureContainer(
 			// Missing, or created from an older image/options: (re)create it. The volume keeps the user's files.
 			if (inspect.exitCode === 0)
 				await Bun.$`docker rm --force ${name}`.quiet()
-			await Bun.$`docker run --detach --name ${name} --label ${`dot.spec=${spec}`} ${options}`.quiet()
+			await Bun.$`docker run --detach --name ${name} --label ${`laddu.spec=${spec}`} ${options}`.quiet()
 			console.log(`[containers] started ${name} for ${userId}`)
 		}
 		if (isolated) await isolate(name)
@@ -311,8 +312,8 @@ export function ensureContainer(
 }
 
 /**
- * If ~/workspace goes missing from the volume (dot deleted it), Docker recreates the image's
- * WORKDIR as root on the next start, and dot can't write there. The container has no
+ * If ~/workspace goes missing from the volume (laddu deleted it), Docker recreates the image's
+ * WORKDIR as root on the next start, and laddu can't write there. The container has no
  * capabilities, so a short-lived root helper hands it back.
  */
 async function ensureWorkdir(name: string): Promise<void> {
@@ -320,9 +321,10 @@ async function ensureWorkdir(name: string): Promise<void> {
 		await Bun.$`docker exec ${name} stat -c %U ${CONTAINER_WORKDIR}`
 			.quiet()
 			.nothrow()
-	if (owner.exitCode === 0 && owner.stdout.toString().trim() === "dot") return
-	await Bun.$`docker run --rm --volumes-from ${name} --user root --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --network none --entrypoint sh ${imageTag!} -c ${`mkdir -p ${CONTAINER_WORKDIR} && chown dot:dot ${CONTAINER_WORKDIR}`}`.quiet()
-	console.log(`[containers] ${name}: gave ${CONTAINER_WORKDIR} back to dot`)
+	if (owner.exitCode === 0 && owner.stdout.toString().trim() === "laddu")
+		return
+	await Bun.$`docker run --rm --volumes-from ${name} --user root --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --network none --entrypoint sh ${imageTag!} -c ${`mkdir -p ${CONTAINER_WORKDIR} && chown laddu:laddu ${CONTAINER_WORKDIR}`}`.quiet()
+	console.log(`[containers] ${name}: gave ${CONTAINER_WORKDIR} back to laddu`)
 }
 
 /** Addresses that aren't the public internet: this machine, the home network, other containers. */
@@ -343,7 +345,7 @@ const isolatedAt = new Map<string, string>()
 
 /**
  * Internet only: blocks this machine's services (databases, SSH…), the home network and other
- * containers, except dot's model proxy and bot API, replies to the desktop viewer gateway, and
+ * containers, except laddu's model proxy and bot API, replies to the desktop viewer gateway, and
  * DNS to the container's nameservers.
  * The rules live in the container's own network namespace and are set from a short-lived root
  * helper with NET_ADMIN; the container itself has no capabilities, so it can't change them.
@@ -441,7 +443,7 @@ export async function stopRun(
  */
 export async function stopOrphanedRuns(teamId: string): Promise<void> {
 	const listing =
-		await Bun.$`docker ps ${ownContainers} --filter ${`label=dot.team=${teamId}`} --format ${"{{.Names}}"}`.text()
+		await Bun.$`docker ps ${ownContainers} --filter ${`label=laddu.team=${teamId}`} --format ${"{{.Names}}"}`.text()
 	for (const name of listing.split("\n").filter(Boolean)) {
 		const killed =
 			await Bun.$`docker exec ${name} pkill -f ${"^(codex(\\[turn=[^]]*\\])? (exec|app-server)|opencode\\[turn=[^]]*\\] acp)"}`

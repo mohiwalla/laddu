@@ -28,7 +28,7 @@ function users(value: string): "*" | Set<string> {
 
 function agentId(value: string): AgentId {
 	if (value === "codex" || value === "opencode") return value
-	throw new Error(`DOT_AGENT must be "codex" or "opencode", not "${value}"`)
+	throw new Error(`LADDU_AGENT must be "codex" or "opencode", not "${value}"`)
 }
 
 const dataDir = fromAppRoot(optional("DATA_DIR", ".data"))
@@ -46,11 +46,11 @@ export const paths = {
 export const appName = optional("APP_NAME", "slack-codex-bot")
 
 /**
- * Set by `slack-dot setup` (the instance's name). Labels this bot's containers and volumes, so
+ * Set by `laddu setup` (the instance's name). Labels this bot's containers and volumes, so
  * several bots on one machine, even in one workspace, never touch each other's. Unset: the
  * names from before instances.
  */
-export const instance = optional("DOT_INSTANCE", "")
+export const instance = optional("LADDU_INSTANCE", "")
 
 /** Settings only the bot process needs. Read lazily so `bun run login` works without Slack tokens. */
 export function loadBotConfig() {
@@ -98,13 +98,13 @@ export function loadBotConfig() {
 		allowedUsers: users(allowed),
 		/**
 		 * Who can run on Codex (the owner's ChatGPT plan): "*" or comma-separated user IDs. Everyone
-		 * else is on OpenCode, whatever DOT_AGENT or their pick says.
+		 * else is on OpenCode, whatever LADDU_AGENT or their pick says.
 		 */
 		codexUsers: users(optional("CODEX_USERS", "*")),
 		/** "docker": Codex runs in a per-user container (default). "host": on this machine, sandboxed only by Codex. */
 		runtime: optional("CODEX_RUNTIME", "docker") as "docker" | "host",
 		/** The agent people get until they pick one on the Home tab: "codex" or "opencode". */
-		agent: agentId(optional("DOT_AGENT", "codex")),
+		agent: agentId(optional("LADDU_AGENT", "codex")),
 		/**
 		 * The model a turn runs on. From CODEX_MODEL here; configFor() (preferences.ts) swaps in the
 		 * person's pick, or OPENCODE_MODEL when their agent is OpenCode.
@@ -123,7 +123,7 @@ export function loadBotConfig() {
 		 */
 		isolateNetwork: optional("ISOLATE_NETWORK", "true") === "true",
 		/**
-		 * Docker runtime: each person's dot gets a desktop in their container (started when first
+		 * Docker runtime: each person's laddu gets a desktop in their container (started when first
 		 * used, stopped when idle) that Codex can drive, and that they can watch or take over.
 		 */
 		desktop:
@@ -142,7 +142,7 @@ export function loadBotConfig() {
 		workdir,
 		/**
 		 * Where the deployment's own AGENTS.local.md and skills.local/ live. Defaults to the persona
-		 * folder; `slack-dot setup` points it at the instance folder, outside the installed package.
+		 * folder; `laddu setup` points it at the instance folder, outside the installed package.
 		 */
 		localDir: Bun.env.CODEX_LOCAL_DIR?.trim()
 			? fromAppRoot(Bun.env.CODEX_LOCAL_DIR.trim())
@@ -176,7 +176,7 @@ export function loadBotConfig() {
 		/**
 		 * Sending Slack DMs as people: the Slack app's client ID and secret (Basic Information), for
 		 * each person's own sign-in. Slack sends them back to /slack/oauth on DESKTOP_PUBLIC_URL,
-		 * which must be listed as a Redirect URL. Unset: DMs only come from dot.
+		 * which must be listed as a Redirect URL. Unset: DMs only come from laddu.
 		 */
 		slackSignIn: (() => {
 			const clientId = Bun.env.SLACK_CLIENT_ID?.trim()
@@ -209,7 +209,7 @@ export function loadBotConfig() {
 				cli: optional("AWS_CLI_PATH", "aws"),
 			}
 		})(),
-		/** Reacting with this emoji (name without colons) to a message asks dot to handle it. */
+		/** Reacting with this emoji (name without colons) to a message asks laddu to handle it. */
 		triggerEmoji: optional("TRIGGER_EMOJI", "robot_face"),
 	}
 }

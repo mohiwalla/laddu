@@ -118,7 +118,7 @@ export async function request(
 	if (!response.ok) {
 		const hint =
 			response.status === 403
-				? ". They may not have approved this permission yet: run `ms connect` so they sign in again and approve it. If it keeps failing, the app lacks this Microsoft Graph permission (the person running dot adds it in Entra) or they don't have access."
+				? ". They may not have approved this permission yet: run `ms connect` so they sign in again and approve it. If it keeps failing, the app lacks this Microsoft Graph permission (the person running laddu adds it in Entra) or they don't have access."
 				: ""
 		return {
 			status: response.status,

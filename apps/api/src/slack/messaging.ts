@@ -1,16 +1,16 @@
 /**
- * dot messaging people for someone: `slack find` looks people up, `slack dm` sends a DM. As the
+ * laddu messaging people for someone: `slack find` looks people up, `slack dm` sends a DM. As the
  * person, with their own Slack sign-in (user-tokens.ts), when they've connected; otherwise from
- * dot (bot token), saying who it's from.
+ * laddu (bot token), saying who it's from.
  */
 import type { App } from "@slack/bolt"
 import { forget, userToken } from "./user-tokens"
 
 type WebClient = App["client"]
 
-/** Longest message dot passes on; longer ones belong in a file or the person's own message. */
+/** Longest message laddu passes on; longer ones belong in a file or the person's own message. */
 const MAX_TEXT = 4_000
-/** DMs one person can send through dot per hour, so a runaway turn can't spam the workspace. */
+/** DMs one person can send through laddu per hour, so a runaway turn can't spam the workspace. */
 const HOURLY_LIMIT = 20
 const DIRECTORY_TTL_MS = 10 * 60_000
 
@@ -140,14 +140,14 @@ const DEAD_TOKEN = new Set([
 
 /**
  * Sends `text` to `to`: as the person, in their own DM with them, when they've connected Slack;
- * otherwise (or with `fromDot`) from dot, in dot's DM with them, headed with who it's from.
+ * otherwise (or with `fromLaddu`) from laddu, in laddu's DM with them, headed with who it's from.
  */
 export async function sendOnBehalf(
 	client: WebClient,
 	from: { teamId: string; userId: string },
 	to: string,
 	text: string,
-	fromDot: boolean,
+	fromLaddu: boolean,
 ): Promise<
 	| { ok: true; text: string }
 	| { ok: false; text: string; notConnected?: true }
@@ -166,17 +166,17 @@ export async function sendOnBehalf(
 			ok: false,
 			text: "That's the person you're working for; answer them here instead.",
 		}
-	const token = fromDot ? null : await userToken(from)
-	if (!fromDot && !token)
+	const token = fromLaddu ? null : await userToken(from)
+	if (!fromLaddu && !token)
 		return {
 			ok: false,
 			notConnected: true,
-			text: "They haven't connected their Slack account, so it can't come from them. Run `slack connect` (DMs them a link), or send it from dot with `slack dm --from-dot`.",
+			text: "They haven't connected their Slack account, so it can't come from them. Run `slack connect` (DMs them a link), or send it from laddu with `slack dm --from-laddu`.",
 		}
 	if (!allowance(from.userId))
 		return {
 			ok: false,
-			text: `They've sent ${HOURLY_LIMIT} DMs through dot in the last hour, the limit. Try again later.`,
+			text: `They've sent ${HOURLY_LIMIT} DMs through laddu in the last hour, the limit. Try again later.`,
 		}
 
 	if (token) {
@@ -196,7 +196,7 @@ export async function sendOnBehalf(
 			await forget(from)
 			return {
 				ok: false,
-				text: `Their Slack connection stopped working (${code}), so nothing was sent. Run \`slack connect\` to connect again, or send it from dot with \`slack dm --from-dot\`.`,
+				text: `Their Slack connection stopped working (${code}), so nothing was sent. Run \`slack connect\` to connect again, or send it from laddu with \`slack dm --from-laddu\`.`,
 			}
 		}
 		console.info(
@@ -208,10 +208,10 @@ export async function sendOnBehalf(
 	const { channel } = await client.conversations.open({ users: found.id })
 	await client.chat.postMessage({
 		channel: channel!.id!,
-		markdown_text: `<@${from.userId}> asked me to send you this:\n\n${message}\n\n_Sent by dot for <@${from.userId}>. To answer, message them directly._`,
+		markdown_text: `<@${from.userId}> asked me to send you this:\n\n${message}\n\n_Sent by laddu for <@${from.userId}>. To answer, message them directly._`,
 	})
 	console.info(
-		`[slack dm] ${from.userId} → ${found.id} from dot (${message.length} chars)`,
+		`[slack dm] ${from.userId} → ${found.id} from laddu (${message.length} chars)`,
 	)
-	return { ok: true, text: `Sent to <@${found.id}>, from dot.` }
+	return { ok: true, text: `Sent to <@${found.id}>, from laddu.` }
 }

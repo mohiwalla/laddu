@@ -67,7 +67,7 @@ function asAttachment(file: SlackFile): SlackAttachment | null {
 
 export type Trigger = {
 	channel: string
-	/** ts of the message the turn answers: the mention, DM, reacted-to message, or the bot's echo of a /dot request. */
+	/** ts of the message the turn answers: the mention, DM, reacted-to message, or the bot's echo of a /laddu request. */
 	ts: string
 	/** Parent ts when that message is inside a thread. */
 	threadTs?: string
@@ -79,7 +79,7 @@ export type Trigger = {
 	via?: "reaction" | "command" | "shortcut" | "answer"
 	/**
 	 * For `command`/`shortcut`: what they typed. For `reaction`: the emoji's name. For `answer`:
-	 * their answer to a question dot asked with `slack ask`.
+	 * their answer to a question laddu asked with `slack ask`.
 	 */
 	request?: string
 	/** The message's own text, for a mention or DM (to spot STOP). */
@@ -319,8 +319,8 @@ function findLinks(messages: SlackMessage[]): SlackLink[] {
  * conversation through the bot that the asker couldn't read themselves.
  */
 /**
- * Whether the person asking may read a conversation through dot: public channels are open to anyone
- * in the workspace; private channels and DMs only to their members, so dot can't be used to read a
+ * Whether the person asking may read a conversation through laddu: public channels are open to anyone
+ * in the workspace; private channels and DMs only to their members, so laddu can't be used to read a
  * conversation they couldn't read themselves.
  */
 async function readableBy(
@@ -427,7 +427,7 @@ async function readChannel(
 		return {
 			note:
 				code === "not_in_channel"
-					? `I'm not in ${access.label}; someone can add me with /invite @dot.`
+					? `I'm not in ${access.label}; someone can add me with /invite @laddu.`
 					: `I couldn't read ${access.label} (${code ?? error}).`,
 		}
 	}
@@ -457,14 +457,14 @@ async function resolveLink(
 		const code = (error as { data?: { error?: string } }).data?.error
 		const note =
 			code === "not_in_channel"
-				? `I'm not in ${label}; someone can add me with /invite @dot.`
+				? `I'm not in ${label}; someone can add me with /invite @laddu.`
 				: `I couldn't read it (${code ?? error}).`
 		return { link, note }
 	}
 }
 
 /**
- * A message sent in the thread while dot works on an earlier one there, for the same person: added
+ * A message sent in the thread while laddu works on an earlier one there, for the same person: added
  * to the running turn as-is, with its files. Linked conversations and mentioned channels in it
  * wait for the next turn.
  */
@@ -634,9 +634,9 @@ export async function buildTurnInput(options: {
 		trigger.via === "reaction"
 			? `${requester} reacted with :${request}: to the last message above, asking you to handle it on their behalf. Respond to that message.`
 			: trigger.via === "command"
-				? `${requester} asked you with /dot: "${request}". Respond to that request.`
+				? `${requester} asked you with /laddu: "${request}". Respond to that request.`
 				: trigger.via === "shortcut"
-					? `${requester} used "Ask dot" on the last message above${request ? ` and asked: "${request}"` : ", asking you to help with it"}. Respond to that.`
+					? `${requester} used "Ask laddu" on the last message above${request ? ` and asked: "${request}"` : ", asking you to help with it"}. Respond to that.`
 					: trigger.via === "answer"
 						? `${requester} answered the question you asked them in this thread. ${request} Carry on with what you were doing.`
 						: `Respond to the last message, from ${requester}.`

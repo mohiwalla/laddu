@@ -231,7 +231,7 @@ export async function write(
 /**
  * Git smart HTTP, using the same per-person sign-in as REST. The container sends its signed
  * caller to /ado/git/<org>/<project>/_git/<repo>/<service>; only this host adds the bearer token.
- * Reads stream back unchanged. Pushes can only create/update this person's dot/* branches.
+ * Reads stream back unchanged. Pushes can only create/update this person's laddu/* branches.
  */
 export async function gitRequest(
 	settings: Settings,

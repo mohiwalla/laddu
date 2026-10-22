@@ -11,13 +11,18 @@ curl -fsSL https://<s3-host>/install.sh | sh
 ```
 
 No second command. The script installs everything and runs the whole setup in the same session.
-Afterwards, the local `slack-dot` command changes settings, updates, and diagnoses problems.
+Afterwards, the local `laddu` command changes settings, updates, and diagnoses problems.
+
+With Bun and Docker already there, `bun create laddu` (or `bunx create-laddu`) does the same from
+the setup step on: it installs the package globally, since the service runs the bot from where it's
+installed and bunx's copy is a throwaway cache, then runs `laddu setup` (`apps/cli/src/create.ts`).
 
 ## Apps
 
-- **`apps/cli`**: the `slack-dot` CLI. It's published to npm as `slack-dot` (the name is free as
-  of 2026-10-20) and bundles the bot from `apps/api`, so one package has everything.
-- **`apps/ui`**: the marketing website.
+- **`apps/cli`**: the `laddu` CLI. It's published to npm as `create-laddu` (`laddu` was taken;
+  `create-laddu` is free as of 2026-10-23, and the name makes `bun create laddu` work) and bundles
+  the bot from `apps/api`, so one package has everything. Its bins: `laddu`, and `create-laddu`.
+- **`apps/web`**: the marketing website, laddu.wtf.
 - **`apps/api`**: the bot, unchanged as an app; it gets built into the CLI package.
 - **`install.sh`**: a small POSIX shell bootstrap, versioned in the repo and uploaded to S3.
 
@@ -30,7 +35,7 @@ The installer decides by who runs it:
 
 |               | Root                                | Normal user                             |
 | ------------- | ----------------------------------- | --------------------------------------- |
-| State         | `/var/lib/slack-dot/<name>/`        | `~/.slack-dot/<name>/`                  |
+| State         | `/var/lib/laddu/<name>/`            | `~/.laddu/<name>/`                      |
 | Service       | system unit, `/etc/systemd/system/` | user unit, `~/.config/systemd/user/`    |
 | Control       | `systemctl …`                       | `systemctl --user …`, lingering enabled |
 | Docker access | already has it                      | added to the `docker` group             |
@@ -42,15 +47,15 @@ The installer decides by who runs it:
    that group applies only from the next login, so the rest of setup runs under `sg docker`.
 3. Install Bun if it's missing.
 4. For a normal user, enable lingering (`loginctl enable-linger`) so the service survives logout.
-5. Run `bun add -g slack-dot@latest`, which puts `slack-dot` on the PATH.
-6. Run `exec slack-dot setup < /dev/tty`. With `curl | sh`, stdin is the script itself, so prompts
+5. Run `bun add -g create-laddu@latest`, which puts `laddu` on the PATH.
+6. Run `exec laddu setup < /dev/tty`. With `curl | sh`, stdin is the script itself, so prompts
    have to read from the terminal.
 
 Every step is idempotent, so running the script again repairs or resumes an install.
 
-## `slack-dot setup [--name <name>]`
+## `laddu setup [--name <name>]`
 
-The default name is `dot`. Each instance directory holds `.env`, `.data/`, `AGENTS.local.md` and
+The default name is `laddu`. Each instance directory holds `.env`, `.data/`, `AGENTS.local.md` and
 `skills.local/`.
 
 1. **Preflight**: Bun, Docker reachable, systemd, free disk space.
@@ -70,8 +75,8 @@ The default name is `dot`. Each instance directory holds `.env`, `.data/`, `AGEN
 4. **Options**, all skippable with defaults: who can use it, Docker or host runtime, desktop and
    public URL, Microsoft, CodeCommit.
 5. **Write** `.env` with every value quoted.
-6. **Service**: install the `slack-dot@.service` template unit and enable and start
-   `slack-dot@<name>`, as a system or user unit (see above).
+6. **Service**: install the `laddu@.service` template unit and enable and start
+   `laddu@<name>`, as a system or user unit (see above).
 7. **Verify**: wait for the service to be active and Slack Socket Mode to connect, then DM the
    owner "I'm up". Print what to do next.
 
@@ -93,15 +98,15 @@ The default name is `dot`. Each instance directory holds `.env`, `.data/`, `AGEN
 
 - **Slack calls:** our own code, no Slack CLI download. The calls and their parameters come from
   the Slack CLI's source (`internal/api/auth.go`, `app.go`). Slack answers the ticket calls only
-  for the Slack CLI's User-Agent, so we send that with `slack-dot` appended. If Slack changes this,
+  for the Slack CLI's User-Agent, so we send that with `laddu` appended. If Slack changes this,
   setup falls back to doing it by hand: a "create app" link with the manifest filled in, then
   pasting the two tokens.
 - **Slack app per bot:** named by the user. The slash command follows the name (`/support`), and
   the bot accepts whatever command its app has.
 - **State:** the Slack login and the app's credentials go in `.data/slack-app.json` (mode 600).
-  `slack-dot update` uses them to push manifest changes while that login can still be refreshed.
+  `laddu update` uses them to push manifest changes while that login can still be refreshed.
 - **Bot changes:** `CODEX_LOCAL_DIR` (where `AGENTS.local.md` and `skills.local/` live) and
-  `DOT_INSTANCE` (labels containers and volumes, so bots never touch each other's). With neither
+  `LADDU_INSTANCE` (labels containers and volumes, so bots never touch each other's). With neither
   set, existing deployments behave as before.
 
 ## Open questions

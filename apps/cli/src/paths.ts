@@ -4,7 +4,7 @@
 export const isRoot = (await Bun.$`id -u`.text()).trim() === "0"
 
 /** Every instance's folder lives here, one per name. */
-export const home = isRoot ? "/var/lib/slack-dot" : `${Bun.env.HOME}/.slack-dot`
+export const home = isRoot ? "/var/lib/laddu" : `${Bun.env.HOME}/.laddu`
 
 export const instanceDir = (name: string) => `${home}/${name}`
 

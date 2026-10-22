@@ -94,8 +94,8 @@ function pushProblem(body: Uint8Array, userId: string): string | null {
 			if (!match || /^0+$/.test(match[2]!))
 				return "Git branch deletion or an invalid push isn't allowed."
 			const ref = match[3]!
-			if (!ref.startsWith(`refs/heads/dot/${userId.toLowerCase()}/`))
-				return "Only your dot task branches can be pushed; open a PR to change the target branch."
+			if (!ref.startsWith(`refs/heads/laddu/${userId.toLowerCase()}/`))
+				return "Only your laddu task branches can be pushed; open a PR to change the target branch."
 			if (
 				!/^[a-zA-Z0-9._/-]+$/.test(ref) ||
 				ref.includes("..") ||

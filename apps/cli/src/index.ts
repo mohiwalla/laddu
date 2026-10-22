@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-/** `slack-dot`: set up and run dot, the Slack assistant backed by Codex. */
+/** `laddu`: set up and run laddu, the Slack assistant backed by Codex. */
 import {
 	configure,
 	doctor,
@@ -14,21 +14,21 @@ import { checkName, pickInstance } from "./instance"
 import { setup } from "./setup"
 import { bold, dim, fail } from "./terminal"
 
-const HELP = `${bold("slack-dot")}: set up and run dot, the Slack assistant backed by Codex
+const HELP = `${bold("laddu")}: set up and run laddu, the Slack assistant backed by Codex
 
-${bold("Usage")}  slack-dot <command> [--name <bot>]
+${bold("Usage")}  laddu <command> [--name <bot>]
 
   setup        Set up a bot (or fix one): Slack app, ChatGPT sign-in, service
   configure    Change a bot's settings
   login        Sign in to ChatGPT again
   doctor       Check that everything a bot needs works
-  update       Update slack-dot and restart every bot
+  update       Update laddu and restart every bot
   list         The bots on this machine
   logs [-f]    A bot's log (-f follows it)
   start | stop | restart | status
   uninstall    Remove a bot (--yes: without asking, data included)
 
-${dim("--name picks the bot; with just one, it's that one. setup's default name is \"dot\".")}
+${dim("--name picks the bot; with just one, it's that one. setup's default name is \"laddu\".")}
 `
 
 function parse(argv: string[]) {
@@ -64,7 +64,7 @@ async function main(): Promise<boolean> {
 		return true
 	}
 	if (command === "setup") {
-		const chosen = name ?? "dot"
+		const chosen = name ?? "laddu"
 		const problem = checkName(chosen)
 		if (problem) throw new Error(problem)
 		return setup(chosen)
@@ -95,7 +95,7 @@ async function main(): Promise<boolean> {
 		case "uninstall":
 			return uninstall(instance, has("yes", "y"))
 	}
-	throw new Error(`Unknown command "${command}". See \`slack-dot help\`.`)
+	throw new Error(`Unknown command "${command}". See \`laddu help\`.`)
 }
 
 try {

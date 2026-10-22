@@ -1,4 +1,4 @@
-# On a version tag (v0.1.0): publish slack-dot to npm and upload install.sh to S3.
+# On a version tag (v0.1.0): publish create-laddu (the laddu CLI) to npm and upload install.sh to S3.
 # Needs secrets NPM_TOKEN, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and variables
 # INSTALL_BUCKET (bucket name) and AWS_REGION.
 name: Release

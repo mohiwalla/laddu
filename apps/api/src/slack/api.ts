@@ -5,7 +5,7 @@ import { connection, forget } from "./user-tokens"
 export type SlackClient = App["client"]
 export type Person = { teamId: string; userId: string }
 type Method = {
-	identity: "user" | "either" | "dot"
+	identity: "user" | "either" | "laddu"
 	required: string[]
 	optional: string[]
 	scopes: string[]
@@ -219,7 +219,7 @@ add(
 	"",
 	true,
 )
-add("chat.unfurl", "dot", "links:write", "channel ts unfurls", "", true)
+add("chat.unfurl", "laddu", "links:write", "channel ts unfurls", "", true)
 for (const verb of ["add", "remove"])
 	add(
 		`reactions.${verb}`,
@@ -315,7 +315,7 @@ export function object(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value)
 }
 
-/** Even public channel writes from dot require the requester to belong to that channel. */
+/** Even public channel writes from laddu require the requester to belong to that channel. */
 export async function requireMember(
 	client: SlackClient,
 	person: Person,
@@ -386,7 +386,7 @@ export function slackFailure(error: unknown): SlackToolError {
 	const code = data?.error
 	if (code === "missing_scope")
 		return new SlackToolError(
-			`Slack needs ${data?.needed ?? "additional permissions"}. Reconnect with slack connect; the app installer may also need to reinstall dot.`,
+			`Slack needs ${data?.needed ?? "additional permissions"}. Reconnect with slack connect; the app installer may also need to reinstall laddu.`,
 			403,
 		)
 	if (code === "not_allowed_token_type")
@@ -423,10 +423,10 @@ export async function callSlack(
 	const spec = methods[input.method]
 	if (!Object.hasOwn(methods, input.method) || !spec)
 		throw new SlackToolError(
-			"Method isn't exposed by dot's Slack Free tools. Run slack methods.",
+			"Method isn't exposed by laddu's Slack Free tools. Run slack methods.",
 		)
-	if (input.as !== undefined && !["auto", "user", "dot"].includes(input.as))
-		throw new SlackToolError("Identity must be auto, user or dot.")
+	if (input.as !== undefined && !["auto", "user", "laddu"].includes(input.as))
+		throw new SlackToolError("Identity must be auto, user or laddu.")
 	const args = input.args ?? {}
 	if (!object(args))
 		throw new SlackToolError("Arguments must be a JSON object.")
@@ -440,20 +440,20 @@ export async function callSlack(
 			throw new SlackToolError(`Missing ${key} for ${input.method}.`)
 	const saved = await connection(person)
 	const identity =
-		input.as === "dot"
-			? "dot"
+		input.as === "laddu"
+			? "laddu"
 			: input.as === "user"
 				? "user"
-				: spec.identity === "dot"
-					? "dot"
+				: spec.identity === "laddu"
+					? "laddu"
 					: saved
 						? "user"
 						: spec.identity === "user"
 							? "user"
-							: "dot"
+							: "laddu"
 	if (
 		(spec.identity === "user" && identity !== "user") ||
-		(spec.identity === "dot" && identity !== "dot")
+		(spec.identity === "laddu" && identity !== "laddu")
 	)
 		throw new SlackToolError(
 			`${input.method} requires --as ${spec.identity}.`,

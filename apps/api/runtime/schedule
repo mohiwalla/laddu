@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Scheduled tasks: dot runs a task later, or on a schedule, and posts the answer to Slack.
+Scheduled tasks: laddu runs a task later, or on a schedule, and posts the answer to Slack.
 Each run is a fresh conversation that only gets the task text (and the person's memory), so write
 the task to stand on its own: what to do, for whom, and what the answer should look like.
 
@@ -9,7 +9,7 @@ the task to stand on its own: what to do, for whom, and what the answer should l
   schedule list
   schedule remove <id>
 
-Times are in the person's time zone ($DOT_TIMEZONE). The minimum recurring interval is one
+Times are in the person's time zone ($LADDU_TIMEZONE). The minimum recurring interval is one
 minute: use "* * * * *" for every minute or "*/5 * * * *" for every five minutes.
 --post: this thread (default), the channel itself, or a DM.
 A run that finds nothing worth saying replies exactly [SILENT] and nothing is posted.
@@ -21,8 +21,8 @@ import sys
 import urllib.error
 import urllib.request
 
-API = os.environ.get("DOT_API")
-CALLER = os.environ.get("DOT_CALLER")
+API = os.environ.get("LADDU_API")
+CALLER = os.environ.get("LADDU_CALLER")
 
 
 def call(method, path, body=None):
@@ -32,7 +32,7 @@ def call(method, path, body=None):
         f"{API}{path}",
         method=method,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"x-dot-caller": CALLER, "content-type": "application/json"},
+        headers={"x-laddu-caller": CALLER, "content-type": "application/json"},
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
@@ -67,7 +67,7 @@ def main():
     elif args.command == "remove":
         call("DELETE", f"/schedule/{args.id}")
     else:
-        body = {"task": args.task, "name": args.name, "post": args.post, "timezone": os.environ.get("DOT_TIMEZONE", "UTC")}
+        body = {"task": args.task, "name": args.name, "post": args.post, "timezone": os.environ.get("LADDU_TIMEZONE", "UTC")}
         body["at" if args.at else "cron"] = args.at or args.cron
         call("POST", "/schedule", body)
 

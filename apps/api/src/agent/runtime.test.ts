@@ -10,8 +10,8 @@ for (const tool of ["desktop", "memory", "recall"]) {
 			const child = Bun.spawn(["python3", command, flag], {
 				env: {
 					...Bun.env,
-					DOT_HISTORY_DIR: "/dev/null/history",
-					DOT_MEMORY_DIR: "/dev/null/memory",
+					LADDU_HISTORY_DIR: "/dev/null/history",
+					LADDU_MEMORY_DIR: "/dev/null/memory",
 				},
 				stdout: "pipe",
 				stderr: "pipe",
@@ -53,7 +53,7 @@ test("desktop exec supplies the desktop session and preserves the child exit cod
 	const command = Bun.fileURLToPath(
 		new URL("../../runtime/desktop", import.meta.url),
 	)
-	const fixture = `/tmp/dot-desktop-test-${crypto.randomUUID()}.json`
+	const fixture = `/tmp/laddu-desktop-test-${crypto.randomUUID()}.json`
 	await Bun.write(
 		fixture,
 		JSON.stringify({

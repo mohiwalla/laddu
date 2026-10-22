@@ -16,7 +16,7 @@ SSH to a tailnet machine goes through it with this in ~/.ssh/config, per host:
   Host batman
     HostName batman
     User <their user name on it>
-    ProxyCommand /opt/dot/runtime/bin/tailnet nc %h %p
+    ProxyCommand /opt/laddu/runtime/bin/tailnet nc %h %p
 """
 import json
 import os
@@ -80,7 +80,7 @@ def up():
         return status()
     if not found.get("AuthURL"):
         subprocess.Popen(
-            ["tailscale", f"--socket={SOCKET}", "up", "--hostname=dot", "--accept-dns=false"],
+            ["tailscale", f"--socket={SOCKET}", "up", "--hostname=laddu", "--accept-dns=false"],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True,
         )

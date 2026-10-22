@@ -1,12 +1,12 @@
 /**
- * A small API for dot's commands inside a container that need the bot itself: `schedule`, `ado`
+ * A small API for laddu's commands inside a container that need the bot itself: `schedule`, `ado`
  * (Azure DevOps) and `ms` (Microsoft 365), whose tokens stay here, `slack` (find people, DM
- * them as the person or from dot, ask them questions) and `desktop link`.
+ * them as the person or from laddu, ask them questions) and `desktop link`.
  *
  * Each Codex turn gets a caller credential signed by this process: who the turn runs for and the
  * Slack thread it came from. The command sends it back, so a request can only act as that person,
  * in that conversation; changing any part of it breaks the signature. The variable is named
- * DOT_CALLER (no KEY/TOKEN/SECRET) so Codex passes it to the commands it runs. Listens on the
+ * LADDU_CALLER (no KEY/TOKEN/SECRET) so Codex passes it to the commands it runs. Listens on the
  * Docker bridge address (host runtime: localhost), like the model proxy.
  */
 import type { App } from "@slack/bolt"
@@ -212,7 +212,7 @@ async function handleConnection(
 		return reply(
 			200,
 			(await microsoft.disconnect(person))
-				? "Disconnected; dot no longer keeps their Microsoft sign-in (Azure DevOps and Microsoft 365)."
+				? "Disconnected; laddu no longer keeps their Microsoft sign-in (Azure DevOps and Microsoft 365)."
 				: "They weren't connected.",
 		)
 	return null
@@ -359,7 +359,10 @@ async function handleDesktopLink(
 ): Promise<Response> {
 	if (request.method !== "POST") return reply(405, "Use POST.")
 	if (!deps.config.desktop)
-		return reply(501, "dot's computer is turned off on this bot (DESKTOP).")
+		return reply(
+			501,
+			"laddu's computer is turned off on this bot (DESKTOP).",
+		)
 	if (caller.scheduled)
 		return reply(
 			403,
@@ -389,7 +392,7 @@ async function handleDesktopLink(
 	)
 }
 
-/** `slack`: look people up, DM them (as the person once they've connected Slack, or from dot). */
+/** `slack`: look people up, DM them (as the person once they've connected Slack, or from laddu). */
 async function handleSlack(
 	request: Request,
 	caller: Caller,
@@ -432,7 +435,7 @@ async function handleSlack(
 				)
 					return reply(
 						400,
-						"Give a method and optional identity (auto, user, dot).",
+						"Give a method and optional identity (auto, user, laddu).",
 					)
 				const result = JSON.stringify(
 					await callSlack(deps.client, person, {
@@ -482,7 +485,7 @@ async function handleSlack(
 		return reply(
 			200,
 			(await slackSignIn.disconnect(deps.client, person))
-				? "Disconnected; dot no longer keeps their Slack sign-in, and DMs come from dot."
+				? "Disconnected; laddu no longer keeps their Slack sign-in, and DMs come from laddu."
 				: "They weren't connected.",
 		)
 	if (request.method !== "POST") return reply(405, "Use POST.")
@@ -490,14 +493,14 @@ async function handleSlack(
 		query?: string
 		to?: string
 		text?: string
-		fromDot?: boolean
+		fromLaddu?: boolean
 	}
 	try {
 		if (action === "connect") {
 			if (!deps.config.slackSignIn)
 				return reply(
 					501,
-					"Sending as people isn't set up on this bot (the person running it needs to add SLACK_CLIENT_ID and SLACK_CLIENT_SECRET; see docs/SETUP.md). DMs can still come from dot.",
+					"Sending as people isn't set up on this bot (the person running it needs to add SLACK_CLIENT_ID and SLACK_CLIENT_SECRET; see docs/SETUP.md). DMs can still come from laddu.",
 				)
 			if (caller.scheduled)
 				return reply(403, "A scheduled run can't start a sign-in.")
@@ -522,8 +525,8 @@ async function handleSlack(
 				{ teamId: caller.teamId, userId: caller.userId },
 				body.to ?? "",
 				body.text ?? "",
-				// Without sign-in set up on this bot, DMs can only come from dot.
-				body.fromDot === true || !signIn,
+				// Without sign-in set up on this bot, DMs can only come from laddu.
+				body.fromLaddu === true || !signIn,
 			)
 			// Not connected yet is a step, not a failure: send them the link and say so.
 			if (
@@ -534,7 +537,7 @@ async function handleSlack(
 			)
 				return reply(
 					200,
-					`Not sent yet: their Slack account isn't connected, so it can't come from them. ${await slackSignIn.connect(signIn, deps.client, person)} (Or send it from dot now with \`slack dm --from-dot\`.)`,
+					`Not sent yet: their Slack account isn't connected, so it can't come from them. ${await slackSignIn.connect(signIn, deps.client, person)} (Or send it from laddu now with \`slack dm --from-laddu\`.)`,
 				)
 			return reply(result.ok ? 200 : 400, result.text)
 		}
@@ -642,7 +645,7 @@ export function startBotApi(hostname: string, deps: Deps): BotApi {
 		idleTimeout: 255,
 		maxRequestBodySize: 52 * 1024 * 1024,
 		async fetch(request) {
-			const caller = verify(request.headers.get("x-dot-caller"))
+			const caller = verify(request.headers.get("x-laddu-caller"))
 			if (!caller)
 				return reply(
 					401,

@@ -1,4 +1,4 @@
-# Per-user runtime for dot: every Slack user gets their own container from this image.
+# Per-user runtime for laddu: every Slack user gets their own container from this image.
 # Their agent (Codex or OpenCode) runs inside it, so whatever it executes only sees this
 # container, never the host.
 # Built by src/agent/containers.ts; the build context also holds `codex/`, the platform
@@ -17,9 +17,9 @@ RUN apt-get update \
       fonts-dejavu-core fonts-noto-color-emoji \
  && rm -rf /var/lib/apt/lists/*
 
-RUN useradd --create-home --uid 1000 --shell /bin/bash dot \
- && mkdir -p /home/dot/workspace /home/dot/.codex \
- && chown -R dot:dot /home/dot
+RUN useradd --create-home --uid 1000 --shell /bin/bash laddu \
+ && mkdir -p /home/laddu/workspace /home/laddu/.codex \
+ && chown -R laddu:laddu /home/laddu
 
 COPY codex /opt/codex
 
@@ -29,7 +29,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends iptables \
  && rm -rf /var/lib/apt/lists/*
 
-# dot's computer (runtime/desktop, started when first used): KasmVNC is the display and the web
+# laddu's computer (runtime/desktop, started when first used): KasmVNC is the display and the web
 # viewer people watch it in (its "watch" login can only look); XFCE is the desktop; Chromium and
 # the usual apps. AT-SPI exposes on-screen controls by name, xdotool sends real mouse and keyboard
 # input, wmctrl/xclip handle windows and the clipboard. About 1 GB.
@@ -45,11 +45,11 @@ RUN arch="$(dpkg --print-architecture)" \
       xdotool wmctrl xclip x11-utils x11-xserver-utils \
       chromium fonts-liberation \
  && rm -rf /var/lib/apt/lists/* /tmp/kasmvnc.deb
-# For every Chromium launch (from dot, the menu, or someone who took control): the container is
+# For every Chromium launch (from laddu, the menu, or someone who took control): the container is
 # the sandbox (Chromium's own needs namespaces the container doesn't grant), pages appear in the
 # accessibility tree, and saved passwords work without a desktop keyring.
 RUN printf '%s\n' 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --test-type --force-renderer-accessibility --password-store=basic --no-first-run --no-default-browser-check"' \
-      > /etc/chromium.d/dot
+      > /etc/chromium.d/laddu
 # Fonts for the desktop and the pages it shows: Inter for the interface and sans-serif text
 # (instead of DejaVu), also where pages ask for Apple, Windows or Android UI fonts by name;
 # JetBrains Mono for code; Noto CJK so Chinese, Japanese and Korean aren't boxes. Grayscale
@@ -142,13 +142,13 @@ RUN apt-get update \
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3-venv \
  && rm -rf /var/lib/apt/lists/* \
- && python3 -m venv /opt/dot/audio \
- && /opt/dot/audio/bin/pip install --no-cache-dir \
+ && python3 -m venv /opt/laddu/audio \
+ && /opt/laddu/audio/bin/pip install --no-cache-dir \
       faster-whisper==1.2.1 av==16.1.0 ctranslate2==4.8.3 \
- && /opt/dot/audio/bin/python -c 'from faster_whisper.utils import download_model; download_model("base", output_dir="/opt/dot/audio/model", revision="ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66")' \
- && /opt/dot/audio/bin/pip check
+ && /opt/laddu/audio/bin/python -c 'from faster_whisper.utils import download_model; download_model("base", output_dir="/opt/laddu/audio/model", revision="ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66")' \
+ && /opt/laddu/audio/bin/pip check
 
-# OpenCode, dot's other agent (src/agent/opencode.ts): one binary from its npm platform package.
+# OpenCode, laddu's other agent (src/agent/opencode.ts): one binary from its npm platform package.
 ARG OPENCODE=1.19.3
 RUN case "$(dpkg --print-architecture)" in amd64) platform=x64 ;; arm64) platform=arm64 ;; esac \
  && curl -fsSL "https://registry.npmjs.org/opencode-linux-${platform}/-/opencode-linux-${platform}-${OPENCODE}.tgz" \
@@ -168,8 +168,8 @@ RUN apt-get update \
  && install -m 755 /tmp/tailscale_${TAILSCALE}_${arch}/tailscale /tmp/tailscale_${TAILSCALE}_${arch}/tailscaled /usr/local/bin/ \
  && rm -rf /tmp/tailscale_*
 
-USER dot
-WORKDIR /home/dot/workspace
-ENV HOME=/home/dot CODEX_HOME=/home/dot/.codex PATH=/opt/codex/bin:/opt/codex/codex-path:$PATH \
+USER laddu
+WORKDIR /home/laddu/workspace
+ENV HOME=/home/laddu CODEX_HOME=/home/laddu/.codex PATH=/opt/codex/bin:/opt/codex/codex-path:$PATH \
     MPLBACKEND=Agg
 CMD ["sleep", "infinity"]

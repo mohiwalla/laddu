@@ -1,5 +1,5 @@
 /**
- * Builds the npm package `slack-dot` in dist/: this CLI plus the bot (apps/api) it sets up and
+ * Builds the npm package `create-laddu` in dist/: this CLI plus the bot (apps/api) it sets up and
  * runs. Bun runs the TypeScript as is, so it's a copy, not a bundle. Publish with
  * `npm publish dist` (CI does, on each version tag).
  */
@@ -36,18 +36,18 @@ await Bun.$`find ${dist} ${["(", ...excluded.flatMap((name, index) => [...(index
 
 await Bun.write(
 	`${dist}/bot/package.json`,
-	`${JSON.stringify({ name: "@slack-dot/bot", private: true, type: "module" }, null, "\t")}\n`,
+	`${JSON.stringify({ name: "@laddu/bot", private: true, type: "module" }, null, "\t")}\n`,
 )
 await Bun.write(
 	`${dist}/package.json`,
 	`${JSON.stringify(
 		{
-			name: "slack-dot",
+			name: "create-laddu",
 			version: cli.version,
 			description: cli.description,
 			type: "module",
 			license: "UNLICENSED",
-			bin: { "slack-dot": "cli/index.ts" },
+			bin: { laddu: "cli/index.ts", "create-laddu": "cli/create.ts" },
 			engines: { bun: ">=1.4" },
 			os: ["linux"],
 			dependencies: bot.dependencies,
@@ -57,5 +57,5 @@ await Bun.write(
 	)}\n`,
 )
 await Bun.$`cp ${root}README.md ${dist}/README.md`
-await Bun.$`chmod 755 ${dist}/cli/index.ts`
-console.log(`Built slack-dot ${cli.version} in ${dist}`)
+await Bun.$`chmod 755 ${dist}/cli/index.ts ${dist}/cli/create.ts`
+console.log(`Built laddu ${cli.version} in ${dist}`)

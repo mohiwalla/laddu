@@ -2,7 +2,7 @@
 """
 Microsoft 365 (Outlook, Calendar, OneDrive, SharePoint, Teams, Planner) as the person you're
 working for, through Microsoft Graph. Their sign-in stays with the bot; requests go through it.
-Reads and changes happen straight away, as them. Times are in their time zone ($DOT_TIMEZONE).
+Reads and changes happen straight away, as them. Times are in their time zone ($LADDU_TIMEZONE).
 
   ms status | connect | disconnect          connection (one Microsoft sign-in, shared with `ado`)
 
@@ -54,9 +54,9 @@ import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-API = os.environ.get("DOT_API")
-CALLER = os.environ.get("DOT_CALLER")
-ZONE = ZoneInfo(os.environ.get("DOT_TIMEZONE") or "UTC")
+API = os.environ.get("LADDU_API")
+CALLER = os.environ.get("LADDU_CALLER")
+ZONE = ZoneInfo(os.environ.get("LADDU_TIMEZONE") or "UTC")
 
 
 def bot(method, path, body=None, raw=None, content_type="application/json", binary=False, soft=False):
@@ -64,7 +64,7 @@ def bot(method, path, body=None, raw=None, content_type="application/json", bina
         sys.exit("error: Microsoft 365 isn't available here (no connection to the bot in this turn).")
     data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
     request = urllib.request.Request(f"{API}/ms/{path}", method=method, data=data,
-                                     headers={"x-dot-caller": CALLER, "content-type": content_type})
+                                     headers={"x-laddu-caller": CALLER, "content-type": content_type})
     try:
         with urllib.request.urlopen(request, timeout=300) as response:
             return response.read() if binary else json.load(response)["text"]
@@ -254,7 +254,7 @@ def files(args):
             "fields": ["name", "webUrl", "lastModifiedDateTime", "lastModifiedBy", "parentReference", "size"]}]}, soft=True)
         if found is None:
             # Organization-wide search needs Files.Read.All/Sites.Read.All; fall back to their OneDrive.
-            print("(Searching their OneDrive only: dot can't search SharePoint on this account.)")
+            print("(Searching their OneDrive only: laddu can't search SharePoint on this account.)")
             mine = graph("GET", f"me/drive/root/search(q='{q(args.words.replace(chr(39), ''))}')?$top={args.top}"
                                 "&$select=id,name,webUrl,lastModifiedDateTime,lastModifiedBy,parentReference")
             found = {"value": [{"hitsContainers": [{"hits": [{"resource": item} for item in mine.get("value", [])]}]}]}

@@ -1,5 +1,5 @@
 /**
- * Each instance runs as `slack-dot@<name>`, from one systemd template unit: system-wide when
+ * Each instance runs as `laddu@<name>`, from one systemd template unit: system-wide when
  * installed as root, else this user's (with lingering, so it survives logout).
  */
 import { botRoot, bun, home, isRoot } from "./paths"
@@ -7,18 +7,18 @@ import { botRoot, bun, home, isRoot } from "./paths"
 const systemctl = isRoot ? ["systemctl"] : ["systemctl", "--user"]
 const journal = isRoot ? ["journalctl"] : ["journalctl", "--user"]
 
-export const unitName = (name: string) => `slack-dot@${name}.service`
+export const unitName = (name: string) => `laddu@${name}.service`
 
 const unitPath = isRoot
-	? "/etc/systemd/system/slack-dot@.service"
-	: `${Bun.env.HOME}/.config/systemd/user/slack-dot@.service`
+	? "/etc/systemd/system/laddu@.service"
+	: `${Bun.env.HOME}/.config/systemd/user/laddu@.service`
 
 /** The template unit; %i is the instance's name. */
 export function unitText(): string {
 	const bunDir = bun.slice(0, bun.lastIndexOf("/"))
-	return `# Written by slack-dot; \`slack-dot update\` rewrites it.
+	return `# Written by laddu; \`laddu update\` rewrites it.
 [Unit]
-Description=slack-dot bot (%i)
+Description=laddu bot (%i)
 After=network-online.target${isRoot ? " docker.service" : ""}
 Wants=network-online.target
 
@@ -67,7 +67,7 @@ export async function state(name: string): Promise<string> {
 	).trim()
 }
 
-/** Follows the instance's log in the terminal (`slack-dot logs`). */
+/** Follows the instance's log in the terminal (`laddu logs`). */
 export async function followLogs(name: string, follow: boolean, lines = 100) {
 	const args = [
 		...journal,
