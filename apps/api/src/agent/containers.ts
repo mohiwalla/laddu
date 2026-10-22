@@ -257,8 +257,9 @@ export function ensureContainer(
 			...(config.desktop ? ["--shm-size", "1g"] : []),
 			"--cpus",
 			"2",
+			// Counts threads, not processes: Chromium alone runs ~450, which starved a 512 limit.
 			"--pids-limit",
-			"512",
+			config.desktop ? "4096" : "512",
 			"--cap-drop",
 			"ALL",
 			"--security-opt",

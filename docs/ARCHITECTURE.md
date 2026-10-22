@@ -126,7 +126,7 @@ Everything Codex executes runs in a Docker container dedicated to the Slack user
 labels and renamed in place when the name changes):
 
 - Non-root user `dot`, all Linux capabilities dropped, `no-new-privileges`, no sudo; 3 GB memory
-  (2 GB without the desktop), 2 CPUs, 512 processes, 1 GB shared memory for Chromium.
+  (2 GB without the desktop), 2 CPUs, 4096 threads (512 without the desktop), 1 GB shared memory for Chromium.
 - No host files except the persona and Codex config, both read-only. A named volume
   (`dot-home-<team>-<user>`) keeps the user's workspace and Codex sessions; nobody else sees it.
 - Internet access on (Codex needs it to reach the model proxy; users need it for `curl`).
