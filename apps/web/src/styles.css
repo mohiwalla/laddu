@@ -20,7 +20,7 @@
 	--radius: 32px;
 	--display: "Fredoka", "Nunito", system-ui, sans-serif;
 	--body: "Nunito", system-ui, sans-serif;
-	--deva: "Baloo 2", "Noto Sans Devanagari", sans-serif;
+	--gurmukhi: "Baloo Paaji 2", "Noto Sans Gurmukhi", sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -100,8 +100,8 @@ p {
 	margin: 0;
 }
 
-.deva {
-	font-family: var(--deva);
+.pa {
+	font-family: var(--gurmukhi);
 	font-weight: 600;
 }
 
@@ -292,7 +292,7 @@ p {
 	font-size: 1.05rem;
 }
 
-.hello .deva {
+.hello .pa {
 	color: var(--accent);
 	font-size: 1.15rem;
 	line-height: 1;
@@ -983,7 +983,7 @@ p {
 	margin-top: 16px;
 }
 
-.friend h3 .deva {
+.friend h3 .pa {
 	display: block;
 	margin-top: 4px;
 	font-size: 1.05rem;

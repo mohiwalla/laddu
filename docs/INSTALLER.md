@@ -7,7 +7,7 @@ Status: built (`apps/cli`). Not yet run end to end against a real Slack workspac
 On a blank Linux server, one command gets you to a working bot you can DM in Slack:
 
 ```sh
-curl -fsSL https://<s3-host>/install.sh | sh
+curl -fsSL https://laddu.wtf/install.sh | sh
 ```
 
 No second command. The script installs everything and runs the whole setup in the same session.
@@ -24,9 +24,11 @@ installed and bunx's copy is a throwaway cache, then runs `laddu setup` (`apps/c
   the bot from `apps/api`, so one package has everything. Its bins: `laddu`, and `create-laddu`.
 - **`apps/web`**: the marketing website, laddu.wtf.
 - **`apps/api`**: the bot, unchanged as an app; it gets built into the CLI package.
-- **`install.sh`**: a small POSIX shell bootstrap, versioned in the repo and uploaded to S3.
+- **`install.sh`**: a small POSIX shell bootstrap, versioned in the repo and served by the site
+  (`apps/web/build.ts` copies it into `dist/`).
 
-CI publishes the npm package and uploads `install.sh` to S3 whenever a git tag is pushed. The
+CI publishes the npm package whenever a version tag is pushed; the site serves `install.sh` from
+the same commit once it deploys. The
 installed package is code only and never written to; each instance keeps its own state.
 
 ## Root vs. user
@@ -92,7 +94,7 @@ The default name is `laddu`. Each instance directory holds `.env`, `.data/`, `AG
 - `apps/cli` builds a package with the CLI entry point plus the bot and its non-code files
   (manifest, `agent-home`, `runtime`, `assets`).
 - `login` gains the paste-the-redirect-URL mode.
-- CI: on each tag, publish to npm and upload `install.sh` to S3.
+- CI: on each tag, publish to npm.
 
 ## How it's built
 
@@ -112,4 +114,3 @@ The default name is `laddu`. Each instance directory holds `.env`, `.data/`, `AG
 ## Open questions
 
 - **Licence:** the package is published as `UNLICENSED` until we pick one.
-- **Install host:** the S3 address for `install.sh` (`<install-host>` in the docs).

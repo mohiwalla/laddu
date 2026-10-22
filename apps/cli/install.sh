@@ -1,8 +1,8 @@
 #!/bin/sh
 # laddu installer: everything from a blank Linux server to a bot answering in Slack.
 #
-#   curl -fsSL https://<install-host>/install.sh | sh
-#   curl -fsSL https://<install-host>/install.sh | sh -s -- --name support
+#   curl -fsSL https://laddu.wtf/install.sh | sh
+#   curl -fsSL https://laddu.wtf/install.sh | sh -s -- --name support
 #
 # Installs what's missing (Docker, Bun), installs the laddu CLI, then runs `laddu setup`
 # with any arguments given. As root, the bot runs as a system service; as anyone else, as that

@@ -1,6 +1,5 @@
-# On a version tag (v0.1.0): publish create-laddu (the laddu CLI) to npm and upload install.sh to S3.
-# Needs secrets NPM_TOKEN, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and variables
-# INSTALL_BUCKET (bucket name) and AWS_REGION.
+# On a version tag (v0.1.0): publish create-laddu (the laddu CLI) to npm. Needs the secret
+# NPM_TOKEN. install.sh needs no step: laddu.wtf serves it (apps/web/build.ts).
 name: Release
 
 on:
@@ -30,11 +29,3 @@ jobs:
       - run: npm publish apps/cli/dist --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Upload install.sh
-        run: >-
-          aws s3 cp apps/cli/install.sh "s3://${{ vars.INSTALL_BUCKET }}/install.sh"
-          --content-type text/x-shellscript --cache-control max-age=300
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}

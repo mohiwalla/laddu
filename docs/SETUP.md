@@ -3,7 +3,7 @@
 ## On a server: one command
 
 ```sh
-curl -fsSL https://<install-host>/install.sh | sh
+curl -fsSL https://laddu.wtf/install.sh | sh
 ```
 
 This installs Docker and Bun if they're missing, installs the `laddu` CLI (`apps/cli`), and runs

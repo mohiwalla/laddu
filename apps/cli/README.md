@@ -3,7 +3,7 @@
 Set up and run **laddu**, a Slack assistant backed by Codex on your ChatGPT plan, on a Linux server.
 
 ```sh
-curl -fsSL https://<install-host>/install.sh | sh
+curl -fsSL https://laddu.wtf/install.sh | sh
 ```
 
 That one command installs Docker and Bun if they're missing, installs this CLI, and runs
