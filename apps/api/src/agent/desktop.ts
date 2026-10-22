@@ -550,10 +550,23 @@ export async function desktopLink(
 /** Where this person opens the viewer: their tailnet address if they're listed for it. */
 function viewerUrl(config: BotConfig, owner: Owner): string {
 	const { publicUrl, tailnetUrl, tailnetUsers } = config.desktopViewer
-	return tailnetUrl &&
-		(tailnetUsers === "*" || tailnetUsers.has(owner.userId))
-		? tailnetUrl
-		: publicUrl
+	return tailnetUrl && tailnetUsers.has(owner.userId) ? tailnetUrl : publicUrl
+}
+
+/**
+ * Who's asking on the tailnet listener: `tailscale serve` sets the person's Tailscale login on
+ * every request (replacing any the browser sent), and only it can reach that port.
+ */
+function tailnetOwner(
+	config: BotConfig,
+	teamId: string | undefined,
+	request: Request,
+): Owner | null {
+	const login = request.headers.get("tailscale-user-login")
+	if (!teamId || !login) return null
+	for (const [userId, allowed] of config.desktopViewer.tailnetUsers)
+		if (allowed === login) return { teamId, userId }
+	return null
 }
 
 // ---- where people find their link ---------------------------------------------------------
@@ -793,8 +806,10 @@ export function startDesktopGateway(
 	config: BotConfig,
 	slackOAuth?: (request: Request) => Promise<Response>,
 	slackHome?: string,
+	teamId?: string,
 ): void {
-	const { host, port, publicUrl, tailnetUrl } = config.desktopViewer
+	const { host, port, publicUrl, tailnetUrl, tailnetPort } =
+		config.desktopViewer
 	const secure = publicUrl.startsWith("https:")
 	const origins = new Set(
 		[publicUrl, tailnetUrl].flatMap(url => (url ? [new URL(url).origin] : [])),
@@ -803,9 +818,10 @@ export function startDesktopGateway(
 		? { href: slackHome, label: "Open dot in Slack" }
 		: undefined
 
-	const serve = () =>
+	/** `tailnet`: the listener behind `tailscale serve`, where Tailscale says who's asking. */
+	const serve = (port: number, tailnet: boolean) =>
 		Bun.serve<Socket>({
-			hostname: host,
+			hostname: tailnet ? "127.0.0.1" : host,
 			port,
 			// The events stream stays open as long as the page does.
 			idleTimeout: 0,
@@ -842,7 +858,9 @@ export function startDesktopGateway(
 					})
 				}
 
-				const grant = await verify(cookie(request, COOKIE))
+				const grant =
+					(await verify(cookie(request, COOKIE))) ??
+					(tailnet ? tailnetOwner(config, teamId, request) : null)
 				if (!grant)
 					return page(
 						401,
@@ -1009,7 +1027,8 @@ export function startDesktopGateway(
 			},
 		})
 	try {
-		serve()
+		serve(port, false)
+		if (tailnetUrl) serve(tailnetPort, true)
 	} catch (error) {
 		// Most likely another bot process (another workspace) has the port: dot still works, but
 		// its links won't open. Each workspace needs its own DESKTOP_VIEWER_PORT.
@@ -1020,7 +1039,7 @@ export function startDesktopGateway(
 		return
 	}
 	console.log(
-		`[desktop] viewer gateway on ${host}:${port} (links: ${publicUrl}${tailnetUrl ? `, ${tailnetUrl} for DESKTOP_TAILNET_USERS` : ""})`,
+		`[desktop] viewer gateway on ${host}:${port} (links: ${publicUrl})${tailnetUrl ? `; tailnet on 127.0.0.1:${tailnetPort} (${tailnetUrl})` : ""}`,
 	)
 }
 

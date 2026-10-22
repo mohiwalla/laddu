@@ -396,8 +396,9 @@ offline).
 | `DESKTOP_VIEWER_HOST`    | `127.0.0.1`             | Where the viewer gateway listens                                                                                 |
 | `DESKTOP_VIEWER_PORT`    | `6900`                  |                                                                                                                  |
 | `DESKTOP_PUBLIC_URL`     | `http://localhost:6900` | What watch/control links point to: a tunnel or an HTTPS domain when people open them from elsewhere              |
-| `DESKTOP_TAILNET_URL`    | none                    | This machine on Tailscale (`tailscale serve --bg --https=443 http://127.0.0.1:6900`), for the people below       |
-| `DESKTOP_TAILNET_USERS`  | nobody                  | Whose links point to `DESKTOP_TAILNET_URL` instead: `"*"` or member IDs, all on the tailnet; much faster than a tunnel|
+| `DESKTOP_TAILNET_URL`    | none                    | This machine on Tailscale: `tailscale serve --bg --https=443 http://127.0.0.1:6901`                              |
+| `DESKTOP_TAILNET_PORT`   | viewer port + 1         | The gateway's local port for `tailscale serve`; only it should reach this one                                    |
+| `DESKTOP_TAILNET_USERS`  | nobody                  | `U0123=name@github,…`: Slack member → Tailscale login. Their links point to the tailnet address (much faster than a tunnel), which also opens for them without a link|
 | `DESKTOP_IDLE_MINUTES`   | `10`                    | A desktop with no actions and no viewers this long is stopped (files and logins stay)                            |
 | `DATA_DIR`               | `.data`                 | Credentials, sessions, the bot's `CODEX_HOME`                                                                    |
 | `APP_NAME`               | `slack-codex-bot`       | Name shown on the ChatGPT consent screen at first registration                                                   |

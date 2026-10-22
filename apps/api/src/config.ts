@@ -67,13 +67,27 @@ export function loadBotConfig() {
 			`http://localhost:${port}`,
 		).replace(/\/$/, "")
 		/**
-		 * A second address for the people in `tailnetUsers` (e.g. `tailscale serve` on this machine):
-		 * their links point there, straight over their tailnet instead of through the tunnel.
+		 * A second address for the people in `tailnetUsers`: `tailscale serve` on this machine, in
+		 * front of the gateway's `tailnetPort` (local, its own port so the tunnel can't reach it).
+		 * Their links point there, straight over their tailnet instead of through the tunnel, and
+		 * it opens for them without a link: Tailscale tells the gateway who's asking.
 		 */
 		const tailnetUrl =
 			Bun.env.DESKTOP_TAILNET_URL?.trim().replace(/\/$/, "") || undefined
-		const tailnetUsers = users(optional("DESKTOP_TAILNET_USERS", ""))
-		return { host, port, publicUrl, tailnetUrl, tailnetUsers }
+		const tailnetPort = Number(
+			optional("DESKTOP_TAILNET_PORT", String(port + 1)),
+		)
+		/** Slack member ID → their Tailscale login: "U0123=name@github,U0456=…". */
+		const tailnetUsers = new Map(
+			optional("DESKTOP_TAILNET_USERS", "")
+				.split(",")
+				.filter(pair => pair.includes("="))
+				.map(pair => {
+					const [userId, login] = pair.split("=").map(part => part.trim())
+					return [userId!, login!] as const
+				}),
+		)
+		return { host, port, publicUrl, tailnetUrl, tailnetPort, tailnetUsers }
 	})()
 	return {
 		slackBotToken: required("SLACK_BOT_TOKEN"),

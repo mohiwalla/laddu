@@ -72,6 +72,7 @@ if (config.desktop || slackSignIn) {
 		appId
 			? `slack://app?team=${auth.team_id}&id=${appId}&tab=home`
 			: undefined,
+		auth.team_id,
 	)
 }
 if (config.desktop) startDesktopReaper(config)
