@@ -203,6 +203,7 @@ test.each(["success", "failure", "stop"] as const)(
 				app,
 				{
 					allowedUsers: new Set([userId]),
+					codexUsers: "*",
 					agent: "codex",
 				} as BotConfig,
 				botUserId,

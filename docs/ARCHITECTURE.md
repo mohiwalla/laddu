@@ -522,38 +522,14 @@ Docs: [SIWC overview](https://developers.openai.com/siwc/token-sharing-open-sour
 - **Integrations vs. multi-user.** Anything private wired in later (email, repos) would be reachable
   by every allowed user unless scoped per user.
 
-## Roadmap
-
-**V0 (now).** Slack context, per-person Azure DevOps and Microsoft 365, computer use, scheduled
-tasks, Slack DMs and coding tasks in isolated checkouts ending in a draft Azure Repos PR.
-
-**V1.**
-
-- A context map: project names → repos, trackers and docs, so questions about progress
-  land on the right sources.
-- Deeper Slack context: older history when the tagged message needs it.
-
-**Later.**
-
-- dot's computer, next: pause Codex while someone has control, a Stop button on the viewer page,
-  a success rate on a subset of OSWorld tasks.
-- A dashboard app for running tasks.
-- Guardrails: per-task sandboxes, an audit log of changes.
-- Per-user billing (each user signs in with their own ChatGPT) and per-user usage caps.
-
-## Known V0 limitations
-
-- In channels the bot only responds when tagged, including in threads it's already in.
-- In DMs every message is handled, and each top-level DM starts its own thread.
-- Files attached to messages new this turn (up to 100 MB each, 20 per turn) are saved in the user's
-  workspace under `slack-files/` (host runtime: `.data/slack-files/<team>-<user>/`); PNG, JPEG,
-  WebP and GIF up to 20 MB are also shown to the model. Codex reads other formats with its own tools.
 ## The other brain: OpenCode over ACP
 
 Each person picks their agent on dot's Home tab (`preferences.ts`; `DOT_AGENT` is the default), and
 everything for them runs on it, background memory reviews included. The second agent is
 [OpenCode](https://opencode.ai) on its free models: no sign-in, no plan. Free models may keep what
-they're sent; dot is experimental, so that's accepted.
+they're sent; dot is experimental, so that's accepted. `CODEX_USERS` limits who can run on Codex
+(the owner's ChatGPT plan); everyone else is on OpenCode whatever `DOT_AGENT` or their pick says, and
+their Home tab doesn't offer Codex.
 
 dot talks to it over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP), the open
 protocol most coding agents speak (Claude, Antigravity, Gemini, Codex and about 40 more in the
@@ -573,6 +549,33 @@ live in the container's home volume; a thread remembers which agent it used, and
 starts it over. The model list on the Home tab is `opencode models opencode` in the image, free
 ones only; images are sent only to models that take them.
 
+## Roadmap
+
+**V0 (now).** Slack context, per-person Azure DevOps and Microsoft 365, computer use, scheduled
+tasks, Slack DMs and coding tasks in isolated checkouts ending in a draft Azure Repos PR.
+
+**V1.**
+
+- A context map: project names → repos, trackers and docs, so questions about progress
+  land on the right sources.
+- Deeper Slack context: older history when the tagged message needs it.
+
+**Later.**
+
+- dot's computer, next: pause Codex while someone has control, a Stop button on the viewer page,
+  a success rate on a subset of OSWorld tasks.
+- A dashboard app for running tasks.
+- Guardrails: per-task sandboxes, an audit log of changes.
+- More agents over ACP: Claude, Antigravity, DeepSeek (through OpenCode) with each person's sign-in.
+- Per-user billing (each user signs in with their own ChatGPT) and per-user usage caps.
+
+## Known V0 limitations
+
+- In channels the bot only responds when tagged, including in threads it's already in.
+- In DMs every message is handled, and each top-level DM starts its own thread.
+- Files attached to messages new this turn (up to 100 MB each, 20 per turn) are saved in the user's
+  workspace under `slack-files/` (host runtime: `.data/slack-files/<team>-<user>/`); PNG, JPEG,
+  WebP and GIF up to 20 MB are also shown to the model. Codex reads other formats with its own tools.
 - Slack links in the new messages (typed, unfurled or forwarded; up to 3) are read through the API
   and added to the transcript with their attachments, up to 100 messages each. Private channels and
   DMs only if the person asking is a member, so a link can't expose what they couldn't read.
@@ -590,5 +593,4 @@ ones only; images are sent only to models that take them.
 - A running answer can't be cancelled from Slack. (`runTurn` takes an `AbortSignal` that also ends
   the run inside the container, but no Slack control uses it: a Stop button can only be shared,
   where everyone sees it, or private, where Slack can't remove it afterwards.)
-- More agents over ACP: Claude, Antigravity, DeepSeek (through OpenCode) with each person's sign-in.
 - State is in local JSON files; one process only.

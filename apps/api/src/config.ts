@@ -19,6 +19,11 @@ function optional(name: string, fallback: string): string {
 	return Bun.env[name]?.trim() || fallback
 }
 
+/** "*" for everyone in the workspace, else comma-separated Slack user IDs. */
+function users(value: string): "*" | Set<string> {
+	return value === "*" ? "*" : new Set(value.split(",").map(id => id.trim()))
+}
+
 function agentId(value: string): AgentId {
 	if (value === "codex" || value === "opencode") return value
 	throw new Error(`DOT_AGENT must be "codex" or "opencode", not "${value}"`)
@@ -67,10 +72,12 @@ export function loadBotConfig() {
 		/** Who runs this bot. Only the default for ALLOWED_SLACK_USERS; it gets no special treatment. */
 		ownerUserId,
 		/** Who can use the bot: "*" for everyone in the workspace, else comma-separated user IDs. */
-		allowedUsers:
-			allowed === "*"
-				? ("*" as const)
-				: new Set(allowed.split(",").map(id => id.trim())),
+		allowedUsers: users(allowed),
+		/**
+		 * Who can run on Codex (the owner's ChatGPT plan): "*" or comma-separated user IDs. Everyone
+		 * else is on OpenCode, whatever DOT_AGENT or their pick says.
+		 */
+		codexUsers: users(optional("CODEX_USERS", "*")),
 		/** "docker": Codex runs in a per-user container (default). "host": on this machine, sandboxed only by Codex. */
 		runtime: optional("CODEX_RUNTIME", "docker") as "docker" | "host",
 		/** The agent people get until they pick one on the Home tab: "codex" or "opencode". */

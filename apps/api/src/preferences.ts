@@ -43,9 +43,19 @@ export async function setPreferences(
 	await writeJsonPrivate(file, saved)
 }
 
-/** The agent their turns run on. */
-export const agentFor = (config: BotConfig, picked: Preferences): AgentId =>
-	picked.agent ?? config.agent
+/** Whether they may run on Codex, the owner's ChatGPT plan (CODEX_USERS). */
+export const canUseCodex = (config: BotConfig, person: Person): boolean =>
+	config.codexUsers === "*" || config.codexUsers.has(person.userId)
+
+/** The agent their turns run on: their pick, else the bot's; OpenCode if Codex isn't theirs to use. */
+export function agentFor(
+	config: BotConfig,
+	person: Person,
+	picked: Preferences,
+): AgentId {
+	const agent = picked.agent ?? config.agent
+	return agent === "codex" && !canUseCodex(config, person) ? "opencode" : agent
+}
 
 export type Effective = {
 	agent: AgentId
@@ -57,15 +67,15 @@ export type Effective = {
 }
 
 /**
- * What their turns use: their picks where the model supports them, else the bot's. `models` are
- * their agent's (AGENTS[agentFor(…)].listModels()).
+ * What their turns use on `agent` (agentFor(…)): their picks where the model supports them, else
+ * the bot's. `models` are that agent's (AGENTS[agent].listModels()).
  */
 export function effective(
 	config: BotConfig,
+	agent: AgentId,
 	picked: Preferences,
 	models: ModelOption[],
 ): Effective {
-	const agent = agentFor(config, picked)
 	const fallback = agent === "codex" ? config.model : config.opencodeModel
 	const find = (id?: string) => models.find(model => model.id === id)
 	const option = find(picked.model) ?? find(fallback)
@@ -90,9 +100,14 @@ export async function configFor(
 	person: Person,
 ): Promise<BotConfig> {
 	const picked = await preferences(person)
-	const agent = agentFor(config, picked)
+	const agent = agentFor(config, person, picked)
 	if (!Object.keys(picked).length && agent === "codex") return config
-	const chosen = effective(config, picked, await AGENTS[agent].listModels())
+	const chosen = effective(
+		config,
+		agent,
+		picked,
+		await AGENTS[agent].listModels(),
+	)
 	return {
 		...config,
 		agent,

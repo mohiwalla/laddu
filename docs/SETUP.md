@@ -376,6 +376,7 @@ offline).
 | `CODEX_MODEL`            | required                | Model slug from `bun run login`                                                                                  |
 | `OWNER_SLACK_USER_ID`    | required                | You; see step 2.4. Only the default for `ALLOWED_SLACK_USERS`, no special treatment                              |
 | `ALLOWED_SLACK_USERS`    | the owner               | `"*"` for everyone, or comma-separated member IDs                                                                |
+| `CODEX_USERS`            | `"*"`                   | Who can run on Codex (your ChatGPT plan): `"*"` or member IDs; everyone else is on OpenCode                      |
 | `CODEX_RUNTIME`          | `docker`                | `docker`: one container per Slack user; `host`: on this machine (just yourself, at most)                         |
 | `CODEX_REASONING_EFFORT` | `medium`                | `minimal` … `xhigh`                                                                                              |
 | `CODEX_FAST`             | `false`                 | `true`: fast mode, quicker answers that use more of the plan's limits                                            |

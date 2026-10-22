@@ -13,6 +13,7 @@ import { runTool } from "../agent/tools"
 import * as microsoft from "../integrations/microsoft"
 import {
 	agentFor,
+	canUseCodex,
 	effective,
 	preferences,
 	setPreferences,
@@ -150,9 +151,9 @@ async function agentSection(
 	person: Person,
 ): Promise<Block[]> {
 	const picked = await preferences(person)
-	const agent = agentFor(config, picked)
+	const agent = agentFor(config, person, picked)
 	const models = await AGENTS[agent].listModels()
-	const chosen = effective(config, picked, models)
+	const chosen = effective(config, agent, picked, models)
 	const option: ModelOption | undefined = chosen.option
 	const blocks: Block[] = [
 		header(":brain:  Agent"),
@@ -160,10 +161,9 @@ async function agentSection(
 			"*Agent*",
 			select(
 				"home_agent",
-				Object.entries(AGENTS).map(([id, about]) => ({
-					text: about.name,
-					value: id,
-				})),
+				Object.entries(AGENTS)
+					.filter(([id]) => id !== "codex" || canUseCodex(config, person))
+					.map(([id, about]) => ({ text: about.name, value: id })),
 				agent,
 			),
 		),
@@ -688,7 +688,8 @@ export function registerHome(app: App, given: Deps) {
 	control("home_refresh", async () => {})
 
 	control("home_agent", async ({ person, value }) => {
-		if (!isAgent(value)) return
+		if (!isAgent(value) || (value === "codex" && !canUseCodex(config, person)))
+			return
 		// Each agent has its own models; the picks for the old one don't carry over.
 		await setPreferences(person, {
 			agent: value,
