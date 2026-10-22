@@ -1,4 +1,4 @@
-import { expect, mock, test } from "bun:test"
+import { expect, mock, spyOn, test } from "bun:test"
 import type { App } from "@slack/bolt"
 import { openReply } from "./reply"
 
@@ -274,4 +274,65 @@ test("streaming fallback starts with the actual action and ends with the answer"
 		ts: "3.001",
 		markdown_text: "Done",
 	})
+})
+
+test("a long turn moves its progress to a new message before Slack ends the stream", async () => {
+	const { client, startStream, appendStream, stopStream } = streamingClient()
+	startStream
+		.mockResolvedValueOnce({ ok: true, ts: "2.001" })
+		.mockResolvedValueOnce({ ok: true, ts: "2.002" })
+	const posted: string[] = []
+	const now = Date.now()
+	const clock = spyOn(Date, "now").mockReturnValue(now)
+	try {
+		const reply = await openReply(client, target, async m => {
+			posted.push(m.ts)
+		})
+		reply.step({ id: "a", title: "Building", status: "in_progress" })
+		reply.step({ id: "b", title: "Testing", status: "complete" })
+		await Bun.sleep(900)
+		clock.mockReturnValue(now + 9 * 60_000 + 1_000)
+		reply.step({ id: "c", title: "Fixing", status: "in_progress" })
+		await reply.finish("Shipped")
+	} finally {
+		clock.mockRestore()
+	}
+	expect(posted).toEqual(["2.001", "2.002"])
+	const closed = stopStream.mock.calls[0]![0]
+	expect(closed.ts).toBe("2.001")
+	expect(closed.chunks).toContainEqual(
+		expect.objectContaining({ id: "a", status: "complete" }),
+	)
+	// The new message carries the running step and the next one, not finished ones.
+	const ids = [
+		...(startStream.mock.calls[1]![0].chunks ?? []),
+		...appendStream.mock.calls
+			.filter(([args]) => args.ts === "2.002")
+			.flatMap(([args]) => args.chunks ?? []),
+		...(stopStream.mock.calls[1]![0].chunks ?? []),
+	].flatMap(chunk => (chunk.type === "task_update" ? [chunk.id] : []))
+	expect(new Set(ids)).toEqual(new Set(["a", "c"]))
+	expect(stopStream.mock.calls[1]![0].chunks).toContainEqual(
+		expect.objectContaining({ title: expect.stringMatching(/^Done · 3 steps/) }),
+	)
+})
+
+test("progress continues in a new message when Slack already ended the stream", async () => {
+	const { client, startStream, appendStream } = streamingClient()
+	startStream
+		.mockResolvedValueOnce({ ok: true, ts: "2.001" })
+		.mockResolvedValueOnce({ ok: true, ts: "2.002" })
+	appendStream.mockRejectedValueOnce({
+		data: { error: "message_not_in_streaming_state" },
+	})
+	const reply = await openReply(client, target)
+	reply.step({ id: "a", title: "Building", status: "in_progress" })
+	reply.step({ id: "a", title: "Building", status: "complete" })
+	reply.step({ id: "b", title: "Testing", status: "in_progress" })
+	await Bun.sleep(900)
+	await reply.finish("Done")
+	expect(startStream).toHaveBeenCalledTimes(2)
+	expect(startStream.mock.calls[1]![0].chunks).toContainEqual(
+		expect.objectContaining({ id: "b", status: "in_progress" }),
+	)
 })

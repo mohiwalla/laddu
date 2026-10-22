@@ -72,6 +72,15 @@ const clockInterval = () =>
 		Math.ceil((liveStreams * 60_000) / CLOCK_UPDATES_PER_MINUTE),
 	)
 const PLACEHOLDER_INTERVAL_MS = 2_500
+/**
+ * Slack ends a streaming message 10 minutes after it starts and rejects every update after that,
+ * so a long turn's progress moves to a fresh message (in the same thread) a bit before then.
+ */
+const STREAM_LIFETIME_MS = 9 * 60_000
+const streamEnded = (error: unknown) =>
+	["message_not_in_streaming_state", "message_not_found"].includes(
+		(error as { data?: { error?: string } })?.data?.error ?? "",
+	)
 
 /** Split on paragraph, then line, boundaries so each part fits in one Slack message. */
 export function chunkMarkdown(
@@ -132,7 +141,7 @@ export async function openReply(
 	const show = async (first: Step) => {
 		let reply: PostedReply
 		try {
-			reply = await openStream(client, target, first, started)
+			reply = await openStream(client, target, first, started, remember)
 		} catch (error) {
 			console.warn(
 				"[reply] streaming unavailable, using a placeholder:",
@@ -202,26 +211,35 @@ async function openStream(
 	target: ReplyTarget,
 	first: Step,
 	started: number,
+	onRolled: (message: ReplyMessage) => Promise<void>,
 ): Promise<PostedReply> {
 	const { channel } = target
 	let title = first.title
-	const { ts } = await client.chat.startStream({
-		channel,
-		thread_ts: target.threadTs,
-		recipient_user_id: target.userId,
-		recipient_team_id: target.teamId,
-		task_display_mode: "plan",
-		chunks: [
-			{ type: "plan_update", title: clip(title, MAX_TASK_TEXT) },
-			taskChunk(first),
-		],
-	})
-	if (!ts) throw new Error("chat.startStream returned no ts")
+	const begin = async (tasks: Step[]) => {
+		const { ts } = await client.chat.startStream({
+			channel,
+			thread_ts: target.threadTs,
+			recipient_user_id: target.userId,
+			recipient_team_id: target.teamId,
+			task_display_mode: "plan",
+			chunks: [
+				{ type: "plan_update", title: clip(title, MAX_TASK_TEXT) },
+				...tasks.map(step => taskChunk(step)),
+			],
+		})
+		if (!ts) throw new Error("chat.startStream returned no ts")
+		return ts
+	}
+	let ts = await begin([first])
+	let opened = Date.now()
 
 	// Latest state per step, sent in batches. Slack updates a task in place by id but appends its
-	// details on every update, so they're sent once.
-	const steps = new Map<string, Step>([[first.id, first]])
-	const detailed = new Set<string>(first.details ? [first.id] : [])
+	// details on every update, so they're sent once. `steps` holds this message's steps; `total`
+	// counts every step across the messages a long turn rolled over to.
+	let steps = new Map<string, Step>([[first.id, first]])
+	let detailed = new Set<string>(first.details ? [first.id] : [])
+	let earlier = 0
+	const total = () => earlier + steps.size
 	const toChunks = (batch: Map<string, Step>, failed = false) =>
 		[...batch.values()].map(step => {
 			const chunk = taskChunk(
@@ -235,6 +253,56 @@ async function openStream(
 	let timer: Timer | undefined
 	let chain: Promise<unknown> = Promise.resolve()
 	let inFlight = 0
+
+	/**
+	 * Closes this message (its running steps carry on in the next) and opens a fresh stream below it
+	 * with the steps still running, before Slack's limit, or right away if Slack already ended it.
+	 */
+	const rollOver = async () => {
+		const done = new Map(
+			[...steps.values()].map(step => [
+				step.id,
+				step.status === "in_progress"
+					? { ...step, status: "complete" as const }
+					: step,
+			]),
+		)
+		await client.chat
+			.stopStream({
+				channel,
+				ts,
+				chunks: [
+					...toChunks(done),
+					{
+						type: "plan_update",
+						title: clip(`${title} · continued below`, MAX_TASK_TEXT),
+					},
+				],
+			})
+			.catch(() => {})
+		const running = [...steps.values()].filter(
+			step => step.status === "in_progress",
+		)
+		const left = steps
+		ts = await begin(running)
+		opened = Date.now()
+		// Steps that came in meanwhile went to the old map (and `pending`, sent next).
+		steps = new Map(running.map(step => [step.id, left.get(step.id)!]))
+		for (const step of pending.values()) steps.set(step.id, step)
+		earlier += left.size - running.length
+		detailed = new Set(running.filter(step => step.details).map(s => s.id))
+		await onRolled({ ts, streaming: true })
+	}
+	/** Sends an update; if the message had to roll over, the new one already shows it. */
+	const append = async (chunks: Chunk[]) => {
+		if (Date.now() - opened > STREAM_LIFETIME_MS) return rollOver()
+		try {
+			await client.chat.appendStream({ channel, ts, chunks })
+		} catch (error) {
+			if (!streamEnded(error)) throw error
+			await rollOver()
+		}
+	}
 
 	const elapsed = () => {
 		const seconds = Math.max(1, Math.round((Date.now() - started) / 1000))
@@ -255,7 +323,7 @@ async function openStream(
 		pending = new Map()
 		inFlight++
 		chain = chain
-			.then(() => client.chat.appendStream({ channel, ts, chunks }))
+			.then(() => append(chunks))
 			.catch(error => console.warn("[reply] append failed:", error))
 			.finally(() => inFlight--)
 	}
@@ -283,6 +351,10 @@ async function openStream(
 		clearTimeout(timer)
 		timer = undefined
 		await chain
+		if (Date.now() - opened > STREAM_LIFETIME_MS)
+			await rollOver().catch(error =>
+				console.warn("[reply] couldn't continue the progress:", error),
+			)
 		for (const step of steps.values())
 			if (step.status === "in_progress")
 				pending.set(step.id, { ...step, status })
@@ -303,7 +375,7 @@ async function openStream(
 				...tasks,
 				{
 					type: "plan_update",
-					title: `Done · ${steps.size} step${steps.size === 1 ? "" : "s"} · ${elapsed()}`,
+					title: `Done · ${total()} step${total() === 1 ? "" : "s"} · ${elapsed()}`,
 				},
 			]
 			try {
