@@ -1,5 +1,5 @@
 /**
- * Runs laddu's own commands (runtime/: `memory`, `recall`) for a user, where their Codex runs:
+ * Runs laddu's own commands (runtime/: `memory`, `recall`, `skills`) for a user, where their Codex runs:
  * inside their container, or on the host against that user's data directories.
  */
 import type { BotConfig } from "../config"
@@ -7,13 +7,14 @@ import { paths } from "../config"
 import type { TurnUser } from "./turn"
 import { CONTAINER_TOOLS_DIR, ensureContainer, TOOLS_DIR } from "./containers"
 
-/** Host runtime: where each user's memory and history live (the commands read these env vars). */
+/** Host runtime: where each user's memory, history and skills live (the commands read these env vars). */
 export function hostToolEnv(user: TurnUser) {
 	const owner = `${user.teamId}-${user.userId}`
 	return {
 		LADDU_MEMORY_DIR: `${paths.dataDir}/memory/${owner}`,
 		LADDU_HISTORY_DIR: `${paths.dataDir}/history/${owner}`,
 		LADDU_CODE_DIR: `${paths.dataDir}/code/${owner}`,
+		LADDU_SKILLS_DIR: `${paths.codexHome}/skills`,
 	}
 }
 

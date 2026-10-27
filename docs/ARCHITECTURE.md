@@ -69,7 +69,7 @@ apps/
                        appended to the persona every turn. skills/ = built-in skills;
                        skills.local/ (git-ignored) = the deployment's team skills
     runtime/           commands for Codex (Python, stdlib): `memory` (per-user memory),
-                       `recall` (search past conversations), `schedule` (scheduled tasks),
+                       `skills` (the Home tab's view of personal skills), `recall` (search past conversations), `schedule` (scheduled tasks),
                        `ado` (Azure DevOps), `code` (Azure Repos / CodeCommit coding tasks),
                        `ms` (Microsoft 365), `slack` (Slack Free tools and event rules), `desktop` (laddu's computer:
                        starts it, and serves Codex the tools that drive it, over MCP; with
@@ -462,7 +462,8 @@ Adapted from [Hermes Agent](https://github.com/nousresearch/hermes-agent) (MIT, 
   built-in (`agent-home/skills/`, committed), team (`agent-home/skills.local/`, git-ignored), both
   read-only through the persona mount and linked by `scripts/codex-docker.sh` into
   `~/.agents/skills/{laddu,team}`, a Codex skill root; and personal ones Codex writes for each
-  person in `$CODEX_HOME/skills` on their volume. When to write or fix one is in the persona; the
+  person in `$CODEX_HOME/skills` on their volume, which they can view, add, edit and remove on
+  the Home tab's Skills tab (through `runtime/skills`). When to write or fix one is in the persona; the
   background review also looks for procedures worth keeping. Codex's built-in `imagegen` skill is
   switched off (no image generation on the plan route). To share a personal skill with everyone,
   copy it into `skills.local/`:

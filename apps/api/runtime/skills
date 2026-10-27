@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""
+The person's own skills ($CODEX_HOME/skills/<name>/SKILL.md), for laddu's Home tab: the person's
+own controls, not for you to use. Write skills directly as files, as your instructions say.
+
+  skills json                 every skill: name, description, whether it's editable here
+  skills show <name>          its SKILL.md
+  skills save <name>          SKILL.md from stdin (creates the skill, or replaces its SKILL.md)
+  skills remove <name>        deletes the skill's folder (or the link to it)
+"""
+import json
+import os
+import re
+import shutil
+import sys
+from pathlib import Path
+
+DIR = Path(
+    os.environ.get("LADDU_SKILLS_DIR")
+    or Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "skills"
+)
+NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+
+
+def fail(message):
+    print(f"error: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def front(text):
+    """name and description from the --- block at the top; folded values kept on one line."""
+    match = re.match(r"^---\s*\n(.*?)\n---", text, re.DOTALL)
+    found, key = {}, None
+    for line in (match.group(1) if match else "").splitlines():
+        pair = re.match(r"^([A-Za-z_-]+):\s*(.*)$", line)
+        if pair:
+            key, value = pair.group(1), pair.group(2).strip()
+            found[key] = "" if value in (">", "|", ">-", "|-") else value.strip("\"'")
+        elif key and line.startswith((" ", "\t")):
+            found[key] = f"{found[key]} {line.strip()}".strip()
+    return found
+
+
+def path(name):
+    if not NAME.match(name):
+        fail("a skill name is lowercase letters, digits and hyphens")
+    return DIR / name
+
+
+def main(args):
+    if args[:1] == ["json"]:
+        skills = []
+        for entry in sorted(DIR.iterdir()) if DIR.is_dir() else []:
+            file = entry / "SKILL.md"
+            if entry.name.startswith(".") or not file.is_file():
+                continue
+            about = front(file.read_text(encoding="utf-8", errors="replace"))
+            skills.append({
+                "name": entry.name,
+                "description": about.get("description", ""),
+                "linked": entry.is_symlink(),
+            })
+        print(json.dumps(skills))
+    elif args[:1] == ["show"] and len(args) == 2:
+        file = path(args[1]) / "SKILL.md"
+        if not file.is_file():
+            fail(f"no skill {args[1]}")
+        print(file.read_text(encoding="utf-8", errors="replace"), end="")
+    elif args[:1] == ["save"] and len(args) == 2:
+        folder = path(args[1])
+        if folder.is_symlink():
+            fail(f"{args[1]} comes from somewhere else; change it there")
+        text = sys.stdin.read()
+        if not text.strip():
+            fail("empty skill")
+        folder.mkdir(parents=True, exist_ok=True)
+        tmp = folder / "SKILL.md.tmp"
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, folder / "SKILL.md")
+    elif args[:1] == ["remove"] and len(args) == 2:
+        folder = path(args[1])
+        if folder.is_symlink():
+            folder.unlink()
+        elif folder.is_dir():
+            shutil.rmtree(folder)
+    else:
+        fail(__doc__.strip())
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

@@ -1,8 +1,10 @@
 /**
- * laddu's Home tab: each person's own settings page. Their agent and model, a link to their
- * computer, the accounts they've connected, what laddu is working on for them, their scheduled tasks and
- * automations, and what laddu remembers. Redrawn whenever they open it and after every change made
- * here; only they can see it, and every control acts only on their own things.
+ * laddu's Home tab: each person's own page, split into tabs (Slack allows apps no tabs of their
+ * own, so these are buttons that switch what the page shows). Overview: what laddu is working on,
+ * scheduled tasks and automations. Skills: the how-to guides laddu keeps for them. Memory: what
+ * laddu remembers. Settings: agent and model, name and picture, connected accounts. Redrawn
+ * whenever they open it and after every change made here; only they can see it, and every control
+ * acts only on their own things.
  */
 import type { App, types } from "@slack/bolt"
 import type { BotConfig } from "../config"
@@ -52,6 +54,17 @@ let deps: Deps | null = null
 
 /** A line shown once at the top, after something done here (e.g. "check your DMs"). */
 const notices = new Map<string, string>()
+
+const TABS = {
+	overview: "Overview",
+	skills: "Skills",
+	memory: "Memory",
+	settings: "Settings",
+} as const
+type Tab = keyof typeof TABS
+const isTab = (value: string): value is Tab => value in TABS
+/** The tab each person last opened; the page comes back to it. */
+const tabs = new Map<string, Tab>()
 const personKey = (person: Person) => `${person.teamId}-${person.userId}`
 
 // ---- building blocks ----------------------------------------------------------------------
@@ -64,6 +77,8 @@ const plain = (text: string) => ({
 const md = (text: string) => ({ type: "mrkdwn" as const, text })
 const escape = (text: string) =>
 	text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+const clip = (text: string, max: number) =>
+	text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text
 const header = (text: string): Block => ({ type: "header", text: plain(text) })
 const context = (...texts: string[]): Block => ({
 	type: "context",
@@ -507,25 +522,182 @@ async function automationsSection(
 	]
 }
 
-function memorySection(): Block[] {
+type Memory = { user: string[]; notes: string[] }
+
+async function readMemory(config: BotConfig, person: Person): Promise<Memory> {
+	return JSON.parse(
+		await runTool(config, person, ["memory", "json"]),
+	) as Memory
+}
+
+async function memorySection(
+	config: BotConfig,
+	person: Person,
+): Promise<Block[]> {
+	const memory = await readMemory(config, person)
+	const store = (
+		key: keyof Memory,
+		title: string,
+		about: string,
+		empty: string,
+	): Block[] => [
+		header(title),
+		hint(about),
+		...(memory[key].length
+			? memory[key].map((entry, index) =>
+					row(escape(entry), {
+						type: "overflow",
+						action_id: "home_memory_entry",
+						options: [
+							{
+								text: plain("Edit"),
+								value: `edit|${key}|${index + 1}`,
+							},
+							{
+								text: plain("Forget"),
+								value: `forget|${key}|${index + 1}`,
+							},
+						],
+					}),
+				)
+			: [hint(empty)]),
+		{
+			type: "actions",
+			elements: [
+				button(":heavy_plus_sign:  Add", "home_memory_add", key),
+			],
+		},
+	]
 	return [
-		header(":thought_balloon:  Memory"),
-		row(
-			"*What laddu remembers about you*\nYour role, preferences and how you like answers",
-			button("View", "home_memory", "view"),
+		...store(
+			"user",
+			":bust_in_silhouette:  About you",
+			"Who you are and how you like answers.",
+			"Nothing yet. laddu saves things as you work together.",
 		),
+		divider,
+		...store(
+			"notes",
+			":notebook:  laddu's notes",
+			"Your setup, standing conventions and lessons learned.",
+			"No notes yet.",
+		),
+		...(memory.user.length || memory.notes.length
+			? [
+					divider,
+					row(
+						"*Start over*\nladdu forgets everything above and learns about you again.",
+						button(
+							"Forget everything",
+							"home_memory_clear",
+							"clear",
+							{
+								style: "danger",
+								confirm: {
+									title: "Forget everything?",
+									text: "laddu starts over and learns about you again from scratch.",
+									yes: "Forget everything",
+								},
+							},
+						),
+					),
+				]
+			: []),
+		hint("Changes apply to new conversations."),
+	]
+}
+
+type Skill = { name: string; description: string; linked: boolean }
+
+const readSkills = async (config: BotConfig, person: Person) =>
+	JSON.parse(await runTool(config, person, ["skills", "json"])) as Skill[]
+
+/** Most rows a Home page can hold next to everything else (Slack allows 100 blocks). */
+const MAX_SKILLS = 70
+
+async function skillsSection(
+	config: BotConfig,
+	person: Person,
+): Promise<Block[]> {
+	const skills = await readSkills(config, person)
+	return [
+		header(":hammer_and_wrench:  Skills"),
+		hint(
+			"How-to guides laddu writes as it learns your work, and follows when a task matches. Changes apply from your next message.",
+		),
+		{
+			type: "actions",
+			elements: [
+				button(
+					":heavy_plus_sign:  New skill",
+					"home_skill_new",
+					"new",
+					{
+						style: "primary",
+					},
+				),
+			],
+		},
+		...(skills.length
+			? skills.slice(0, MAX_SKILLS).map(skill =>
+					row(
+						`*${escape(skill.name)}*${skill.linked ? "  ·  _installed_" : ""}\n${escape(clip(skill.description || "No description.", 180))}`,
+						{
+							type: "overflow",
+							action_id: "home_skill",
+							options: [
+								{
+									text: plain("View"),
+									value: `view|${skill.name}`,
+								},
+								...(skill.linked
+									? []
+									: [
+											{
+												text: plain("Edit"),
+												value: `edit|${skill.name}`,
+											},
+										]),
+								{
+									text: plain("Remove"),
+									value: `remove|${skill.name}`,
+								},
+							],
+						},
+					),
+				)
+			: [
+					hint(
+						"No skills yet. laddu writes one when it works out something likely to come up again, or ask it, e.g. _“remember how to pull the weekly sales report”_.",
+					),
+				]),
+		...(skills.length > MAX_SKILLS
+			? [
+					hint(
+						`…and ${skills.length - MAX_SKILLS} more. Ask laddu to list or tidy them.`,
+					),
+				]
+			: []),
 	]
 }
 
 // ---- the page -------------------------------------------------------------------------------
 
-/** Redraws their Home tab. A section that fails shows a short note instead of breaking the page. */
-export async function refreshHome(
+/** Each tab's sections as last built for a person, so switching to it shows them at once. */
+const built = new Map<string, Block[][]>()
+/** Counts each person's redraws, so a slow one doesn't cover a newer one. */
+const redraws = new Map<string, number>()
+const firstNames = new Map<string, string>()
+/** People whose page showTab() just drew from built, so refreshHome() can skip an identical redraw. */
+const shown = new Set<string>()
+
+/** The sections of one tab. A section that fails shows a short note instead of breaking the page. */
+function buildTab(
 	client: WebClient,
 	person: Person,
-): Promise<void> {
-	if (!deps) return
-	const { config, agentSessions, automations } = deps
+	tab: Tab,
+): Promise<Block[][]> {
+	const { config, agentSessions, automations } = deps!
 	const safe = async (name: string, build: () => Promise<Block[]>) =>
 		build().catch(error => {
 			console.warn(`[home] ${name} failed`, error)
@@ -534,20 +706,40 @@ export async function refreshHome(
 				hint(":warning:  Couldn't load this right now."),
 			]
 		})
-	const [firstName, ...sections] = await Promise.all([
-		userFirstName(client, person.userId).catch(() => ""),
-		safe("Agent", () => agentSection(config, person)),
-		safe("Name & picture", () => appearanceSection(person)),
-		safe("Working now", () =>
-			workingSection(client, agentSessions, person),
-		),
-		safe("Connections", () => connectionsSection(config, person)),
-		safe("Scheduled", () => scheduledSection(person)),
-		safe("Automations", () => automationsSection(automations, person)),
-		safe("Memory", async () => memorySection()),
-	])
-	const notice = notices.get(personKey(person))
-	notices.delete(personKey(person))
+	const builds: Record<Tab, [string, () => Promise<Block[]>][]> = {
+		overview: [
+			[
+				"Working now",
+				() => workingSection(client, agentSessions, person),
+			],
+			["Scheduled", () => scheduledSection(person)],
+			["Automations", () => automationsSection(automations, person)],
+		],
+		skills: [["Skills", () => skillsSection(config, person)]],
+		memory: [["Memory", () => memorySection(config, person)]],
+		settings: [
+			["Agent", () => agentSection(config, person)],
+			["Name & picture", () => appearanceSection(person)],
+			["Connections", () => connectionsSection(config, person)],
+		],
+	}
+	return Promise.all(builds[tab].map(([name, build]) => safe(name, build)))
+}
+
+async function publish(
+	client: WebClient,
+	person: Person,
+	tab: Tab,
+	sections: Block[][],
+	notice?: string,
+): Promise<void> {
+	const { config } = deps!
+	const key = personKey(person)
+	if (!firstNames.has(key))
+		firstNames.set(
+			key,
+			await userFirstName(client, person.userId).catch(() => ""),
+		)
 	// Slack fetches images itself, so only with a public address (assets/home-banner.png; bump ?v
 	// when it changes, Slack caches it).
 	const banner = config.desktopViewer.publicUrl.startsWith("https:")
@@ -558,7 +750,7 @@ export async function refreshHome(
 			? { type: "image", image_url: banner, alt_text: "laddu" }
 			: header("laddu"),
 		row(
-			`*Hi ${escape(firstName || "there")}* :wave:\nOnly you can see this page.`,
+			`*Hi ${escape(firstNames.get(key) || "there")}* :wave:\nOnly you can see this page.`,
 		),
 		{
 			type: "actions",
@@ -583,91 +775,253 @@ export async function refreshHome(
 					: []),
 			],
 		},
-		...(notice ? [divider, row(notice)] : []),
+		divider,
+		{
+			type: "actions",
+			elements: Object.entries(TABS).map(([id, label]) =>
+				button(
+					label,
+					`home_tab_${id}`,
+					id,
+					id === tab ? { style: "primary" } : {},
+				),
+			),
+		},
+		...(notice ? [row(notice)] : []),
 	]
-	for (const section of sections.filter(section => section.length))
-		blocks.push(divider, ...section)
+	sections
+		.filter(section => section.length)
+		.forEach((section, index) =>
+			blocks.push(...(index || notice ? [divider] : []), ...section),
+		)
 	await client.views.publish({
 		user_id: person.userId,
 		view: { type: "home", blocks: blocks.slice(0, 100) },
 	})
 }
 
-// ---- memory popup ---------------------------------------------------------------------------
+/** Shows their current tab at once: as last built, or loading. refreshHome() then brings it up to date. */
+async function showTab(client: WebClient, person: Person): Promise<void> {
+	const key = personKey(person)
+	// Whatever redraw is still building is for the tab they just left.
+	redraws.set(key, (redraws.get(key) ?? 0) + 1)
+	const tab = tabs.get(key) ?? "overview"
+	if (built.has(`${key}|${tab}`)) shown.add(key)
+	await publish(
+		client,
+		person,
+		tab,
+		built.get(`${key}|${tab}`) ?? [
+			[hint(":hourglass_flowing_sand:  Loading…")],
+		],
+	)
+}
 
-type Memory = { user: string[]; notes: string[] }
+/** Redraws their Home tab, and builds tabs they haven't seen yet in the background so switching is instant. */
+export async function refreshHome(
+	client: WebClient,
+	person: Person,
+): Promise<void> {
+	if (!deps) return
+	const key = personKey(person)
+	const redraw = (redraws.get(key) ?? 0) + 1
+	redraws.set(key, redraw)
+	const tab = tabs.get(key) ?? "overview"
+	const before = built.get(`${key}|${tab}`)
+	const sections = await buildTab(client, person, tab)
+	built.set(`${key}|${tab}`, sections)
+	if (redraws.get(key) !== redraw) return
+	const notice = notices.get(key)
+	notices.delete(key)
+	// After a tab switch the page already shows these; publishing them again only makes Slack redraw.
+	if (
+		notice ||
+		!shown.has(key) ||
+		JSON.stringify(before) !== JSON.stringify(sections)
+	)
+		await publish(client, person, tab, sections, notice)
+	shown.delete(key)
+	for (const other of Object.keys(TABS) as Tab[])
+		if (!built.has(`${key}|${other}`))
+			buildTab(client, person, other)
+				.then(sections => built.set(`${key}|${other}`, sections))
+				.catch(() => {})
+}
 
-function memoryView(memory: Memory | null, problem?: string): types.ModalView {
-	const entries = (store: keyof Memory, title: string): Block[] =>
-		memory?.[store].length
-			? [
-					header(title),
-					...memory[store].map((entry, index) =>
-						row(
-							escape(entry),
-							button(
-								"Forget",
-								"home_memory_forget",
-								`${store}|${index + 1}`,
-								{
-									confirm: {
-										title: "Forget this?",
-										text: escape(entry).slice(0, 280),
-										yes: "Forget",
-									},
-								},
-							),
-						),
-					),
-				]
-			: []
-	const empty = memory && !memory.user.length && !memory.notes.length
+// ---- memory and skill popups ---------------------------------------------------------------
+
+const waitView = (title: string): types.ModalView => ({
+	type: "modal",
+	title: plain(title),
+	close: plain("Close"),
+	blocks: [row(":hourglass_flowing_sand:  Loading…")],
+})
+
+const problemView = (title: string, problem: string): types.ModalView => ({
+	type: "modal",
+	title: plain(title),
+	close: plain("Close"),
+	blocks: [row(`:warning:  ${escape(problem)}`)],
+})
+
+/** What a laddu command printed to say why it refused, else a generic line. */
+function toolProblem(error: unknown): string {
+	const stderr = String((error as { stderr?: unknown }).stderr ?? "")
+	const said = stderr.trim().replace(/^error:\s*/, "")
+	return said
+		? clip(said.split("\n")[0]!, 300)
+		: "That didn't work. Please try again."
+}
+
+const MEMORY_STORES = { user: "About you", notes: "laddu's notes" } as const
+
+function memoryEntryView(
+	store: keyof Memory,
+	number: number | null,
+	entry: string,
+): types.ModalView {
 	return {
 		type: "modal",
-		callback_id: "home_memory",
-		title: plain("What laddu remembers"),
-		close: plain("Done"),
-		blocks: problem
-			? [row(`:warning:  ${escape(problem)}`)]
-			: !memory
-				? [row(":hourglass_flowing_sand:  Loading…")]
-				: empty
-					? [
-							row(
-								"laddu doesn't remember anything about you yet. It saves things as you work together: who you are, how you like answers, the tools you use.",
-							),
-						]
-					: [
-							...entries("user", "About you"),
-							...entries("notes", "laddu's notes"),
-							divider,
-							{
-								type: "actions",
-								elements: [
-									button(
-										"Forget everything",
-										"home_memory_clear",
-										"clear",
-										{
-											style: "danger",
-											confirm: {
-												title: "Forget everything?",
-												text: "laddu starts over and learns about you again from scratch.",
-												yes: "Forget everything",
-											},
-										},
-									),
-								],
-							},
-							context("Changes apply to new conversations."),
-						],
+		callback_id: "home_memory_save",
+		private_metadata: `${store}|${number ?? ""}`,
+		title: plain(number ? "Edit memory" : "Add to memory"),
+		submit: plain("Save"),
+		close: plain("Cancel"),
+		blocks: [
+			{
+				type: "input",
+				block_id: "entry",
+				label: plain(MEMORY_STORES[store]),
+				hint: plain(
+					store === "user"
+						? "One fact about you, e.g. your role or how you like answers."
+						: "One note for laddu, e.g. a convention or where something lives.",
+				),
+				element: {
+					type: "plain_text_input",
+					action_id: "value",
+					multiline: true,
+					max_length: 1000,
+					...(entry ? { initial_value: entry } : {}),
+				},
+			},
+		],
 	}
 }
 
-async function readMemory(config: BotConfig, person: Person): Promise<Memory> {
-	return JSON.parse(
-		await runTool(config, person, ["memory", "json"]),
-	) as Memory
+/** SKILL.md split into its --- block (lines) and the steps under it. */
+function splitSkill(text: string): { front: string[]; body: string } {
+	const match = text.match(/^---[ \t]*\n([\s\S]*?)\n---[ \t]*\n?/)
+	return match
+		? { front: match[1]!.split("\n"), body: text.slice(match[0].length) }
+		: { front: [], body: text }
+}
+
+/** SKILL.md with a new description and steps, keeping any other settings in its --- block. */
+function skillText(
+	name: string,
+	description: string,
+	body: string,
+	front: string[] = [],
+): string {
+	const kept: string[] = []
+	let skipping = false
+	for (const line of front) {
+		if (/^description:/.test(line)) skipping = true
+		else if (!skipping || !/^\s/.test(line)) {
+			skipping = false
+			kept.push(line)
+		}
+	}
+	if (!kept.some(line => /^name:/.test(line))) kept.unshift(`name: ${name}`)
+	kept.push(
+		`description: ${JSON.stringify(description.replace(/\s+/g, " ").trim())}`,
+	)
+	return `---\n${kept.join("\n")}\n---\n\n${body.trim()}\n`
+}
+
+/** Slack's longest text input. */
+const MAX_STEPS = 3000
+
+function skillEditView(
+	skill: { name: string; description: string; body: string } | null,
+): types.ModalView {
+	return {
+		type: "modal",
+		callback_id: "home_skill_save",
+		private_metadata: skill?.name ?? "",
+		title: plain(skill ? "Edit skill" : "New skill"),
+		submit: plain("Save"),
+		close: plain("Cancel"),
+		blocks: [
+			skill
+				? header(skill.name)
+				: {
+						type: "input",
+						block_id: "name",
+						label: plain("Name"),
+						hint: plain("Lowercase words with hyphens."),
+						element: {
+							type: "plain_text_input",
+							action_id: "value",
+							max_length: 64,
+							placeholder: plain("weekly-sales-report"),
+						},
+					},
+			{
+				type: "input",
+				block_id: "description",
+				label: plain("When to use it"),
+				hint: plain(
+					"laddu sees only this until a task matches, so say what it does and when.",
+				),
+				element: {
+					type: "plain_text_input",
+					action_id: "value",
+					multiline: true,
+					max_length: 1000,
+					placeholder: plain(
+						"Pulls last week's numbers from the sales sheet and posts a summary. Use when asked for the weekly sales report.",
+					),
+					...(skill?.description
+						? { initial_value: skill.description }
+						: {}),
+				},
+			},
+			{
+				type: "input",
+				block_id: "body",
+				label: plain("Steps"),
+				hint: plain(
+					"Short and concrete: the commands, links and gotchas.",
+				),
+				element: {
+					type: "plain_text_input",
+					action_id: "value",
+					multiline: true,
+					max_length: MAX_STEPS,
+					...(skill?.body.trim()
+						? { initial_value: skill.body.trim() }
+						: {}),
+				},
+			},
+		],
+	}
+}
+
+function skillReadView(name: string, text: string): types.ModalView {
+	const chunks = text.match(/[\s\S]{1,2900}/g) ?? [""]
+	return {
+		type: "modal",
+		title: plain("Skill"),
+		close: plain("Close"),
+		blocks: [
+			header(clip(name, 150)),
+			...chunks
+				.slice(0, 95)
+				.map(chunk => row(`\`\`\`${escape(chunk)}\`\`\``)),
+		],
+	}
 }
 
 // ---- name & picture popup -------------------------------------------------------------------
@@ -924,45 +1278,181 @@ export function registerHome(app: App, given: Deps) {
 		await automations?.manage(person, { operation, id })
 	})
 
-	control("home_memory", async ({ person, client, body }) => {
-		const opened = await client.views.open({
-			trigger_id: body.trigger_id,
-			view: memoryView(null),
-		})
-		const view = opened.view!
-		const memory = await readMemory(config, person).catch(error => {
-			console.warn("[home] couldn't read memory", error)
-			return null
-		})
-		await client.views.update({
-			view_id: view.id!,
-			view: memory
-				? memoryView(memory)
-				: memoryView(null, "Couldn't read laddu's memory right now."),
-		})
+	control(/^home_tab_/, async ({ person, client, value }) => {
+		if (!isTab(value)) return
+		tabs.set(personKey(person), value)
+		await showTab(client, person)
 	})
-	const changeMemory = async (
+
+	/** Opens a popup at once (the trigger expires in 3 s), then fills it in. */
+	const popup = async (
+		client: WebClient,
+		triggerId: string,
+		title: string,
+		fill: () => Promise<types.ModalView>,
+	) => {
+		const opened = await client.views.open({
+			trigger_id: triggerId,
+			view: waitView(title),
+		})
+		const view = await fill().catch(error => {
+			console.warn(`[home] ${title} failed`, error)
+			return problemView(title, toolProblem(error))
+		})
+		await client.views.update({ view_id: opened.view!.id!, view })
+	}
+	const viewPerson = (body: {
+		team: { id: string } | null
+		user: { id: string; team_id?: string }
+	}): Person => ({
+		teamId: body.team?.id ?? body.user.team_id!,
+		userId: body.user.id,
+	})
+	/** A popup's Save: runs the change after closing it, then redraws their page. */
+	const saved = async (
 		client: WebClient,
 		person: Person,
-		viewId: string,
-		args: [string, ...string[]],
+		run: () => Promise<string | void>,
 	) => {
-		await runTool(config, person, args)
-		await client.views.update({
-			view_id: viewId,
-			view: memoryView(await readMemory(config, person)),
-		})
+		try {
+			const notice = await run()
+			if (notice) notices.set(personKey(person), notice)
+		} catch (error) {
+			console.warn("[home] save failed", error)
+			notices.set(personKey(person), `:warning:  ${toolProblem(error)}`)
+		}
+		await refreshHome(client, person).catch(error =>
+			console.warn("[home] couldn't publish", error),
+		)
 	}
-	control("home_memory_forget", async ({ person, client, value, body }) => {
-		const [store, number] = value.split("|") as [string, string]
-		await changeMemory(client, person, body.view!.id, [
-			"memory",
-			"forget",
-			store,
-			number,
-		])
+
+	control("home_memory_add", async ({ client, value, body }) => {
+		if (value !== "user" && value !== "notes") return
+		await client.views.open({
+			trigger_id: body.trigger_id,
+			view: memoryEntryView(value, null, ""),
+		})
 	})
-	control("home_memory_clear", async ({ person, client, body }) => {
-		await changeMemory(client, person, body.view!.id, ["memory", "clear"])
+	control("home_memory_entry", async ({ person, client, value, body }) => {
+		const [operation, store, number] = value.split("|") as [
+			string,
+			keyof Memory,
+			string,
+		]
+		if (operation === "forget")
+			return void (await runTool(config, person, [
+				"memory",
+				"forget",
+				store,
+				number,
+			]))
+		await popup(client, body.trigger_id, "Edit memory", async () => {
+			const entry = (await readMemory(config, person))[store][
+				Number(number) - 1
+			]
+			if (entry === undefined) throw new Error("That entry is gone.")
+			return memoryEntryView(store, Number(number), entry)
+		})
+	})
+	control("home_memory_clear", async ({ person }) => {
+		await runTool(config, person, ["memory", "clear"])
+	})
+	app.view("home_memory_save", async ({ ack, body, view, client }) => {
+		const person = viewPerson(body)
+		if (!isAllowed(person.userId)) return ack()
+		await ack()
+		const [store, number] = view.private_metadata.split("|") as [
+			string,
+			string,
+		]
+		const entry = view.state.values.entry?.value?.value ?? ""
+		await saved(client, person, async () => {
+			await runTool(
+				config,
+				person,
+				number
+					? ["memory", "set", store, number, entry]
+					: ["memory", "add", store, entry],
+			)
+		})
+	})
+
+	control("home_skill_new", async ({ client, body }) => {
+		await client.views.open({
+			trigger_id: body.trigger_id,
+			view: skillEditView(null),
+		})
+	})
+	control("home_skill", async ({ person, client, value, body }) => {
+		const [operation, name] = value.split("|") as [string, string]
+		if (operation === "remove") {
+			await runTool(config, person, ["skills", "remove", name])
+			return `:wastebasket:  Removed the *${escape(name)}* skill.`
+		}
+		const read = () => runTool(config, person, ["skills", "show", name])
+		if (operation === "view")
+			return popup(client, body.trigger_id, "Skill", async () =>
+				skillReadView(name, await read()),
+			)
+		await popup(client, body.trigger_id, "Edit skill", async () => {
+			const [text, skills] = await Promise.all([
+				read(),
+				readSkills(config, person),
+			])
+			const { body: steps } = splitSkill(text)
+			if (steps.trim().length > MAX_STEPS)
+				throw new Error(
+					"This skill is too long to edit here. Ask laddu to change it.",
+				)
+			return skillEditView({
+				name,
+				description:
+					skills.find(skill => skill.name === name)?.description ??
+					"",
+				body: steps,
+			})
+		})
+	})
+	app.view("home_skill_save", async ({ ack, body, view, client }) => {
+		const person = viewPerson(body)
+		if (!isAllowed(person.userId)) return ack()
+		const values = view.state.values
+		const editing = view.private_metadata
+		const name =
+			editing ||
+			(values.name?.value?.value ?? "")
+				.trim()
+				.toLowerCase()
+				.replace(/[\s_]+/g, "-")
+		if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name))
+			return ack({
+				response_action: "errors",
+				errors: { name: "Lowercase letters, digits and hyphens only." },
+			})
+		await ack()
+		await saved(client, person, async () => {
+			const exists = (await readSkills(config, person)).some(
+				skill => skill.name === name,
+			)
+			if (!editing && exists)
+				return `:warning:  You already have a skill called *${escape(name)}*. Edit that one instead.`
+			const front = editing
+				? splitSkill(
+						await runTool(config, person, ["skills", "show", name]),
+					).front
+				: []
+			await runTool(
+				config,
+				person,
+				["skills", "save", name],
+				skillText(
+					name,
+					values.description?.value?.value ?? "",
+					values.body?.value?.value ?? "",
+					front,
+				),
+			)
+			return `:white_check_mark:  Saved the *${escape(name)}* skill. laddu uses it from your next message.`
+		})
 	})
 }
