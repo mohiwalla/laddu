@@ -8,6 +8,7 @@ import { instance, paths } from "../config"
 import { writePrivate } from "../files"
 import { codexConfig } from "./codex-config"
 import { startModelProxy, type ModelProxy } from "./model-proxy"
+import { getAccessToken, RESOURCE } from "../auth/siwc"
 import { botApiUrl } from "./bot-api"
 
 const appRoot = Bun.fileURLToPath(new URL("../../", import.meta.url))
@@ -32,7 +33,8 @@ export const OPENCODE_DOCKER_WRAPPER = `${appRoot}scripts/opencode-docker.sh`
 
 const runtimeDir = `${paths.dataDir}/runtime`
 const hostConfigToml = `${runtimeDir}/config.toml`
-const hostModelCatalog = `${runtimeDir}/models.json`
+/** The containers' model catalog, as the host sees it. */
+export const hostModelCatalog = `${runtimeDir}/models.json`
 
 let imageTag: string | null = null
 
@@ -76,26 +78,58 @@ async function codexDistribution() {
 }
 
 /**
- * Writes Codex's bundled model catalog (from the codex build the SDK uses) with sub-agents
- * switched off for every model. Current models enable them from their catalog entry
+ * Writes Codex's model catalog to each path, with sub-agents switched off for every model.
+ * The catalog is the plan's live one, the list the Codex app shows, so a newly launched model
+ * appears without waiting for a codex release; the bundled one (from the codex build the SDK
+ * uses) if that can't be fetched. Current models enable sub-agents from their catalog entry
  * (`multi_agent_version`) whatever `[features]` says, and a sub-agent's reply is an input item
  * the ChatGPT plan rejects, failing the turn. Responses-Lite is off too: it refuses the hosted
  * web search tool, the only search the plan allows (Codex's own search endpoint rejects plan
- * credentials). Regenerated each start, so it follows Codex updates.
+ * credentials). Each file is replaced whole, so a run starting meanwhile never reads half of one.
  */
-export async function writeModelCatalog(path: string): Promise<void> {
-	const { dir } = await codexDistribution()
-	// The bot's own CODEX_HOME, so this never reads or writes your personal ~/.codex.
-	await Bun.$`mkdir -p ${paths.codexHome}`.quiet()
-	const catalog = (await Bun.$`${dir}/bin/codex debug models --bundled`
-		.env({ ...Bun.env, CODEX_HOME: paths.codexHome })
-		.quiet()
-		.json()) as { models: Record<string, unknown>[] }
+export async function writeModelCatalog(...targets: string[]): Promise<void> {
+	const { version, dir } = await codexDistribution()
+	const catalog =
+		(await liveModelCatalog(version)) ??
+		// The bot's own CODEX_HOME, so this never reads or writes your personal ~/.codex.
+		((await Bun.$`mkdir -p ${paths.codexHome} && ${dir}/bin/codex debug models --bundled`
+			.env({ ...Bun.env, CODEX_HOME: paths.codexHome })
+			.quiet()
+			.json()) as { models: Record<string, unknown>[] })
 	for (const model of catalog.models) {
 		model.multi_agent_version = null
 		model.use_responses_lite = false
 	}
-	await writePrivate(path, JSON.stringify(catalog, null, "\t"))
+	for (const target of targets) {
+		await writePrivate(`${target}.tmp`, JSON.stringify(catalog, null, "\t"))
+		await Bun.$`mv ${target}.tmp ${target}`.quiet()
+	}
+}
+
+/** The plan's model catalog as Codex fetches it (same format as the bundled one); null if unavailable. */
+async function liveModelCatalog(
+	version: string,
+): Promise<{ models: Record<string, unknown>[] } | null> {
+	try {
+		const response = await fetch(
+			`${RESOURCE}/models?client_version=${version}`,
+			{
+				headers: { authorization: `Bearer ${await getAccessToken()}` },
+				signal: AbortSignal.timeout(15_000),
+			},
+		)
+		if (!response.ok) throw new Error(`HTTP ${response.status}`)
+		const catalog = (await response.json()) as { models?: unknown }
+		if (!Array.isArray(catalog.models) || !catalog.models.length)
+			throw new Error("no models in the response")
+		return catalog as { models: Record<string, unknown>[] }
+	} catch (error) {
+		console.warn(
+			"[codex] couldn't fetch the live model catalog, using the bundled one:",
+			error,
+		)
+		return null
+	}
 }
 
 /**

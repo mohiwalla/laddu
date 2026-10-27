@@ -20,6 +20,7 @@ import {
 	CONTAINER_WORKDIR,
 	TOOLS_DIR,
 	ensureContainer,
+	hostModelCatalog,
 	stopRun,
 	writeModelCatalog,
 } from "./containers"
@@ -45,12 +46,14 @@ import {
 	type TurnUser,
 } from "./turn"
 
+/** The host runtime's model catalog; the containers' is hostModelCatalog. */
+const modelCatalog = `${paths.codexHome}/models.json`
+
 /** Host runtime: writes the bot's own CODEX_HOME/config.toml and links in the shared skills. */
 export async function prepareCodexHome(
 	workdir: string,
 	localDir: string,
 ): Promise<void> {
-	const modelCatalog = `${paths.codexHome}/models.json`
 	await writeModelCatalog(modelCatalog)
 	await writePrivate(
 		`${paths.codexHome}/config.toml`,
@@ -84,16 +87,23 @@ let catalog: { models: Promise<ModelOption[]>; at: number } | null = null
 const CATALOG_MS = 6 * 3600_000
 
 /**
- * The models Codex offers, as `model/list` reports them (its built-in catalog, the same version
- * as the containers'), cached for a few hours. Empty if it can't be read.
+ * The models Codex offers, as `model/list` reports them, cached for a few hours. Each refresh
+ * rewrites the catalogs runs read too (writeModelCatalog), so a model offered here is one their
+ * Codex knows, and new models show up without a restart. Empty if it can't be read.
  */
 export function listCodexModels(): Promise<ModelOption[]> {
 	if (catalog && Date.now() - catalog.at < CATALOG_MS) return catalog.models
 	const models = (async () => {
+		await writeModelCatalog(modelCatalog, hostModelCatalog)
 		const home = (await Bun.$`mktemp -d`.text()).trim()
 		const codex = hostCodex()
 		const server = new AppServer(
-			[codex.executablePath, "app-server"],
+			[
+				codex.executablePath,
+				"-c",
+				`model_catalog_json=${JSON.stringify(modelCatalog)}`,
+				"app-server",
+			],
 			childEnv({
 				CODEX_HOME: home,
 				PATH: [...codex.pathDirs, Bun.env.PATH ?? ""].join(":"),
