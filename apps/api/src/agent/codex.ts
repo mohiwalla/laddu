@@ -411,13 +411,25 @@ export async function runCodexTurn(options: TurnOptions): Promise<TurnResult> {
 							track(item, method === "item/completed")
 							return
 						}
-						case "error":
-							// Also used for retry notices ("Reconnecting... 1/5"), which aren't the cause of anything.
-							if (!params.willRetry)
-								lastError =
-									(params.error as { message?: string })
-										?.message ?? null
+						case "error": {
+							const message =
+								(params.error as { message?: string })
+									?.message ?? null
+							// Also used for retry notices ("Reconnecting... 1/5"), which aren't the cause of
+							// anything, unless it's a usage limit: Codex would retry it for minutes in silence.
+							if (!params.willRetry) lastError = message
+							else if (message && /usage limit/i.test(message)) {
+								if (threadId && activeTurn)
+									void server
+										.request("turn/interrupt", {
+											threadId,
+											turnId: activeTurn,
+										})
+										.catch(() => {})
+								resolve({ status: "failed", error: message })
+							}
 							return
+						}
 						case "turn/completed": {
 							const turn = params.turn as {
 								id: string

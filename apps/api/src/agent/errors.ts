@@ -10,6 +10,7 @@ export type Failure = {
 	kind:
 		| "auth"
 		| "usage_limit"
+		| "free_limit"
 		| "context_full"
 		| "unsupported"
 		| "lost_thread"
@@ -59,6 +60,20 @@ export function classify(error: unknown, { utcClock = false } = {}): Failure {
 	}
 
 	const text = error instanceof Error ? error.message : String(error)
+	// OpenCode's free models; only those who picked OpenCode are held up, so no pause for everyone.
+	if (/free usage limit/i.test(text))
+		return fail(
+			"free_limit",
+			"OpenCode's free models have hit their usage limit. Please try again later, or switch to Codex in Settings on my Home tab.",
+		)
+	// OpenAI's own cap on apps using a ChatGPT plan (here, laddu), apart from the plan's weekly
+	// limit that Codex shows; it lifts within minutes.
+	if (/subscription sharing usage limit/i.test(text))
+		return fail(
+			"usage_limit",
+			"OpenAI is briefly limiting how much apps like me can use the ChatGPT plan (a short-term cap, not the plan's weekly limit). Please try again in a few minutes.",
+			{ retryAfterMs: SHARING_PAUSE_MS },
+		)
 	if (/usage limit/i.test(text)) {
 		const when = text.match(/try again at\s+([^.\n]+?)\s*\.?\s*$/im)?.[1]
 		return fail(
@@ -99,8 +114,13 @@ export function classify(error: unknown, { utcClock = false } = {}): Failure {
 const PAUSE_MS = 10 * 60 * 1000
 let paused: { until: number; message: string } | null = null
 
+const SHARING_PAUSE_MS = 2 * 60 * 1000
+
 export function pauseForUsageLimit(failure: Failure) {
-	paused = { until: Date.now() + PAUSE_MS, message: failure.message }
+	paused = {
+		until: Date.now() + (failure.retryAfterMs || PAUSE_MS),
+		message: failure.message,
+	}
 }
 
 /** The usage-limit message while paused, else null. */

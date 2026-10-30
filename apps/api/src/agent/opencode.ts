@@ -181,6 +181,37 @@ export async function runOpenCodeTurn(
 				},
 			]
 		: []
+	// OpenCode retries a provider's usage limit in silence for as long as it lasts (ACP doesn't say
+	// so); its log does, so the turn ends with that instead of hanging.
+	const limited = new AbortController()
+	let limit: string | null = null
+	const watch = Bun.spawn(
+		[
+			"docker",
+			"exec",
+			container,
+			"sh",
+			"-c",
+			"tail -n0 -F ~/.local/share/opencode/log/opencode.log 2>/dev/null",
+		],
+		{ stdout: "pipe", stderr: "ignore" },
+	)
+	void (async () => {
+		const lines = watch.stdout.pipeThrough(new TextDecoderStream())
+		for await (const chunk of lines)
+			for (const line of chunk.split("\n")) {
+				const found = line.match(
+					/level=ERROR .*error\.error="([^"]*usage limit[^"]*)"/i,
+				)
+				if (found && !limit) {
+					limit = found[1]!.replace(/^AI_APICallError:\s*/, "")
+					limited.abort()
+				}
+			}
+	})().catch(() => {})
+	const signal = options.signal
+		? AbortSignal.any([options.signal, limited.signal])
+		: limited.signal
 	const result = await runAcpTurn(
 		{
 			command: [OPENCODE_DOCKER_WRAPPER],
@@ -210,7 +241,7 @@ export async function runOpenCodeTurn(
 				),
 				...images,
 			],
-			signal: options.signal,
+			signal,
 			onItem: track,
 			onSteerable: steer =>
 				options.onSteerable?.(
@@ -225,6 +256,10 @@ export async function runOpenCodeTurn(
 				),
 		},
 	)
+		.catch(error => {
+			throw limit ? new Error(limit) : error
+		})
+		.finally(() => watch.kill())
 	const { files, skipped } = await collectOutbox(await listOutbox())
 	return {
 		threadId: result.sessionId,
