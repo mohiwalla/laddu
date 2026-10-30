@@ -65,6 +65,9 @@ function asAttachment(file: SlackFile): SlackAttachment | null {
 	}
 }
 
+/** laddu's whole reply when an untagged message in a group thread wasn't for it. */
+export const SKIP = "[SKIP]"
+
 export type Trigger = {
 	channel: string
 	/** ts of the message the turn answers: the mention, DM, reacted-to message, or the bot's echo of a /laddu request. */
@@ -77,6 +80,11 @@ export type Trigger = {
 	userId: string
 	/** How they asked. Absent means a mention or DM. */
 	via?: "reaction" | "command" | "shortcut" | "answer"
+	/**
+	 * A reply in a thread laddu is part of, without tagging it. "alone": they're the only person
+	 * there, so it's for laddu. "group": others are there too, so laddu decides whether it's for it.
+	 */
+	untagged?: "alone" | "group"
 	/**
 	 * For `command`/`shortcut`: what they typed. For `reaction`: the emoji's name. For `answer`:
 	 * their answer to a question laddu asked with `slack ask`.
@@ -260,6 +268,26 @@ async function threadMessages(
 		cursor = page.response_metadata?.next_cursor || undefined
 	} while (cursor)
 	return [...byTs.values()].sort((a, b) => Number(a.ts) - Number(b.ts))
+}
+
+/** Whether laddu is part of a thread (it posted there or was tagged), and the people who wrote in it. */
+export async function threadMembers(
+	client: WebClient,
+	channel: string,
+	threadTs: string,
+): Promise<{ laddu: boolean; people: Set<string> }> {
+	const people = new Set<string>()
+	let laddu = false
+	for (const message of await threadMessages(client, channel, threadTs)) {
+		if (!isConversation(message)) continue
+		if (ownBot && message.user === ownBot.userId) laddu = true
+		else if (message.user && !message.bot_id) {
+			people.add(message.user)
+			if (ownBot && message.text?.includes(`<@${ownBot.userId}>`))
+				laddu = true
+		}
+	}
+	return { laddu, people }
 }
 
 /**
@@ -645,9 +673,11 @@ export async function buildTurnInput(options: {
 	const inThread = trigger.threadTs ? ", inside a thread" : ""
 	const header = session
 		? `New Slack messages in the same thread (${where}) since your last reply to ${requester}, oldest first:`
-		: trigger.via
-			? `Slack messages in ${where}${inThread}, oldest first:`
-			: `${requester} mentioned you in Slack (${where}${inThread}). Conversation so far, oldest first:`
+		: trigger.untagged
+			? `${requester} wrote in a Slack thread you're part of (${where}), without tagging you. Conversation so far, oldest first:`
+			: trigger.via
+				? `Slack messages in ${where}${inThread}, oldest first:`
+				: `${requester} mentioned you in Slack (${where}${inThread}). Conversation so far, oldest first:`
 	const request = trigger.request?.trim()
 	const ask =
 		trigger.via === "reaction"
@@ -658,7 +688,9 @@ export async function buildTurnInput(options: {
 					? `${requester} used "Ask laddu" on the last message above${request ? ` and asked: "${request}"` : ", asking you to help with it"}. Respond to that.`
 					: trigger.via === "answer"
 						? `${requester} answered the question you asked them in this thread. ${request} Carry on with what you were doing.`
-						: `Respond to the last message, from ${requester}.`
+						: trigger.untagged === "group"
+							? `The last message, from ${requester}, didn't tag you, and others are in this thread. Decide whether it's meant for you: said to you, a follow-up to what you said or did here, or something only you would do. If it is, respond to it. If they're talking to someone else or among themselves, reply with exactly ${SKIP} and nothing else, without running any commands.`
+							: `Respond to the last message, from ${requester}.`
 	const text = [
 		header,
 		"",

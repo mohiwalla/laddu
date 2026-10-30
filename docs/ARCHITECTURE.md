@@ -421,6 +421,11 @@ STOP withdraws open questions. Questions live in memory, for 24 hours.
 
 - **@mention** in channels (`app_mention`) and group DMs (`message.mpim` containing the mention;
   Slack sends no `app_mention` there), and **every DM** (`message.im`).
+- **Untagged thread replies** (`message.channels`/`groups`/`mpim`): in a thread laddu is part of
+  (it posted there or was tagged), a reply that doesn't tag anyone. If the writer is the only
+  person there it's for laddu. If others are there too, the writer's agent decides: it answers, or
+  replies `[SKIP]` and laddu shows nothing (no status, reply or error until it takes a step).
+  Replies tagging someone else are left alone. Who's in each thread is read once and kept in memory.
 - **Reaction**: reacting with `TRIGGER_EMOJI` (default `robot_face`) to a message asks laddu to
   handle that message; it answers in the message's thread, for the person who reacted.
 - **`/laddu <request>`**: laddu posts "<@you> asked: …" where it was typed and answers in its thread

@@ -308,3 +308,91 @@ test.each(["stop", "Stop", "STOP please", "please STOP"])(
 		expect(serialized).toHaveBeenCalled()
 	},
 )
+
+/** An untagged reply in a channel thread, with `thread` as what Slack says is in that thread. */
+async function replyInThread(
+	text: string,
+	thread: { user?: string; bot_id?: string; text?: string }[],
+	author = userId,
+) {
+	const threadTs = `1792200000.${String(++sequence).padStart(6, "0")}`
+	const ts = `1792200001.${String(sequence).padStart(6, "0")}`
+	let onMessage!: (args: unknown) => Promise<void>
+	const app = {
+		event: () => {},
+		action: () => {},
+		message: (handler: typeof onMessage) => {
+			onMessage = handler
+		},
+		command: () => {},
+		shortcut: () => {},
+		view: () => {},
+	} as unknown as App
+	registerHandlers(app, { allowedUsers: "*" } as BotConfig, botUserId)
+	context.recognizeOwnMessages("B_LADDU", botUserId)
+	const replies = mock(async () => ({
+		messages: [
+			{ ts: threadTs, ...thread[0] },
+			...thread.slice(1).map((message, index) => ({
+				ts: `1792200000.9${String(index).padStart(5, "0")}`,
+				thread_ts: threadTs,
+				...message,
+			})),
+		],
+	}))
+	await onMessage({
+		message: {
+			channel,
+			channel_type: "channel",
+			user: author,
+			text,
+			ts,
+			thread_ts: threadTs,
+		},
+		client: { conversations: { replies } },
+		context: { teamId: "T_TEAM" },
+	})
+	return { ts, threadTs, replies }
+}
+
+test("an untagged reply where laddu is talking with just them is for laddu", async () => {
+	const { ts } = await replyInThread("and the weekly one too", [
+		{ user: userId, text: `<@${botUserId}> pull the daily numbers` },
+		{ user: botUserId, text: "Here they are" },
+	])
+	expect(started).toHaveBeenCalledWith(
+		`${channel}:${ts}`,
+		expect.objectContaining({ untagged: "alone" }),
+	)
+})
+
+test("with others in the thread laddu decides whether it's for it", async () => {
+	const { ts } = await replyInThread("can you also add March?", [
+		{ user: userId, text: `<@${botUserId}> pull the numbers` },
+		{ user: botUserId, text: "Here they are" },
+		{ user: "U0COLLEAGUE", text: "nice" },
+	])
+	expect(started).toHaveBeenCalledWith(
+		`${channel}:${ts}`,
+		expect.objectContaining({ untagged: "group" }),
+	)
+})
+
+test("untagged replies are ignored in threads laddu isn't part of", async () => {
+	await replyInThread("sounds good", [
+		{ user: "U0COLLEAGUE", text: "lunch?" },
+	])
+	expect(started).not.toHaveBeenCalled()
+})
+
+test("untagged replies tagging someone else are left alone without reading the thread", async () => {
+	const { replies } = await replyInThread(
+		"<@U0COLLEAGUE> what do you think?",
+		[
+			{ user: userId, text: `<@${botUserId}> pull the numbers` },
+			{ user: botUserId, text: "Here they are" },
+		],
+	)
+	expect(replies).not.toHaveBeenCalled()
+	expect(started).not.toHaveBeenCalled()
+})

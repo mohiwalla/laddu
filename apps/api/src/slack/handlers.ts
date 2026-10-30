@@ -23,7 +23,9 @@ import {
 } from "../sessions"
 import {
 	buildTurnInput,
+	SKIP,
 	steerInput,
+	threadMembers,
 	userName,
 	userTimezone,
 	type Trigger,
@@ -92,6 +94,35 @@ type Steered = { seen: string; lines: string[] }
  */
 const steering = new Map<string, { steer: Steer; steered: Steered }>()
 
+/**
+ * Threads laddu has looked at, by channel:thread: whether it's part of each and who wrote there,
+ * so untagged replies are checked without reading the thread every time.
+ */
+const threads = new Map<string, { laddu: boolean; people: Set<string> }>()
+const MAX_THREADS = 5000
+
+/** laddu was asked something in this thread: it's part of it from now on. */
+function joinThread(trigger: Trigger) {
+	const known = threads.get(
+		`${trigger.channel}:${trigger.threadTs ?? trigger.ts}`,
+	)
+	if (!known) return
+	known.laddu = true
+	known.people.add(trigger.userId)
+}
+
+async function threadFor(client: WebClient, channel: string, threadTs: string) {
+	const key = `${channel}:${threadTs}`
+	let known = threads.get(key)
+	if (!known) {
+		known = await threadMembers(client, channel, threadTs)
+		threads.set(key, known)
+		if (threads.size > MAX_THREADS)
+			threads.delete(threads.keys().next().value!)
+	}
+	return known
+}
+
 /** A mention or DM's own words, without mentions. */
 const ownWords = (trigger: Trigger) =>
 	trigger.via
@@ -121,7 +152,11 @@ async function handle(
 	trigger: Trigger,
 ) {
 	if (!firstDelivery(trigger)) return
+	joinThread(trigger)
 	const threadTs = trigger.threadTs ?? trigger.ts
+	// Untagged in a thread with others: laddu may decide it isn't for it, so it shows nothing
+	// (no status, no reply, no errors) until it starts working on it.
+	const quiet = trigger.untagged === "group"
 	// Per user: each person in a shared thread has their own Codex thread, in their own container.
 	const key = sessionKey(trigger.channel, threadTs, trigger.userId)
 	// STOP ends this person's work in this thread (running and queued), nobody else's; their reply
@@ -159,8 +194,12 @@ async function handle(
 
 	await serialize(key, async () => {
 		let reply: Reply | undefined
+		let started = false
 		try {
-			await agent.start()
+			if (!quiet) {
+				await agent.start()
+				started = true
+			}
 			const user = { teamId: trigger.teamId, userId: trigger.userId }
 			reply = await openReply(
 				client,
@@ -176,6 +215,10 @@ async function handle(
 			// first time ever, a note saying where it is).
 			let linkSent = false
 			const onStep = (step: Step) => {
+				if (!started) {
+					started = true
+					agent.start().catch(() => {})
+				}
 				reply!.step(step)
 				if (!step.computer || linkSent) return
 				linkSent = true
@@ -273,6 +316,11 @@ async function handle(
 					...new Set([...(session?.linked ?? []), ...turn.linked]),
 				],
 			})
+			// Untagged and not for laddu: it stays out of it.
+			if (quiet && result.text.trim() === SKIP && !result.files.length) {
+				await reply.discard()
+				return
+			}
 			// Nothing to say (e.g. "thanks"): Codex answers with just [REACT:emoji] and laddu only reacts.
 			const reaction = result.files.length
 				? undefined
@@ -348,6 +396,8 @@ async function handle(
 					: classify(error, { utcClock: config.runtime === "docker" })
 			if (!(error instanceof TurnFailed)) console.error(`[${key}]`, error)
 			if (failure.kind === "usage_limit") pauseForUsageLimit(failure)
+			// Nobody asked laddu, so it doesn't post a failure about it.
+			if (quiet && !started) return
 			const message = failure.resetThread
 				? `${failure.message} I've started our conversation in this thread over; please ask again.`
 				: failure.message
@@ -545,17 +595,48 @@ export function registerHandlers(
 		})
 	})
 
-	// Every message in a DM with the bot (no mention needed), and mentions in group DMs, where
-	// Slack sends no app_mention.
+	// Every message in a DM with the bot (no mention needed), mentions in group DMs, where Slack
+	// sends no app_mention, and untagged replies in threads laddu is part of.
 	app.message(async ({ message, client, context }) => {
 		// Plain messages and ones with attachments ("file_share"); edits, joins etc. carry other subtypes.
 		if (message.subtype !== undefined && message.subtype !== "file_share")
 			return
-		const groupMention =
-			message.channel_type === "mpim" &&
-			(message.text ?? "").includes(`<@${botUserId}>`)
-		if (message.channel_type !== "im" && !groupMention) return
 		if (!isAllowed(message.user)) return
+		const text = message.text ?? ""
+		const tagged = text.includes(`<@${botUserId}>`)
+		const groupMention = message.channel_type === "mpim" && tagged
+		if (message.channel_type !== "im" && !groupMention) {
+			// Tagged ones come as app_mention; top-level messages aren't laddu's business.
+			if (
+				tagged ||
+				!message.thread_ts ||
+				message.thread_ts === message.ts
+			)
+				return
+			// Said to someone else.
+			if (/<@[UW][A-Z0-9]+(?:\|[^>]*)?>/.test(text)) return
+			const thread = await threadFor(
+				client,
+				message.channel,
+				message.thread_ts,
+			).catch(error => {
+				console.warn("[untagged] couldn't read the thread", error)
+				return null
+			})
+			if (!thread?.laddu) return
+			thread.people.add(message.user)
+			void handle(client, config, botUserId, {
+				channel: message.channel,
+				ts: message.ts,
+				threadTs: message.thread_ts,
+				isDm: false,
+				teamId: context.teamId!,
+				userId: message.user,
+				text,
+				untagged: thread.people.size > 1 ? "group" : "alone",
+			})
+			return
+		}
 		void handle(client, config, botUserId, {
 			channel: message.channel,
 			ts: message.ts,
