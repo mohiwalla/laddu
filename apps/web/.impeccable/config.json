@@ -1,0 +1,35 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "apps/web/index.html"
+        ],
+        "createdAt": "2026-11-02T09:34:53.216Z",
+        "reason": "Claude triage: static scan without computed CSS; rendered detector scans of the built page at 1440 and 390 report no cramped-padding"
+      },
+      {
+        "rule": "pulsing-dot",
+        "value": "*",
+        "files": [
+          "apps/web/index.html"
+        ],
+        "createdAt": "2026-11-02T09:57:41.223Z",
+        "reason": "Claude triage: live-status dots on the looping thread and desktop demos; user asked for continuous, rich animation"
+      },
+      {
+        "rule": "blinking-cursor",
+        "value": "*",
+        "files": [
+          "apps/web/index.html"
+        ],
+        "createdAt": "2026-11-02T09:57:41.240Z",
+        "reason": "Claude triage: text caret inside the typing replays (Slack composer, URL bar, terminal); user asked for continuous animation"
+      }
+    ]
+  }
+}
