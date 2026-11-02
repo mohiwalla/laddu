@@ -38,6 +38,7 @@ laddu is a personal AI assistant that lives in Slack. You tag it in a channel, t
 
 - Name is **laddu** (lowercase), Punjabi ਲੱਡੂ. Formerly "dot"; "dot" must never appear on the site. Domain laddu.wtf.
 - Mascot world: laddu (an orange boondi laddoo with sparkly eyes and a black bow tie) plus the mithai gang (Jalebi ਜਲੇਬੀ, Kaju Katli ਕਾਜੂ ਕਤਲੀ, Gulab Jamun ਗੁਲਾਬ ਜਾਮਣ, Rasgulla ਰਸਗੁੱਲਾ), each in a bow tie. The owner likes this theme and its warm pink / saffron / pistachio palette and wants it kept.
+- The mithai are not separate helpers and have no roles: they are names and looks the same bot can be given (laddu is the default; the name and picture are customizable, per the owner). The site must never imply a mithai does a particular job; capabilities are always shown as laddu's.
 - Voice: warm, playful, plain words; never at the cost of being clear about what it is and what it can reach.
 - Source link: https://github.com/mohiwalla/laddu (confirmed by the owner).
 
