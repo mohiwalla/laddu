@@ -14,6 +14,7 @@ const watcher = new IntersectionObserver(
 	{ rootMargin: "80px" },
 )
 for (const section of document.querySelectorAll("[data-live]")) watcher.observe(section)
+document.documentElement.classList.add("js")
 
 const active = el => live.has(el.closest("[data-live]")) && !document.hidden
 
@@ -498,7 +499,7 @@ if (picker) {
 			for (let i = 0; ; i = (i + 1) % tour.length) {
 				await wait(picker, 1000)
 				// Someone is choosing: leave the controls to them for a moment.
-				if (Date.now() - touched < 6000 || picker.matches(":hover")) continue
+				if (Date.now() - touched < 6000 || picker.matches(":hover, :focus-within")) continue
 				Object.assign(state, tour[i])
 				render()
 			}

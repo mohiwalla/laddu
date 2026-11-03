@@ -3315,8 +3315,8 @@ code {
 	}
 }
 
-/* Loops sleep while their section is off screen. */
-[data-live]:not(.is-live) * {
+/* Loops sleep while their section is off screen. Only once JS is watching, so the page still plays without it. */
+.js [data-live]:not(.is-live) * {
 	animation-play-state: paused !important;
 }
 
