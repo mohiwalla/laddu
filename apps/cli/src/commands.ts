@@ -1,5 +1,4 @@
 /** Everything after setup: change settings, sign in again, check, update, run and remove. */
-import { existingChatGpt, signInWithChatGpt } from "./chatgpt"
 import { Instance } from "./instance"
 import { bun, fromPackage, instanceNames } from "./paths"
 import {
@@ -37,8 +36,6 @@ import {
 	yellow,
 } from "./terminal"
 
-const APP_NAME = "laddu"
-
 export async function configure(instance: Instance): Promise<boolean> {
 	say("", bold(`Settings for ${instance.name}`))
 	const env = await instance.env()
@@ -53,7 +50,7 @@ export async function configure(instance: Instance): Promise<boolean> {
 		{ label: "Private instructions (AGENTS.local.md)", value: "notes" },
 		{ label: "Edit the .env file", value: "env" },
 		{
-			label: "Name, Slack app, runtime, desktop, public address",
+			label: "Name, Slack app, desktop, public address",
 			value: "setup",
 			hint: "runs setup again",
 		},
@@ -61,24 +58,11 @@ export async function configure(instance: Instance): Promise<boolean> {
 
 	switch (action) {
 		case "model": {
-			const chatgpt = await existingChatGpt(instance.dataDir, APP_NAME)
-			const models = chatgpt?.models ?? []
-			const model = models.length
-				? await choose(
-						"Model",
-						models.map(model => ({
-							label: model.slug,
-							value: model.slug,
-							hint: model.name,
-						})),
-						Math.max(
-							0,
-							models.findIndex(
-								model => model.slug === env.CODEX_MODEL,
-							),
-						),
-					)
-				: await ask("Model slug", { default: env.CODEX_MODEL })
+			// People pick their own on laddu's Home tab; this is only the default.
+			const model = await ask(
+				"Default model slug (blank: Codex's default for each person's plan)",
+				{ default: env.CODEX_MODEL },
+			)
 			const efforts = ["low", "medium", "high", "xhigh"]
 			const effort = await choose(
 				"Reasoning effort",
@@ -89,11 +73,11 @@ export async function configure(instance: Instance): Promise<boolean> {
 				),
 			)
 			const fast = await confirm(
-				"Fast mode (quicker, uses more of the plan's limits)?",
+				"Fast mode by default (quicker, uses more of each person's plan limits)?",
 				env.CODEX_FAST === "true",
 			)
 			await instance.setEnv({
-				CODEX_MODEL: model,
+				CODEX_MODEL: model || null,
 				CODEX_REASONING_EFFORT: effort,
 				CODEX_FAST: String(fast),
 			})
@@ -196,13 +180,6 @@ export async function restart(instance: Instance): Promise<boolean> {
 	return start(instance)
 }
 
-/** ChatGPT sign-in again, e.g. after the bot says the session ended. */
-export async function login(instance: Instance): Promise<boolean> {
-	const result = await signInWithChatGpt(instance.dataDir, APP_NAME)
-	done(`Signed in as ${result.email ?? "someone"}`)
-	return restart(instance)
-}
-
 export async function doctor(instance: Instance): Promise<boolean> {
 	say("", bold(`Checking ${instance.name}`))
 	const env = await instance.env()
@@ -240,14 +217,8 @@ export async function doctor(instance: Instance): Promise<boolean> {
 	const running = await state(instance.name)
 	check(running === "active", `Service ${running}`, `Service ${running}`)
 
-	if (env.CODEX_RUNTIME !== "host") {
-		const docker = await Bun.$`docker info`.quiet().nothrow()
-		check(
-			docker.exitCode === 0,
-			"Docker reachable",
-			"Docker isn't reachable",
-		)
-	}
+	const docker = await Bun.$`docker info`.quiet().nothrow()
+	check(docker.exitCode === 0, "Docker reachable", "Docker isn't reachable")
 
 	if (env.SLACK_BOT_TOKEN) {
 		const bot = await checkBotToken(env.SLACK_BOT_TOKEN).catch(
@@ -270,19 +241,6 @@ export async function doctor(instance: Instance): Promise<boolean> {
 			`Slack app-level token: ${app instanceof SlackError ? app.code : app?.message}`,
 		)
 	}
-
-	const chatgpt = await existingChatGpt(instance.dataDir, APP_NAME)
-	check(
-		!!chatgpt,
-		`ChatGPT: ${chatgpt?.email ?? "signed in"}`,
-		`ChatGPT sign-in missing or ended; run \`laddu login --name ${instance.name}\``,
-	)
-	if (chatgpt?.models.length && env.CODEX_MODEL)
-		check(
-			chatgpt.models.some(model => model.slug === env.CODEX_MODEL),
-			`Model ${env.CODEX_MODEL}`,
-			`Model ${env.CODEX_MODEL} isn't on your plan; \`laddu configure\` picks another`,
-		)
 
 	if (running !== "active") {
 		say("", dim("  Last log lines:"))

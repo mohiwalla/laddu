@@ -7,6 +7,8 @@ import type { SlackForms } from "./forms"
 import type { BotConfig } from "../config"
 import { runTurn } from "../agent/agents"
 import type { Steer, TurnResult } from "../agent/turn"
+import { signIn } from "../agent/account"
+import { systemName } from "./system"
 import {
 	classify,
 	pauseForUsageLimit,
@@ -43,6 +45,7 @@ import {
 } from "./questions"
 import { computerInUse } from "../agent/desktop"
 import { registerHome } from "./home"
+import { askedForKey, registerKeys } from "./keys"
 import type { Step } from "../agent/steps"
 import { markDone, markReply, markStarted, takeInterrupted } from "../inflight"
 import { chunkMarkdown } from "./reply"
@@ -195,12 +198,12 @@ async function handle(
 	await serialize(key, async () => {
 		let reply: Reply | undefined
 		let started = false
+		const user = { teamId: trigger.teamId, userId: trigger.userId }
 		try {
 			if (!quiet) {
 				await agent.start()
 				started = true
 			}
-			const user = { teamId: trigger.teamId, userId: trigger.userId }
 			reply = await openReply(
 				client,
 				{
@@ -234,8 +237,8 @@ async function handle(
 				)
 			}
 			const personal = await configFor(config, user)
-			// The ChatGPT plan's usage limit only holds up Codex.
-			const paused = personal.agent === "codex" && usagePause()
+			// Their ChatGPT plan's usage limit only holds up Codex.
+			const paused = personal.agent === "codex" && usagePause(user)
 			if (paused)
 				throw new TurnFailed({
 					...classify(new Error("usage limit")),
@@ -248,6 +251,7 @@ async function handle(
 			let turn: TurnInput
 			// Messages added to this turn while it runs (steerInto).
 			const steered: Steered = { seen: trigger.ts, lines: [] }
+			const turnStarted = Date.now()
 			let result: TurnResult
 			for (let attempt = 1; ; attempt++) {
 				try {
@@ -282,6 +286,7 @@ async function handle(
 							),
 						},
 						onStep,
+						onTodos: todos => reply!.todos(todos),
 						onSteerable: steer => {
 							if (steer) steering.set(key, { steer, steered })
 							else if (steering.get(key)?.steered === steered)
@@ -291,9 +296,7 @@ async function handle(
 					break
 				} catch (error) {
 					if (agent.signal.aborted) throw error
-					const failure = classify(error, {
-						utcClock: config.runtime === "docker",
-					})
+					const failure = classify(error)
 					console.error(
 						`[${key}] attempt ${attempt} failed (${failure.kind}):`,
 						error,
@@ -322,9 +325,18 @@ async function handle(
 				return
 			}
 			// Nothing to say (e.g. "thanks"): Codex answers with just [REACT:emoji] and laddu only reacts.
-			const reaction = result.files.length
-				? undefined
-				: result.text.trim().match(/^\[REACT:([a-z0-9_+'-]+)\]$/i)?.[1]
+			// Asking them for a key: the private request is its message, and it carries on once they've
+			// added it.
+			const reaction = askedForKey(
+				{ ...user, channel: trigger.channel, threadTs },
+				turnStarted,
+			)
+				? "speech_balloon"
+				: result.files.length
+					? undefined
+					: result.text
+							.trim()
+							.match(/^\[REACT:([a-z0-9_+'-]+)\]$/i)?.[1]
 			if (reaction) {
 				await reply.discard()
 				if (
@@ -391,15 +403,34 @@ async function handle(
 				return
 			}
 			const failure =
-				error instanceof TurnFailed
-					? error.failure
-					: classify(error, { utcClock: config.runtime === "docker" })
+				error instanceof TurnFailed ? error.failure : classify(error)
 			if (!(error instanceof TurnFailed)) console.error(`[${key}]`, error)
-			if (failure.kind === "usage_limit") pauseForUsageLimit(failure)
+			if (failure.kind === "usage_limit")
+				pauseForUsageLimit(user, failure)
 			// Nobody asked laddu, so it doesn't post a failure about it.
 			if (quiet && !started) return
+			// Not signed in to ChatGPT: the sign-in comes to them, privately, where they asked.
+			if (failure.kind === "auth") {
+				const sent = await signIn(config, client, user, {
+					channel: trigger.channel,
+					threadTs,
+				}).then(
+					() => true,
+					error => {
+						console.warn(
+							`[${key}] couldn't start the sign-in`,
+							error,
+						)
+						return false
+					},
+				)
+				if (sent) {
+					await reply?.discard().catch(() => {})
+					return
+				}
+			}
 			const message = failure.resetThread
-				? `${failure.message} I've started our conversation in this thread over; please ask again.`
+				? `${failure.message} It starts fresh now; send your message again.`
 				: failure.message
 			if (reply)
 				await reply
@@ -467,8 +498,8 @@ async function notifyDirectly(
 ) {
 	const notInChannel = /not_in_channel|channel_not_found/.test(message)
 	const text = notInChannel
-		? `I couldn't answer in <#${trigger.channel}> because I'm not in it. Add me with \`/invite @laddu\`, or ask me here.`
-		: `I couldn't answer in <#${trigger.channel}>: ${message}`
+		? `${systemName()} couldn't answer in <#${trigger.channel}>: it isn't in that channel. Add it with \`/invite @${systemName()}\`, or ask here.`
+		: `${systemName()} couldn't answer in <#${trigger.channel}>. ${message}`
 	const { channel } = await client.conversations
 		.open({ users: trigger.userId })
 		.catch(() => ({ channel: undefined }))
@@ -490,8 +521,8 @@ export async function resumeInterrupted(
 	for (const { trigger, startedAt, reply } of await takeInterrupted()) {
 		const retry = Date.now() - startedAt < RESUME_WITHIN_MS
 		const note = retry
-			? "_I was restarted mid-answer, so I'm starting over below._"
-			: "_I was restarted mid-answer. Please ask again._"
+			? `_${systemName()} restarted mid-answer; starting over below._`
+			: `_${systemName()} restarted mid-answer. Send your message again._`
 		if (reply)
 			await closeInterrupted(
 				client,
@@ -534,6 +565,20 @@ export function registerHandlers(
 			isDm: question.channel.startsWith("D"),
 			via: "answer",
 			request,
+		})
+	})
+
+	// Keys they add when asked (`connections key request`): carry on like an answer.
+	registerKeys(app, { config, isAllowed }, (request, message) => {
+		void handle(app.client, config, botUserId, {
+			teamId: request.teamId,
+			userId: request.userId,
+			channel: request.channel,
+			ts: request.ts,
+			threadTs: request.threadTs,
+			isDm: request.channel.startsWith("D"),
+			via: "answer",
+			request: message,
 		})
 	})
 
@@ -694,7 +739,7 @@ export function registerHandlers(
 		if (!isAllowed(command.user_id)) {
 			await respond({
 				response_type: "ephemeral",
-				text: "Sorry, I'm not set up to answer you.",
+				text: `You don't have access to ${systemName()}. Ask whoever runs it to add you.`,
 			})
 			return
 		}
@@ -702,7 +747,7 @@ export function registerHandlers(
 		if (!request) {
 			await respond({
 				response_type: "ephemeral",
-				text: "Tell me what you need, e.g. `/laddu summarize this channel's last week`.",
+				text: `Add your request after the command, e.g. \`/${command.command.replace(/^\//, "")} summarize this channel's last week\`.`,
 			})
 			return
 		}
@@ -715,7 +760,7 @@ export function registerHandlers(
 		if (!echo?.ts) {
 			await respond({
 				response_type: "ephemeral",
-				text: "I can't post here. Add me with `/invite @laddu`, or use `/laddu` in our DM.",
+				text: `${systemName()} can't post here. Add it with \`/invite @${systemName()}\`, or use the command in your DM with ${systemName()}.`,
 			})
 			return
 		}
@@ -754,7 +799,7 @@ export function registerHandlers(
 						optional: true,
 						label: {
 							type: "plain_text",
-							text: "What should I do with this message?",
+							text: `What should ${systemName()} do with this message?`,
 						},
 						element: {
 							type: "plain_text_input",
@@ -762,7 +807,7 @@ export function registerHandlers(
 							multiline: true,
 							placeholder: {
 								type: "plain_text",
-								text: "Leave empty and I'll work out how to help.",
+								text: "Leave empty to let it work out how to help.",
 							},
 						},
 					},
@@ -846,7 +891,7 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 		].join("\n")
 		try {
 			const personal = await configFor(config, user)
-			const usage = personal.agent === "codex" && usagePause()
+			const usage = personal.agent === "codex" && usagePause(user)
 			if (usage)
 				throw new TurnFailed({
 					...classify(new Error("usage limit")),
@@ -889,19 +934,18 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 			return "done"
 		} catch (error) {
 			const failure =
-				error instanceof TurnFailed
-					? error.failure
-					: classify(error, { utcClock: config.runtime === "docker" })
+				error instanceof TurnFailed ? error.failure : classify(error)
 			console.error(
 				`[scheduler] ${job.id} "${job.name}" failed (${failure.kind}):`,
 				error,
 			)
-			if (failure.kind === "usage_limit") pauseForUsageLimit(failure)
+			if (failure.kind === "usage_limit")
+				pauseForUsageLimit(user, failure)
 			if (!willRetry(job))
 				await postTo(
 					client,
 					target,
-					`${label}\n\n:warning: This scheduled task failed: ${failure.message}`,
+					`${label}\n\n:warning: This scheduled task failed. ${failure.message}`,
 					user,
 				).catch(() => {})
 			return "failed"
@@ -918,7 +962,7 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 		await postTo(
 			client,
 			target,
-			`_:alarm_clock: ${job.name}_\n\n:warning: I was offline when this was due (${due}), so it didn't run. Ask me again if you still need it.`,
+			`_:alarm_clock: ${job.name}_\n\n:warning: Didn't run: ${systemName()} was offline when this was due (${due}). Ask again if you still need it.`,
 			{ teamId: job.teamId, userId: job.userId },
 		)
 	}

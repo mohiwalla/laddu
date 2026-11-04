@@ -9,6 +9,7 @@ import type { App } from "@slack/bolt"
 import type { BotConfig } from "../config"
 import { paths } from "../config"
 import { readJson, writeJsonPrivate } from "../files"
+import { type Sent, sendNotice, systemName, type Where } from "./system"
 
 type WebClient = App["client"]
 export type Settings = NonNullable<BotConfig["slackSignIn"]>
@@ -91,17 +92,24 @@ export async function status(person: Person): Promise<string> {
 	const connection = (await load())[key(person)]
 	return connection
 		? `Connected since ${connection.connectedAt.slice(0, 10)}: DMs go out as them. Granted scopes: ${connection.scopes.join(", ")}. Run slack connect to grant the expanded Slack Free tools.`
-		: "Not connected: DMs can only come from laddu (`slack dm --from-laddu`). `slack connect` sends them a link to connect."
+		: `Not connected: DMs can only come from ${systemName()} (\`slack dm --from-laddu\`). \`slack connect\` sends them a link to connect.`
 }
 
 /** Sign-in links waiting to be used, by their `state`. One per person; a newer one replaces it. */
-const pending = new Map<string, { person: Person; expires: number }>()
+const pending = new Map<
+	string,
+	{ person: Person; expires: number; where: Where; sent?: Sent }
+>()
 
-/** DMs them a link to allow laddu to post as them. Returns what to tell Codex. */
+/**
+ * Sends them a link to connect their Slack account, privately where they asked (`where`; null:
+ * their DM). Returns what to tell Codex.
+ */
 export async function connect(
 	settings: Settings,
 	client: WebClient,
 	person: Person,
+	where: Where,
 ): Promise<string> {
 	for (const [state, waiting] of pending)
 		if (waiting.expires < Date.now() || key(waiting.person) === key(person))
@@ -109,10 +117,17 @@ export async function connect(
 	const state = Array.from(crypto.getRandomValues(new Uint8Array(32)), byte =>
 		byte.toString(16).padStart(2, "0"),
 	).join("")
-	pending.set(state, {
+	const waiting: {
+		person: Person
+		expires: number
+		where: Where
+		sent?: Sent
+	} = {
 		person,
 		expires: Date.now() + LINK_MINUTES * 60_000,
-	})
+		where,
+	}
+	pending.set(state, waiting)
 	const link = `https://slack.com/oauth/v2/authorize?${new URLSearchParams({
 		client_id: settings.clientId,
 		user_scope: USER_SCOPES.join(","),
@@ -120,11 +135,15 @@ export async function connect(
 		state,
 		team: person.teamId,
 	})}`
-	await client.chat.postMessage({
-		channel: person.userId,
-		text: `To use Slack tools through laddu, <${link}|connect your Slack account> and allow it. This grants access to search and read conversations you can access, send messages, manage channels and files, and update your status, reminders and channel canvases when you ask. The link works for ${LINK_MINUTES} minutes; if you didn't ask for this, ignore it.`,
+	waiting.sent = await sendNotice(client, person, where, {
+		icon: ":key:",
+		title: "Connect your Slack account",
+		text: `${systemName()} needs it to search Slack and send messages as you.`,
+		steps: ["Open the link.", "Press *Allow*."],
+		link: { label: "Connect Slack", url: link },
+		footer: `Works for ${LINK_MINUTES} minutes. Didn't ask for this? Ignore it.`,
 	})
-	return "Sent them a link in a DM with laddu to connect their Slack account. Once they allow it, laddu confirms in that DM; then ask again."
+	return `Sent them a private link to connect their Slack account${where ? " in this conversation" : ` in their DM with ${systemName()}`}; they'll see when it's connected. Ask them to send their message again after that.`
 }
 
 export async function disconnect(
@@ -140,7 +159,7 @@ export async function disconnect(
 
 const page = (status: number, text: string) =>
 	new Response(
-		`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>laddu</title><body style="font:16px system-ui;margin:3em auto;max-width:32em;padding:0 1em">${text}</body>`,
+		`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${systemName()}</title><body style="font:16px system-ui;margin:3em auto;max-width:32em;padding:0 1em">${text}</body>`,
 		{ status, headers: { "content-type": "text/html; charset=utf-8" } },
 	)
 
@@ -157,9 +176,9 @@ export async function oauthCallback(
 	if (!waiting || waiting.expires < Date.now())
 		return page(
 			400,
-			"This link has expired or was already used. Ask laddu to connect Slack again.",
+			`This link has expired or was already used. Ask ${systemName()} to connect Slack again.`,
 		)
-	const { person } = waiting
+	const { person, where, sent } = waiting
 	const code = url.searchParams.get("code")
 	if (!code) return page(200, "Not connected; you cancelled.")
 
@@ -183,14 +202,14 @@ export async function oauthCallback(
 		console.warn("[slack sign-in] failed:", result.error)
 		return page(
 			502,
-			`Slack didn't finish the sign-in (${result.error ?? "no token"}). Ask laddu to connect again.`,
+			`Slack didn't finish the sign-in (${result.error ?? "no token"}). Ask ${systemName()} to connect Slack again.`,
 		)
 	}
 	if (user.id !== person.userId || result.team?.id !== person.teamId) {
 		await client.auth.revoke({ token: user.access_token }).catch(() => {})
 		return page(
 			403,
-			"You allowed it from a different Slack account than the one that asked laddu, so it isn't connected.",
+			`You allowed it from a different Slack account than the one that asked ${systemName()}, so it isn't connected.`,
 		)
 	}
 	;(await load())[key(person)] = {
@@ -200,14 +219,18 @@ export async function oauthCallback(
 	}
 	await save()
 	console.info(`[slack sign-in] ${person.userId} connected`)
-	await client.chat
-		.postMessage({
-			channel: person.userId,
-			text: "Slack connected: you can now ask me to search Slack, work with channels, messages, files, reminders and channel canvases, and update your status. DMs come from you. Ask me to disconnect Slack to undo it.",
-		})
-		.catch(() => {})
+	const connected = {
+		icon: ":white_check_mark:",
+		title: "Slack connected",
+		text: "Send your message again.",
+	}
+	await (
+		sent
+			? sent.replace(connected)
+			: sendNotice(client, person, where, connected)
+	).catch(() => {})
 	return page(
 		200,
-		"Connected. laddu can now send Slack messages as you when you ask it to. You can close this tab.",
+		"Slack connected. You can close this tab and go back to Slack.",
 	)
 }

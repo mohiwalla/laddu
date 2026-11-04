@@ -15,6 +15,7 @@ import type { BotConfig } from "../config"
 import { paths } from "../config"
 import { readJson, writeJsonPrivate } from "../files"
 import { userEmail } from "../slack/context"
+import { sendNotice, systemName, type Where } from "../slack/system"
 
 type WebClient = App["client"]
 export type Settings = NonNullable<BotConfig["microsoft"]>
@@ -45,6 +46,12 @@ const LABELS: Record<Resource, string> = {
 	devops: "Azure DevOps",
 }
 const COMMANDS: Record<Resource, string> = { graph: "ms", devops: "ado" }
+/** Short names. */
+export const NAMES: Record<Resource, string> = {
+	graph: "Microsoft 365",
+	devops: "Azure DevOps",
+}
+const ALL = Object.keys(RESOURCES) as Resource[]
 
 export type Account = {
 	refreshToken: string
@@ -185,6 +192,10 @@ async function discover(resource: Resource, accessToken: string) {
 				.map(value => value.toLowerCase()),
 		}
 	}
+	return discoverDevOps(accessToken)
+}
+
+async function discoverDevOps(accessToken: string) {
 	const vssps = "https://app.vssps.visualstudio.com/_apis"
 	const profile = await getJson(
 		`${vssps}/profile/profiles/me?api-version=7.1`,
@@ -216,6 +227,8 @@ export async function connect(
 	client: WebClient,
 	person: Person,
 	resource: Resource,
+	/** Where they asked (the sign-in goes there, privately); null: their DM. */
+	where: Where,
 ): Promise<string> {
 	const id = key(person)
 	const started = await entra(settings, "devicecode", {
@@ -233,11 +246,18 @@ export async function connect(
 			expires_in: number
 			interval: number
 		}
-	const dm = (text: string) =>
-		client.chat.postMessage({ channel: person.userId, text })
-	await dm(
-		`${signingIn.has(id) ? "New code (the earlier one no longer works). " : ""}To connect ${LABELS[resource]}, open ${verification_uri}, enter *${user_code}* and sign in with your work account (approve the permissions if Microsoft asks). The code works for ${Math.round(expires_in / 60)} minutes. If you didn't ask for this, ignore it.`,
-	)
+	const sent = await sendNotice(client, person, where, {
+		icon: ":key:",
+		title: "Connect Microsoft",
+		text: `${systemName()} needs your work account for ${LABELS.graph} and ${LABELS.devops}.${signingIn.has(id) ? " (New code; the earlier one no longer works.)" : ""}`,
+		steps: [
+			"Open the sign-in page.",
+			"Enter this code, then sign in with your work account:",
+		],
+		code: user_code,
+		link: { label: "Open sign-in page", url: verification_uri },
+		footer: `Works for ${Math.round(expires_in / 60)} minutes. Didn't ask for this? Ignore it.`,
+	})
 	signingIn.set(id, device_code)
 	const current = () => signingIn.get(id) === device_code
 	void poll(
@@ -250,18 +270,32 @@ export async function connect(
 		expires_in,
 		current,
 	)
-		.then(message => (message ? dm(message) : undefined))
+		.then(account =>
+			account
+				? sent.replace({
+						icon: ":white_check_mark:",
+						title: "Microsoft connected",
+						text: account,
+					})
+				: undefined,
+		)
 		.catch(error => {
 			if (!current()) return
 			console.warn("[microsoft] sign-in failed:", error)
-			return dm(
-				`Microsoft sign-in didn't finish: ${error instanceof SignInError ? error.message : "something went wrong on my side"}. Ask me to connect again to retry.`,
-			)
+			return sent.replace({
+				icon: ":warning:",
+				title: "Microsoft isn't connected",
+				text:
+					error instanceof SignInError
+						? error.message
+						: "Something went wrong on our side.",
+				steps: ["Send your message again for a new code."],
+			})
 		})
 		.finally(() => {
 			if (current()) signingIn.delete(id)
 		})
-	return `Sent them a Microsoft sign-in link and code in a DM with laddu. Once they approve it, ${LABELS[resource]} is connected and laddu confirms in that DM; then ask again.`
+	return `Sent them a private Microsoft sign-in code${where ? " in this conversation" : ` in their DM with ${systemName()}`}; they'll see when it's connected. Ask them to send their message again after that.`
 }
 
 async function poll(
@@ -284,21 +318,22 @@ async function poll(
 			grant_type: "urn:ietf:params:oauth:grant-type:device_code",
 			device_code: deviceCode,
 		})
-		if (ok) return finishSignIn(client, person, resource, body)
+		if (ok) return finishSignIn(settings, client, person, resource, body)
 		if (body.error === "authorization_pending") continue
 		if (body.error === "slow_down") {
 			wait += 5
 			continue
 		}
 		if (body.error === "authorization_declined")
-			throw new SignInError("you declined it")
+			throw new SignInError("You declined it.")
 		if (body.error === "expired_token") break
 		throw new SignInError(String(body.error_description ?? body.error))
 	}
-	throw new SignInError("the code expired")
+	throw new SignInError("The code expired.")
 }
 
 async function finishSignIn(
+	settings: Settings,
 	client: WebClient,
 	person: Person,
 	resource: Resource,
@@ -311,7 +346,7 @@ async function finishSignIn(
 	const slackEmail = await userEmail(client, person.userId)
 	if (slackEmail && !emails.has(slackEmail.toLowerCase()))
 		throw new SignInError(
-			`that Microsoft account (${[...emails][0] ?? "unknown"}) isn't the one on your Slack profile (${slackEmail}), so I didn't connect it`,
+			`That Microsoft account (${[...emails][0] ?? "unknown"}) isn't the one on your Slack profile (${slackEmail}), so it wasn't connected.`,
 		)
 	const all = await load()
 	const previous = all[key(person)]
@@ -328,26 +363,78 @@ async function finishSignIn(
 		name: name || previous?.name || "",
 		email: slackEmail?.toLowerCase() || [...emails][0] || "",
 		devops:
-			"organizations" in found && found.organizations
-				? {
-						organizations: found.organizations,
-						defaultOrganization:
-							previous?.devops?.defaultOrganization ??
-							(found.organizations.length === 1
-								? found.organizations[0]
-								: undefined),
-					}
+			"organizations" in found
+				? withOrganizations(found.organizations, previous?.devops)
 				: previous?.devops,
 	}
 	all[key(person)] = account
 	await save()
-	const extra =
-		resource === "devops"
-			? account.devops?.organizations.length
-				? ` Organizations: ${account.devops.organizations.join(", ")}.`
-				: " Your account isn't in any Azure DevOps organization yet."
-			: ""
-	return `:white_check_mark: ${LABELS[resource]} connected as ${account.name || account.email}.${extra} Ask me again in the conversation where you started.`
+	// One sign-in connects everything the app is approved for: the other APIs come from the same
+	// refresh token.
+	const { ready, missing } = await reach(settings, person)
+	if (ready.includes("devops") && !("organizations" in found))
+		await findOrganizations(settings, person).catch(error =>
+			console.warn("[microsoft] couldn't list DevOps organizations:", error),
+		)
+	const lines = [
+		`Signed in as ${account.name || account.email}. ${ready.map(resource => NAMES[resource]).join(" and ")} ${ready.length > 1 ? "are" : "is"} ready.`,
+	]
+	if (ready.includes("devops"))
+		lines.push(
+			account.devops?.organizations.length
+				? `Azure DevOps organizations: ${account.devops.organizations.join(", ")}.`
+				: "Your account isn't in any Azure DevOps organization yet.",
+		)
+	for (const { resource, reason } of missing)
+		lines.push(`${NAMES[resource]} isn't connected: ${reason}`)
+	return `${lines.join("\n")}\nSend your message again.`
+}
+
+const withOrganizations = (
+	organizations: string[],
+	previous?: Account["devops"],
+): Account["devops"] => ({
+	organizations,
+	defaultOrganization:
+		previous?.defaultOrganization ??
+		(organizations.length === 1 ? organizations[0] : undefined),
+})
+
+/** Lists their Azure DevOps organizations again and keeps them on the account. */
+export async function findOrganizations(settings: Settings, person: Person) {
+	const token = await accessToken(settings, person, "devops")
+	const found = await account(person)
+	if (!token || !found) return
+	const { organizations } = await discoverDevOps(token)
+	found.devops = withOrganizations(organizations, found.devops)
+	await save()
+}
+
+/**
+ * Which APIs their sign-in works for, and why not for the rest. An API without a token yet is
+ * tried now (a sign-in for one usually covers the others).
+ */
+export async function reach(settings: Settings, person: Person) {
+	const ready: Resource[] = []
+	const missing: { resource: Resource; reason: string }[] = []
+	for (const resource of ALL)
+		try {
+			if ((await account(person))?.tokens[resource]) ready.push(resource)
+			else if (await accessToken(settings, person, resource))
+				ready.push(resource)
+			else
+				missing.push({ resource, reason: "Microsoft ended the sign-in." })
+		} catch (error) {
+			console.warn(`[microsoft] ${resource} isn't available:`, error)
+			missing.push({
+				resource,
+				reason:
+					error instanceof ConsentError
+						? `it isn't approved for ${systemName()} yet. Approve it from ${systemName()}'s Home, or an admin grants consent for the app in Microsoft Entra.`
+						: "Microsoft didn't answer; it's tried again when needed.",
+			})
+		}
+	return { ready, missing }
 }
 
 const refreshing = new Map<string, Promise<string | null>>()
@@ -392,7 +479,7 @@ export async function accessToken(
 			// AADSTS65001: no consent for this API yet (it was added after they signed in).
 			if (/AADSTS65001|consent_required/i.test(description))
 				throw new ConsentError(
-					`laddu isn't approved for ${LABELS[resource]} on their account yet. Run \`${COMMANDS[resource]} connect\` so they can sign in and approve it (or an admin grants consent for the app in Microsoft Entra).`,
+					`${systemName()} isn't approved for ${LABELS[resource]} on their account yet. Run \`${COMMANDS[resource]} connect\` so they can sign in and approve it (or an admin grants consent for the app in Microsoft Entra).`,
 				)
 			// Revoked, expired (90 days unused) or password changed: sign in again.
 			if (body.error === "invalid_grant") {

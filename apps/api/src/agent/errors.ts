@@ -3,8 +3,15 @@
  * (MIT, Nous Research): each kind gets a plain message and a recovery instead of a raw error.
  * Codex retries dropped model connections itself, so a turn-level retry is a second line.
  */
-import { AuthError } from "../auth/siwc"
+import { systemName } from "../slack/system"
 import { LostSessionError } from "./acp"
+
+/** A Codex turn for someone who hasn't signed in to ChatGPT yet (see account.ts). */
+export class NotSignedInError extends Error {
+	constructor() {
+		super("Not signed in to ChatGPT")
+	}
+}
 
 export type Failure = {
 	kind:
@@ -12,7 +19,6 @@ export type Failure = {
 		| "usage_limit"
 		| "free_limit"
 		| "context_full"
-		| "unsupported"
 		| "lost_thread"
 		| "transient"
 		| "workspace"
@@ -41,11 +47,14 @@ const fail = (
 
 const firstLine = (text: string) => text.trim().split("\n")[0]!.slice(0, 300)
 
-/** `docker` runtime: times in Codex's messages come from the container's clock, which is UTC. */
-export function classify(error: unknown, { utcClock = false } = {}): Failure {
-	if (error instanceof AuthError) return fail("auth", error.message)
+export function classify(error: unknown): Failure {
+	if (error instanceof NotSignedInError)
+		return fail(
+			"auth",
+			`ChatGPT isn't connected. Connect it under Settings on ${systemName()}'s Home tab, then send your message again.`,
+		)
 	if (error instanceof LostSessionError)
-		return fail("lost_thread", "I lost track of this conversation.", {
+		return fail("lost_thread", `${systemName()} lost track of this conversation.`, {
 			retry: true,
 			resetThread: true,
 		})
@@ -54,7 +63,7 @@ export function classify(error: unknown, { utcClock = false } = {}): Failure {
 		const detail = firstLine(error.stderr.toString() || error.message)
 		return fail(
 			"workspace",
-			`I couldn't get your workspace ready (${detail}).`,
+			`Couldn't start your workspace (${detail}). Send your message again.`,
 			{ retry: true, retryAfterMs: 5_000 },
 		)
 	}
@@ -64,36 +73,21 @@ export function classify(error: unknown, { utcClock = false } = {}): Failure {
 	if (/free usage limit/i.test(text))
 		return fail(
 			"free_limit",
-			"OpenCode's free models have hit their usage limit. Please try again later, or switch to Codex in Settings on my Home tab.",
-		)
-	// OpenAI's own cap on apps using a ChatGPT plan (here, laddu), apart from the plan's weekly
-	// limit that Codex shows; it lifts within minutes.
-	if (/subscription sharing usage limit/i.test(text))
-		return fail(
-			"usage_limit",
-			"OpenAI is briefly limiting how much apps like me can use the ChatGPT plan (a short-term cap, not the plan's weekly limit). Please try again in a few minutes.",
-			{ retryAfterMs: SHARING_PAUSE_MS },
+			`OpenCode's free models hit their usage limit. Try again later, or switch to Codex under Settings on ${systemName()}'s Home tab.`,
 		)
 	if (/usage limit/i.test(text)) {
 		const when = text.match(/try again at\s+([^.\n]+?)\s*\.?\s*$/im)?.[1]
 		return fail(
 			"usage_limit",
 			when
-				? `The ChatGPT plan I run on has hit its usage limit; it resets at ${when}${utcClock ? " UTC" : ""}. Please try again then.`
-				: "The ChatGPT plan I run on has hit its usage limit. Please try again later.",
+				? `Your ChatGPT plan hit its usage limit. It resets at ${when} UTC.`
+				: "Your ChatGPT plan hit its usage limit. Try again later.",
 		)
 	}
 	if (/ran out of room|context window/i.test(text)) {
 		return fail(
 			"context_full",
-			"This thread got too long for me to hold.",
-			{ retry: true, resetThread: true },
-		)
-	}
-	if (text.includes("subscription_sharing_unsupported_capability")) {
-		return fail(
-			"unsupported",
-			"That hit something the ChatGPT plan can't run.",
+			"This thread got too long.",
 			{ retry: true, resetThread: true },
 		)
 	}
@@ -102,7 +96,7 @@ export function classify(error: unknown, { utcClock = false } = {}): Failure {
 			text,
 		)
 	) {
-		return fail("transient", "I lost the connection to the model.", {
+		return fail("transient", "Lost the connection to the model. Send your message again.", {
 			retry: true,
 			retryAfterMs: 15_000,
 		})
@@ -110,21 +104,31 @@ export function classify(error: unknown, { utcClock = false } = {}): Failure {
 	return fail("unknown", `Something went wrong: ${firstLine(text)}`)
 }
 
-/** After a usage-limit failure, skip Codex for a while instead of failing every request slowly. */
+/**
+ * After a usage-limit failure, skip Codex for that person for a while instead of failing every
+ * request slowly. Per person: each runs on their own plan.
+ */
 const PAUSE_MS = 10 * 60 * 1000
-let paused: { until: number; message: string } | null = null
+const paused = new Map<string, { until: number; message: string }>()
+const personKey = (person: { teamId: string; userId: string }) =>
+	`${person.teamId}-${person.userId}`
 
-const SHARING_PAUSE_MS = 2 * 60 * 1000
-
-export function pauseForUsageLimit(failure: Failure) {
-	paused = {
+export function pauseForUsageLimit(
+	person: { teamId: string; userId: string },
+	failure: Failure,
+) {
+	paused.set(personKey(person), {
 		until: Date.now() + (failure.retryAfterMs || PAUSE_MS),
 		message: failure.message,
-	}
+	})
 }
 
-/** The usage-limit message while paused, else null. */
-export function usagePause(): string | null {
-	if (paused && Date.now() > paused.until) paused = null
-	return paused?.message ?? null
+/** Their usage-limit message while paused, else null. */
+export function usagePause(person: {
+	teamId: string
+	userId: string
+}): string | null {
+	const pause = paused.get(personKey(person))
+	if (pause && Date.now() > pause.until) paused.delete(personKey(person))
+	return paused.get(personKey(person))?.message ?? null
 }

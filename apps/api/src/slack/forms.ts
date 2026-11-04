@@ -1,4 +1,5 @@
 /** Persistent forms opened by buttons, with submissions continuing as the submitting person. */
+import { systemName } from "./system"
 import type { App } from "@slack/bolt"
 import { postAs } from "../appearance"
 import { paths } from "../config"
@@ -325,7 +326,7 @@ export class SlackForms {
 				await client.chat
 					.postMessage({
 						channel: body.user.id,
-						text: "Your form submission couldn't be processed. Please ask laddu in the original channel.",
+						text: `${systemName()} couldn't process your form. Ask again in the original channel.`,
 					})
 					.catch(() => {})
 			}

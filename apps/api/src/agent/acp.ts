@@ -94,6 +94,18 @@ export async function runAcpTurn(
 					if (update.content.type === "text")
 						messages.add(update.content.text)
 					return
+				case "plan":
+					options.onItem(
+						{
+							type: "plan",
+							items: update.entries.map(entry => ({
+								text: entry.content,
+								status: entry.status,
+							})),
+						},
+						false,
+					)
+					return
 				case "tool_call":
 				case "tool_call_update": {
 					messages.finish()
@@ -398,12 +410,12 @@ export function toItem(tool: acp.ToolCallUpdate): AgentItem | null {
 		case "think":
 			return { id, type: "tool", title: "Planning", status }
 		default:
+			// Writing its to-do list: the plan update shows the list itself.
+			if (/^todo/i.test(title)) return null
 			return {
 				id,
 				type: "tool",
-				title: /^todo/i.test(title)
-					? "Updating the plan"
-					: `Using ${title || "a tool"}`,
+				title: `Using ${title || "a tool"}`,
 				status,
 			}
 	}

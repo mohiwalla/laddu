@@ -2,7 +2,7 @@
 
 A personal Slack assistant. You tag it in a channel (or DM it); it reads the conversation around the
 tag, hands the job to an agent, and replies in the thread. The agent is the brain for every request:
-Codex on the owner's ChatGPT plan, or OpenCode's free models, each person's pick on laddu's Home tab.
+Codex on the person's own ChatGPT plan, or OpenCode's free models, each person's pick on laddu's Home tab.
 The bot itself only moves messages between Slack and the agent.
 
 Status: **V0**, with per-person integrations, computer use and Azure Repos coding tasks.
@@ -20,7 +20,7 @@ apps/
                        install.sh too); mascot cutouts in public/mascots, sources in brand-source/
   api/                 the bot backend (this doc)
     src/
-      index.ts         boot: config, ChatGPT token check, Slack Socket Mode
+      index.ts         boot: config, runtime image, Slack Socket Mode
       config.ts        env + paths
       files.ts         JSON / private-file helpers
       sessions.ts      (Slack thread, user) ↔ agent conversation map, per-key queue
@@ -28,20 +28,18 @@ apps/
       appearance.ts    the name and picture each person gives laddu (Home tab or `appearance`),
                        on every message it posts for them; pictures served by the gateway
       inflight.ts      turns in progress, so a restart can resume them
-      auth/siwc.ts     Sign in with ChatGPT credentials + token refresh
-      auth/login.ts    `bun run login`: one-time OAuth (PKCE, loopback)
       agent/agents.ts  the agents a person can pick, and the one entry point for a turn
       agent/turn.ts    what every agent shares: turn inputs/result, env, workspace, outbox, memory
-      agent/codex.ts   runs Codex turns on the ChatGPT plan (in the user's container)
+      agent/codex.ts   runs Codex turns on the person's own ChatGPT plan (in their container)
+      agent/account.ts each person's ChatGPT sign-in (device code via Codex's app-server)
       agent/acp.ts     runs a turn on any Agent Client Protocol agent (steps, steering, Stop)
       agent/opencode.ts OpenCode's free models over ACP (in the user's container)
       agent/containers.ts runtime image + one Docker container per Slack user
-      agent/model-proxy.ts keeps the ChatGPT token out of containers
-      agent/codex-config.ts Codex provider config (direct, or via the proxy)
+      agent/codex-config.ts the containers' Codex config.toml
       agent/steps.ts   agent items → plain-language progress steps
-      agent/errors.ts  failure classes → message + recovery (retry, fresh thread, quota pause)
+      agent/errors.ts  failure classes → message + recovery (retry, fresh thread, per-person quota pause)
       agent/learning.ts turn log + background review (memory, personal skills)
-      agent/tools.ts   runs runtime/ commands for a user (container or host)
+      agent/tools.ts   runs runtime/ commands in a user's container
       agent/bot-api.ts API for container commands that need the bot (`schedule`, `ado`, `ms`,
                        `slack`, `desktop link`, `appearance`), signed per turn
       agent/desktop.ts laddu's computer, bot side: signed watch/control links, viewer gateway, idle stop
@@ -59,6 +57,8 @@ apps/
       slack/transfers.ts user-authorized file downloads and external uploads
       slack/automations.ts persisted event rules, delivery queue, retries and history
       slack/forms.ts    persistent button/modal forms; submissions run as their submitter
+      slack/keys.ts     keys people give laddu through a private Slack form (Home tab, or laddu's
+                       `connections key request`), saved in their own container, never in chat
       slack/user-tokens.ts each person's Slack sign-in (user token), so DMs can go out as them
       slack/reply.ts   streamed reply: steps as Slack task cards, then the answer
       slack/agent-sessions.ts native working status and cancellation for active/queued thread requests
@@ -70,7 +70,8 @@ apps/
                        skills.local/ (git-ignored) = the deployment's team skills
     runtime/           commands for Codex (Python, stdlib): `memory` (per-user memory),
                        `skills` (the Home tab's view of personal skills), `recall` (search past conversations), `schedule` (scheduled tasks),
-                       `ado` (Azure DevOps), `code` (Azure Repos / CodeCommit coding tasks),
+                       `ado` (Azure DevOps), `code` (Azure Repos / CodeCommit coding tasks), `connections` (the person's keys,
+                       their own MCP servers and accounts signed in on the container; the Home tab lists them),
                        `ms` (Microsoft 365), `slack` (Slack Free tools and event rules), `desktop` (laddu's computer:
                        starts it, and serves Codex the tools that drive it, over MCP; with
                        `desktop-agent.py`, the person's own computers over SSH), `tailnet`
@@ -99,9 +100,12 @@ marketing site if this becomes something teammates can run.
         top-level    → last N channel messages up to the tag (conversations.history)
         follow-up    → only messages newer than the last turn
    4. Codex turn in the requester's container: new thread, or resume theirs for this Slack thread
-        • spawned per turn via @openai/codex-sdk (`codex exec`, through scripts/codex-docker.sh)
-        • billed to your ChatGPT plan; the token stays on the host (model proxy)
+        • a `codex app-server` per turn, through scripts/codex-docker.sh
+        • on the requester's own ChatGPT plan, signed in once from Slack (not signed in: they get a DM)
         • the first action opens a detailed progress accordion; later actions update it
+        • once the agent writes a to-do list (`slack todo`, or a plan tool), that list replaces it: one message (✔️ 🔄 ⚪), edited as it
+          changes and posted again at the bottom once the thread has moved on; the answer follows it
+        • `slack post` sends finished parts to the thread while the turn goes on
    5. finish the activity record and post the answer (Markdown; split past 12k chars)
       • no actions: post only the answer, or react without posting
       • clear native working status after the turn
@@ -132,19 +136,18 @@ labels and renamed in place when the name changes):
 - Non-root user `laddu`, all Linux capabilities dropped, `no-new-privileges`, no sudo; 3 GB memory
   (2 GB without the desktop), 2 CPUs, 4096 threads (512 without the desktop), 1 GB shared memory for Chromium.
 - No host files except the persona and Codex config, both read-only. A named volume
-  (`laddu-home-<team>-<user>`) keeps the user's workspace and Codex sessions; nobody else sees it.
-- Internet access on (Codex needs it to reach the model proxy; users need it for `curl`).
+  (`laddu-home-<team>-<user>`) keeps the user's workspace, Codex sessions and their ChatGPT login
+  (`~/.codex/auth.json`); nobody else sees it.
+- Internet access on (Codex needs it to reach OpenAI; users need it for `curl`).
 - **Internet only** (`ISOLATE_NETWORK`, on by default). Firewall
   rules in the container's own network namespace refuse this machine's services (databases, SSH…),
-  the home network and other containers, except the model proxy, the bot API, replies to the desktop
+  the home network and other containers, except the bot API, replies to the desktop
   viewer gateway and DNS. They're set
   from a short-lived root helper with `NET_ADMIN` (the container has no capabilities, so it can't
   read or undo them) and re-applied whenever the container has restarted.
   Everyone gets the same rules.
-- **The ChatGPT token never enters a container.** Codex there talks to `agent/model-proxy.ts`, a
-  Bun server on the Docker bridge address (not reachable from the LAN). It requires a random
-  per-process key, allows only `POST /v1/responses` and `GET /v1/models`, and adds the real token.
-  Verified: no token in any process environment inside the container; other API paths get 403.
+- **Each container holds only its owner's ChatGPT login.** The bot holds none; a person's login
+  is readable only from their own container, by them and by their laddu.
 - The image (~3.8 GB) carries tools for files people send and ask for: pandas, matplotlib,
   python-docx, openpyxl, reportlab, pypdf, Pillow, pandoc, poppler, qpdf, ImageMagick, ffmpeg; and
   laddu's computer (below, about 1 GB of it). Local speech-to-text uses faster-whisper in
@@ -154,14 +157,10 @@ labels and renamed in place when the name changes):
 - The image bundles the exact codex build the SDK ships (`node_modules/@openai/codex-linux-*`),
   and is rebuilt (containers recreated, volumes kept) when that version or the Dockerfile changes.
 
-`CODEX_RUNTIME="host"` runs Codex on the host instead (Codex sandbox only: blocks writes outside
-`agent-home`, but can read your files). Only for yourself, at most.
-
 ## laddu's computer
 
 Each person's laddu has a full desktop in their container (`DESKTOP`, on by default in Docker), which
-Codex drives and the person can watch or take over in the browser. Native computer use isn't on the
-plan route, so it's our own tools over MCP; the approach is borrowed from computer-use-linux (the
+Codex drives and the person can watch or take over in the browser. It's our own tools over MCP; the approach is borrowed from computer-use-linux (the
 computer-use plugin of a Linux build of Codex Desktop) and Bytebot.
 
 - **Desktop** (`runtime/desktop start`): KasmVNC as the X display (1280×800, fixed so screenshot
@@ -251,7 +250,10 @@ turn's signed caller credential, so a command can only act as the person asking.
   request) and DMs the person the code, never in the channel. It polls until they approve, then
   accepts the account only if one of its emails (token claims, the Graph or Azure DevOps profile)
   matches their Slack email. Otherwise anyone could link someone else's account to their own laddu
-  by getting them to enter a code.
+  by getting them to enter a code. Right after, it mints a token for the other API from the same
+  refresh token (and lists their Azure DevOps organizations), so one sign-in connects both. Home
+  shows one Microsoft row; an API the app isn't approved for yet gets its own Approve button, which
+  signs in for that API.
 - **Tokens.** `.data/microsoft.json` (mode 600): one refresh token per person and an access token
   per API, minted from it on demand (Entra refresh tokens work for every API the app has consent
   for), refreshed 5 minutes before expiry, one refresh at a time per person since each rotates the
@@ -260,7 +262,8 @@ turn's signed caller credential, so a command can only act as the person asking.
   (`azure-devops.json`) are moved over on first load.
 
 **Azure DevOps** (`integrations/azure-devops.ts`, `runtime/ado`); organizations come from the
-Azure DevOps profile API at sign-in.
+Azure DevOps profile API at sign-in (or at first use, for someone who signed in for Microsoft 365
+first).
 
 - **Requests.** `ado` posts to the bot API's `/ado/request`. Only Azure DevOps hosts
   (`dev.azure.com`, `*.dev.azure.com`, `*.visualstudio.com`) over https; GET, plus POST to the
@@ -281,8 +284,7 @@ Azure DevOps profile API at sign-in.
 The same Codex turn can implement a requested change and return a PR in the Slack thread:
 
 - `code checkout <HTTPS clone URL> [--base <branch>]` reads repo metadata and the connected person's
-  commit identity, then creates a Git worktree under `~/workspace/code/<task>/` (host runtime:
-  `.data/code/<team>-<user>/<task>/`). Each person caches one clone per canonical repo URL in
+  commit identity, then creates a Git worktree under `~/workspace/code/<task>/`. Each person caches one clone per canonical repo URL in
   `code/.repos/<hash>/`; the hash also includes the caller's team/user identity. The first clone
   has no checked-out files. Later tasks fetch the latest default or requested branch into the
   cache, then create their own `laddu/<slack-user>/<task>` branch at that exact commit. A per-repo
@@ -469,8 +471,7 @@ Adapted from [Hermes Agent](https://github.com/nousresearch/hermes-agent) (MIT, 
   `~/.agents/skills/{laddu,team}`, a Codex skill root; and personal ones Codex writes for each
   person in `$CODEX_HOME/skills` on their volume, which they can view, add, edit and remove on
   the Home tab's Skills tab (through `runtime/skills`). When to write or fix one is in the persona; the
-  background review also looks for procedures worth keeping. Codex's built-in `imagegen` skill is
-  switched off (no image generation on the plan route). To share a personal skill with everyone,
+  background review also looks for procedures worth keeping. To share a personal skill with everyone,
   copy it into `skills.local/`:
   `docker cp laddu-<team>-<user>:/home/laddu/.codex/skills/<name> agent-home/skills.local/`.
 - **Duplicate events.** Slack can redeliver an event (e.g. after a socket reconnect); each message
@@ -484,40 +485,28 @@ Adapted from [Hermes Agent](https://github.com/nousresearch/hermes-agent) (MIT, 
   (after stopping orphaned Codex runs) the bot closes replies it left open, marking spinning steps
   failed, and answers turns younger than 30 minutes again; older ones get "please ask again".
 
-## The brain: Codex on your ChatGPT plan
+## The brain: Codex on each person's ChatGPT plan
 
-Auth uses **Sign in with ChatGPT** (SIWC), which OpenAI opened to third-party tools at DevDay on
-2026-09-29. The bot registers as its own client, not by reusing the Codex CLI's login.
+Everyone signs in with their own ChatGPT account, the way the Codex CLI does (`codex login
+--device-auth`), so each person's turns bill their own plan and nobody shares one.
 
-- `bun run login` runs the documented flow: `client_id=dynamic_agent_client` on first registration,
-  `ext_agent_host_id` per machine, PKCE S256, loopback `http://127.0.0.1:1455/auth/callback`, scopes
-  `openid profile email offline_access resource.invoke chatgpt.tokens.use.direct`, resource
-  `https://api.openai.com/v1`. The ID token is verified against OpenAI's JWKS.
-- The **plan usage** grant (`chatgpt.tokens.use.direct`) is what lets requests bill your plan.
-  Without it the bot refuses to start.
-- Access tokens last 1 h and refresh tokens 30 days, rotated on every refresh. `getAccessToken()`
-  refreshes 5 min before expiry and serializes refreshes. Terminal refresh errors clear the tokens
-  and ask you to run `bun run login` again.
-- Codex gets a custom provider in its own `CODEX_HOME/config.toml` (`env_key = "ACCESS_TOKEN"`,
-  `wire_api = "responses"`), matching OpenAI's Codex app-server guide. Since every turn is a fresh
-  `codex exec`, each turn simply gets a freshly refreshed token, so no process restarts are needed.
-- The Codex child gets the environment minus `SLACK_*` secrets, and its own `CODEX_HOME`, so your
-  personal `~/.codex` config, MCP servers and sessions never leak in.
+- **Sign-in** (`agent/account.ts`): *Sign in* under Settings on the Home tab, or the first Codex
+  turn of someone who isn't signed in, starts a `codex app-server` in their container and calls
+  `account/login/start` with `chatgptDeviceCode`. laddu DMs them the link and code, keeps that
+  app-server waiting for `account/login/completed` (15 minutes), then confirms in the DM and
+  redraws their Home tab. A newer sign-in replaces a waiting one; *Sign out* calls `account/logout`.
+- **The login** is Codex's own `auth.json` in their `CODEX_HOME` (`~/.codex`, on their volume),
+  forced to a file (`cli_auth_credentials_store = "file"`) and to ChatGPT accounts
+  (`forced_login_method = "chatgpt"`). Codex refreshes it itself; the bot never reads it.
+- **Turns** use Codex's default provider: no custom provider, model catalog or proxy. A turn first
+  calls `account/read`; signed out, it fails with "not signed in" and laddu DMs a sign-in code.
+- **Models** come from `model/list` in each person's container (their plan's live list once signed
+  in), cached per person for 6 hours and dropped when they sign in or out. `CODEX_MODEL` is only a
+  default; unset, Codex's own default for their plan.
+- **Usage limits** pause Codex for that person only (`errors.ts`), not for everyone.
 
-What the plan route doesn't support (OpenAI preview limits): hosted MCP/connectors, native computer
-use, image generation, file search, Code Interpreter. Local tools (shell, local MCP servers) run
-inside Codex and do work, which is how integrations will be added.
-
-Sub-agents don't work either: their replies come back as input items the plan rejects
-(`subscription_sharing_unsupported_capability`), failing the turn. `[features] multi_agent = false`
-isn't enough, since current models switch them on from their catalog entry, so on every start the
-bot writes Codex's bundled model catalog with `multi_agent_version` cleared (`writeModelCatalog`,
-`model_catalog_json`). The persona tells Codex to do a skill's "sub-agent" steps itself.
-
-Docs: [SIWC overview](https://developers.openai.com/siwc/token-sharing-open-source),
-[sign-in contract](https://developers.openai.com/siwc/token-sharing-open-source/sign-in),
-[Codex app-server on a plan](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server),
-[preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
+Everything Codex does works, sub-agents included: the earlier Sign in with ChatGPT route (one owner
+plan shared through a proxy) rejected sub-agent items with `subscription_sharing_unsupported_capability`.
 
 ## Constraints we designed around
 
@@ -527,13 +516,8 @@ Docs: [SIWC overview](https://developers.openai.com/siwc/token-sharing-open-sour
 - **Slack history rate limits.** The 2025 limits on `conversations.history/replies` (1 req/min, 15
   messages) apply to commercially distributed apps. Internal, workspace-built apps like this one keep
   Tier 3 limits.
-- **SIWC eligibility.** Plan usage is open to open-source projects, _personal projects that run
-  locally_, and selected private apps; paid or remotely hosted apps go through a waitlist. Running
-  the bot on your own machine is the clear case. For a server, OpenAI documents a "self-hosted VM"
-  path (sign in locally, copy credentials over SSH), but check it still fits the terms before
-  relying on it.
-- **Shared plan.** Every allowed user's turns bill the owner's ChatGPT plan. OpenAI's terms on
-  serving others from a personal plan are worth checking before opening this up widely.
+- **Own plans.** Each person's Codex turns run on their own ChatGPT account. Whoever runs the
+  machine can read every container's volume, logins included, so people are trusting them with it.
 - **Integrations vs. multi-user.** Anything private wired in later (email, repos) would be reachable
   by every allowed user unless scoped per user.
 
@@ -542,9 +526,7 @@ Docs: [SIWC overview](https://developers.openai.com/siwc/token-sharing-open-sour
 Each person picks their agent on laddu's Home tab (`preferences.ts`; `LADDU_AGENT` is the default), and
 everything for them runs on it, background memory reviews included. The second agent is
 [OpenCode](https://opencode.ai) on its free models: no sign-in, no plan. Free models may keep what
-they're sent; laddu is experimental, so that's accepted. `CODEX_USERS` limits who can run on Codex
-(the owner's ChatGPT plan); everyone else is on OpenCode whatever `LADDU_AGENT` or their pick says, and
-their Home tab doesn't offer Codex.
+they're sent; laddu is experimental, so that's accepted.
 
 laddu talks to it over the [Agent Client Protocol](https://agentclientprotocol.com) (ACP), the open
 protocol most coding agents speak (Claude, Antigravity, Gemini, Codex and about 40 more in the
@@ -589,7 +571,7 @@ tasks, Slack DMs and coding tasks in isolated checkouts ending in a draft Azure 
 - In channels the bot only responds when tagged, including in threads it's already in.
 - In DMs every message is handled, and each top-level DM starts its own thread.
 - Files attached to messages new this turn (up to 100 MB each, 20 per turn) are saved in the user's
-  workspace under `slack-files/` (host runtime: `.data/slack-files/<team>-<user>/`); PNG, JPEG,
+  workspace under `slack-files/`; PNG, JPEG,
   WebP and GIF up to 20 MB are also shown to the model. Codex reads other formats with its own tools.
 - Slack links in the new messages (typed, unfurled or forwarded; up to 3) are read through the API
   and added to the transcript with their attachments, up to 100 messages each. Private channels and
@@ -597,12 +579,8 @@ tasks, Slack DMs and coding tasks in isolated checkouts ending in a draft Azure 
 - Channels mentioned in the new messages (#name; up to 2) are read the same way and with the same
   privacy rule: their last 100 top-level messages plus the latest 15 replies of the 10 newest
   threads. If laddu isn't in the channel, the prompt says to invite it. Not logged to history.
-- Each turn gets an outbox, `slack-outbox/<turn>/` (host runtime: `.data/slack-outbox/...`, added
-  as a writable dir to the sandbox). Files Codex saves there (up to 10, 50 MB each) are uploaded to
-  the thread after the reply. Codex can't generate images on the plan route; it can draw them with code.
-- No hosted web search on the plan route (the tool isn't offered); Codex fetches live data with `curl`.
-- Anyone allowed can reach the model proxy from their container with its key, i.e. use the plan
-  directly (as they can through the bot). No per-user rate limits yet.
+- Each turn gets an outbox, `slack-outbox/<turn>/`. Files Codex saves there (up to 10, 50 MB each)
+  are uploaded to the thread after the reply.
 - Containers share Docker's default bridge: they can reach services on the host bound to
   `0.0.0.0`/the bridge, and each other's IPs.
 - A running answer can't be cancelled from Slack. (`runTurn` takes an `AbortSignal` that also ends

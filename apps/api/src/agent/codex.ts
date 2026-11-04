@@ -1,33 +1,23 @@
 /**
- * Runs Codex turns billed to the owner's ChatGPT plan via Sign in with ChatGPT.
+ * Runs Codex turns on each person's own ChatGPT plan. Everyone signs in with their own account
+ * (account.ts), and the login stays in their container, in Codex's own `auth.json`: Codex calls
+ * the model and refreshes the login itself, so all of Codex works, sub-agents included.
  *
- * Each turn spawns a `codex app-server` with a freshly refreshed access token, so token renewal
- * needs no long-lived process; the app-server, unlike `codex exec`, takes more input mid-turn
- * (steering) and stops a turn cleanly (app-server.ts). Provider setup follows
- * https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server
- *
- * Docker runtime (default): scripts/codex-docker.sh is run instead of codex, which runs codex
- * inside the requesting user's container. Host runtime: codex runs here.
+ * Each turn starts a `codex app-server` in the person's container (scripts/codex-docker.sh stands
+ * in for the codex binary); unlike `codex exec` it takes more input mid-turn (steering) and stops
+ * a turn cleanly (app-server.ts).
  */
-import { Codex } from "@openai/codex-sdk"
 import type { BotConfig } from "../config"
-import { paths } from "../config"
-import { getAccessToken } from "../auth/siwc"
-import { writePrivate } from "../files"
-import { codexConfig } from "./codex-config"
 import {
 	CODEX_DOCKER_WRAPPER,
 	CONTAINER_WORKDIR,
-	TOOLS_DIR,
 	ensureContainer,
-	hostModelCatalog,
 	stopRun,
-	writeModelCatalog,
 } from "./containers"
-import { startModelProxy } from "./model-proxy"
 import { AppServer, asThreadItem } from "./app-server"
+import { NotSignedInError } from "./errors"
 import { stepTracker } from "./steps"
-import { hostToolEnv, runTool } from "./tools"
+import { runTool } from "./tools"
 import {
 	childEnv,
 	collectOutbox,
@@ -39,131 +29,11 @@ import {
 	saveAttachments,
 	turnEnv as makeTurnEnv,
 	type ModelOption,
-	type OutboxEntry,
 	type TurnFile,
 	type TurnOptions,
 	type TurnResult,
 	type TurnUser,
 } from "./turn"
-
-/** The host runtime's model catalog; the containers' is hostModelCatalog. */
-const modelCatalog = `${paths.codexHome}/models.json`
-
-/** Host runtime: writes the bot's own CODEX_HOME/config.toml and links in the shared skills. */
-export async function prepareCodexHome(
-	workdir: string,
-	localDir: string,
-): Promise<void> {
-	await writeModelCatalog(modelCatalog)
-	await writePrivate(
-		`${paths.codexHome}/config.toml`,
-		codexConfig({ modelCatalog }),
-	)
-	const skills = `${paths.codexHome}/skills`
-	await Bun.$`mkdir -p ${skills}`.quiet()
-	for (const [link, dir] of [
-		["laddu", `${workdir}/skills`],
-		["team", `${localDir}/skills.local`],
-	] as const) {
-		const stat = await Bun.file(dir)
-			.stat()
-			.catch(() => null)
-		if (stat?.isDirectory())
-			await Bun.$`ln -sfn ${dir} ${skills}/${link}`.quiet()
-		else await Bun.$`rm -f ${skills}/${link}`.quiet()
-	}
-}
-
-/** Where the host runtime's codex is: the SDK's own bundled binary (it finds it on construction). */
-function hostCodex(): { executablePath: string; pathDirs: string[] } {
-	return (
-		new Codex() as unknown as {
-			exec: { executablePath: string; pathDirs: string[] }
-		}
-	).exec
-}
-
-let catalog: { models: Promise<ModelOption[]>; at: number } | null = null
-const CATALOG_MS = 6 * 3600_000
-
-/**
- * The models Codex offers, as `model/list` reports them, cached for a few hours. Each refresh
- * rewrites the catalogs runs read too (writeModelCatalog), so a model offered here is one their
- * Codex knows, and new models show up without a restart. Empty if it can't be read.
- */
-export function listCodexModels(): Promise<ModelOption[]> {
-	if (catalog && Date.now() - catalog.at < CATALOG_MS) return catalog.models
-	const models = (async () => {
-		await writeModelCatalog(modelCatalog, hostModelCatalog)
-		const home = (await Bun.$`mktemp -d`.text()).trim()
-		const codex = hostCodex()
-		const server = new AppServer(
-			[
-				codex.executablePath,
-				"-c",
-				`model_catalog_json=${JSON.stringify(modelCatalog)}`,
-				"app-server",
-			],
-			childEnv({
-				CODEX_HOME: home,
-				PATH: [...codex.pathDirs, Bun.env.PATH ?? ""].join(":"),
-			}),
-		)
-		try {
-			await server.request("initialize", {
-				clientInfo: {
-					name: "codex_sdk_ts",
-					title: "laddu",
-					version: "1",
-				},
-				capabilities: null,
-			})
-			server.notify("initialized")
-			const listed = await Promise.race([
-				server.request<{ data: Record<string, unknown>[] }>(
-					"model/list",
-					{},
-				),
-				Bun.sleep(15_000).then(() => {
-					throw new Error("model/list timed out")
-				}),
-			])
-			return listed.data
-				.filter(model => !model.hidden)
-				.map(model => ({
-					id: String(model.model ?? model.id),
-					name: String(model.displayName ?? model.id),
-					description: String(model.description ?? ""),
-					efforts: (
-						(model.supportedReasoningEfforts as {
-							reasoningEffort: string
-							description: string
-						}[]) ?? []
-					)
-						// "ultra" hands work to sub-agents, which laddu switches off (writeModelCatalog).
-						.filter(effort => effort.reasoningEffort !== "ultra")
-						.map(effort => ({
-							id: effort.reasoningEffort,
-							description: effort.description,
-						})),
-					defaultEffort: String(
-						model.defaultReasoningEffort ?? "medium",
-					),
-					fast: ((model.serviceTiers as unknown[]) ?? []).length > 0,
-					images: true,
-				}))
-		} finally {
-			server.close()
-			await Bun.$`rm -rf ${home}`.quiet().nothrow()
-		}
-	})().catch(error => {
-		console.warn("[codex] couldn't list models:", error)
-		catalog = null
-		return []
-	})
-	catalog = { models, at: Date.now() }
-	return models
-}
 
 /** Config overrides as `-c key=value` arguments (values in TOML), nested keys dotted. */
 function configArgs(config: Record<string, unknown>, prefix = ""): string[] {
@@ -184,132 +54,152 @@ function configArgs(config: Record<string, unknown>, prefix = ""): string[] {
 	})
 }
 
-/** Attachments are saved under `slack-files/`, the turn's outbox is `slack-outbox/<turn>/`. */
-async function createCodex(
+/**
+ * A Codex app-server in this person's container, initialized. `env` is the turn's (turnEnv());
+ * its LADDU_TURN names the process, so stopRun() ends exactly this one.
+ */
+export async function openCodex(
 	config: BotConfig,
 	user: TurnUser,
-	turnId: string,
-	turnEnv: Record<string, string>,
-) {
-	// Passed to every codex run as `-c` overrides.
-	const overrides: Record<string, unknown> = {
-		...(config.fast ? { service_tier: "fast" } : {}),
-		model_reasoning_effort: config.reasoningEffort,
-		// Nobody is around to approve commands mid-turn.
-		approval_policy: "never",
-	}
-	if (config.runtime === "host") {
-		// Outside the workdir, which is the persona folder.
-		const owner = `${user.teamId}-${user.userId}`
-		const outbox = `${paths.dataDir}/slack-outbox/${owner}/${turnId}`
-		const toolEnv = hostToolEnv(user)
-		// Codex reads the persona from the workdir; the private additions go in as its global
-		// instructions (CODEX_HOME/AGENTS.md), refreshed each turn like the persona.
-		const privateNotes = Bun.file(`${config.localDir}/AGENTS.local.md`)
-		if (await privateNotes.exists())
-			await writePrivate(
-				`${paths.codexHome}/AGENTS.md`,
-				await privateNotes.text(),
-			)
-		else
-			await Bun.file(`${paths.codexHome}/AGENTS.md`)
-				.delete()
-				.catch(() => {})
-		await Bun.$`mkdir -p ${outbox} ${toolEnv.LADDU_MEMORY_DIR} ${toolEnv.LADDU_HISTORY_DIR} ${toolEnv.LADDU_CODE_DIR}`.quiet()
-		const codex = hostCodex()
-		return {
-			command: [codex.executablePath],
-			env: childEnv({
-				CODEX_HOME: paths.codexHome,
-				ACCESS_TOKEN: await getAccessToken(),
-				...toolEnv,
-				...turnEnv,
-				PATH: [...codex.pathDirs, TOOLS_DIR, Bun.env.PATH ?? ""].join(
-					":",
-				),
-			}),
-			overrides: {
-				...overrides,
-				sandbox_workspace_write: {
-					network_access: config.network,
-					writable_roots: [
-						outbox,
-						toolEnv.LADDU_MEMORY_DIR,
-						toolEnv.LADDU_HISTORY_DIR,
-						toolEnv.LADDU_CODE_DIR,
-					],
+	env: Record<string, string>,
+	overrides: Record<string, unknown> = {},
+): Promise<{ server: AppServer; container: string }> {
+	const container = await ensureContainer(config, user.teamId, user.userId)
+	const server = new AppServer(
+		[CODEX_DOCKER_WRAPPER, "app-server", ...configArgs(overrides)],
+		childEnv({ LADDU_CONTAINER: container, ...env }),
+	)
+	try {
+		await Promise.race([
+			server.request("initialize", {
+				clientInfo: {
+					name: "codex_sdk_ts",
+					title: "laddu",
+					version: "1",
 				},
-			},
-			thread: { cwd: config.workdir, sandbox: config.sandbox },
-			saveFile: async (file: TurnFile) => {
-				const path = `${paths.dataDir}/slack-files/${owner}/${file.fileName}`
-				await Bun.write(path, file.data, { createPath: true })
-				return path
-			},
-			outbox,
-			// Closing the app-server ends codex itself.
-			stop: async () => {},
-			listOutbox: async (): Promise<OutboxEntry[]> => {
-				const names = await Array.fromAsync(
-					new Bun.Glob("*").scan({ cwd: outbox, onlyFiles: true }),
-				)
-				return names.map(name => {
-					const file = Bun.file(`${outbox}/${name}`)
-					return { name, size: file.size, read: () => file.bytes() }
-				})
-			},
-		}
+				capabilities: null,
+			}),
+			Bun.sleep(30_000).then(() => {
+				throw new Error("Codex didn't start in time")
+			}),
+		])
+		server.notify("initialized")
+	} catch (error) {
+		server.close()
+		throw error
 	}
+	return { server, container }
+}
 
-	const [container, proxy] = await Promise.all([
-		ensureContainer(config, user.teamId, user.userId),
-		startModelProxy(),
-	])
-	const workspace = await containerWorkspace(container, turnId)
-	return {
-		...workspace,
-		command: [CODEX_DOCKER_WRAPPER],
-		env: childEnv({
-			LADDU_CONTAINER: container,
-			LADDU_PROXY_KEY: proxy.key,
-			...turnEnv,
-		}),
-		overrides: {
-			...overrides,
-			// This process's proxy, per run: the shared config.toml can't pin one, since another
-			// bot process (a second workspace, a test) may have rewritten it with its own.
-			model_providers: {
-				openai_chatgpt_plan: { base_url: proxy.baseUrl },
-			},
-		},
-		// The container is the boundary (network is set on the container), so no nested sandbox.
-		thread: {
-			cwd: CONTAINER_WORKDIR,
-			sandbox: "danger-full-access" as const,
-		},
-		// Closing the app-server only ends `docker exec` on the host; the run inside needs ending too.
-		stop: () => stopRun(container, turnId),
+/** A short-lived app-server for one question (models, account), closed after. */
+export async function askCodex<T>(
+	config: BotConfig,
+	user: TurnUser,
+	ask: (server: AppServer) => Promise<T>,
+): Promise<T> {
+	const { server } = await openCodex(config, user, {
+		LADDU_TURN: `ask-${crypto.randomUUID().slice(0, 8)}`,
+	})
+	try {
+		return await Promise.race([
+			ask(server),
+			Bun.sleep(20_000).then(() => {
+				throw new Error("Codex didn't answer in time")
+			}),
+		])
+	} finally {
+		server.close()
 	}
 }
+
+const MODELS_MS = 6 * 3600_000
+const models = new Map<string, { list: Promise<ModelOption[]>; at: number }>()
+
+/**
+ * The models Codex offers this person, as `model/list` reports them for their plan (Codex
+ * fetches the live list once they're signed in), cached for a few hours. Empty if it can't be read.
+ */
+export function listCodexModels(
+	config: BotConfig,
+	user: TurnUser,
+): Promise<ModelOption[]> {
+	const key = `${user.teamId}-${user.userId}`
+	const cached = models.get(key)
+	if (cached && Date.now() - cached.at < MODELS_MS) return cached.list
+	const list = askCodex(config, user, async server => {
+		const listed = await server.request<{
+			data: Record<string, unknown>[]
+		}>("model/list", {})
+		return listed.data
+			.filter(model => !model.hidden)
+			.map(model => ({
+				id: String(model.model ?? model.id),
+				name: String(model.displayName ?? model.id),
+				description: String(model.description ?? ""),
+				efforts: (
+					(model.supportedReasoningEfforts as {
+						reasoningEffort: string
+						description: string
+					}[]) ?? []
+				).map(effort => ({
+					id: effort.reasoningEffort,
+					description: effort.description,
+				})),
+				defaultEffort: String(model.defaultReasoningEffort ?? "medium"),
+				fast: ((model.serviceTiers as unknown[]) ?? []).length > 0,
+				images: true,
+				...(model.isDefault ? { isDefault: true } : {}),
+			}))
+	}).catch(error => {
+		console.warn("[codex] couldn't list models:", error)
+		models.delete(key)
+		return []
+	})
+	models.set(key, { list, at: Date.now() })
+	return list
+}
+
+/** Forgets their model list (after they sign in or out, the plan's list may differ). */
+export const forgetCodexModels = (user: TurnUser) =>
+	models.delete(`${user.teamId}-${user.userId}`)
 
 export async function runCodexTurn(options: TurnOptions): Promise<TurnResult> {
 	options.signal?.throwIfAborted()
 	const { config, input, slack } = options
-	const track = stepTracker(step => options.onStep?.(step))
+	const track = stepTracker(
+		step => options.onStep?.(step),
+		todos => options.onTodos?.(todos),
+	)
 
 	const turnId = newTurnId()
-	const turnEnv = makeTurnEnv(turnId, options.user, slack)
-	const {
-		command,
-		env,
-		overrides,
-		thread,
-		saveFile,
-		outbox,
-		listOutbox,
-		stop,
-	} = await createCodex(config, options.user, turnId, turnEnv)
-	options.signal?.throwIfAborted()
+	const { server, container } = await openCodex(
+		config,
+		options.user,
+		makeTurnEnv(turnId, options.user, slack),
+		{
+			...(config.fast ? { service_tier: "fast" } : {}),
+			model_reasoning_effort: config.reasoningEffort,
+			// Nobody is around to approve commands mid-turn.
+			approval_policy: "never",
+		},
+	)
+	// Closing the app-server only ends `docker exec` on the host; the run inside needs ending too.
+	const stop = () => stopRun(container, turnId)
+	let workspace: Awaited<ReturnType<typeof containerWorkspace>>
+	try {
+		const account = await server.request<{ account: unknown }>(
+			"account/read",
+			{},
+		)
+		if (!account.account) throw new NotSignedInError()
+		workspace = await containerWorkspace(container, turnId)
+		options.signal?.throwIfAborted()
+	} catch (error) {
+		server.close()
+		await stop()
+		throw error
+	}
+	const { saveFile, outbox, listOutbox } = workspace
 
 	// The CLI reads image paths itself, so files must exist where it runs (inside the container).
 	const attach = async (files: TurnFile[]) => {
@@ -325,10 +215,6 @@ export async function runCodexTurn(options: TurnOptions): Promise<TurnResult> {
 		text_elements: [],
 	})
 
-	const server = new AppServer(
-		[...command, "app-server", ...configArgs(overrides)],
-		env,
-	)
 	let threadId = options.threadId ?? null
 	let activeTurn: string | null = null
 	let finished = false
@@ -350,15 +236,12 @@ export async function runCodexTurn(options: TurnOptions): Promise<TurnResult> {
 	}
 	options.signal?.addEventListener("abort", onAbort, { once: true })
 	try {
-		await server.request("initialize", {
-			clientInfo: { name: "codex_sdk_ts", title: "laddu", version: "1" },
-			capabilities: null,
-		})
-		server.notify("initialized")
 		const threadParams = {
-			model: config.model,
-			cwd: thread.cwd,
-			sandbox: thread.sandbox,
+			// Unset: Codex's default model for their plan.
+			...(config.model ? { model: config.model } : {}),
+			cwd: CONTAINER_WORKDIR,
+			// The container is the boundary (network is set on the container), so no nested sandbox.
+			sandbox: "danger-full-access",
 			approvalPolicy: "never",
 		}
 		const opened = await server.request<{ thread: { id: string } }>(
@@ -409,6 +292,32 @@ export async function runCodexTurn(options: TurnOptions): Promise<TurnResult> {
 							)
 								answer = item.text
 							track(item, method === "item/completed")
+							return
+						}
+						case "turn/plan/updated": {
+							const plan =
+								(params.plan as
+									| { step: string; status: string }[]
+									| undefined) ?? []
+							track(
+								{
+									type: "plan",
+									title:
+										typeof params.explanation === "string"
+											? params.explanation
+											: undefined,
+									items: plan.map(todo => ({
+										text: todo.step,
+										status:
+											todo.status === "completed"
+												? "completed"
+												: todo.status === "inProgress"
+													? "in_progress"
+													: "pending",
+									})),
+								},
+								false,
+							)
 							return
 						}
 						case "error": {

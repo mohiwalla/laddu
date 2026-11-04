@@ -30,6 +30,13 @@ async function session(
 ): Promise<Session | null> {
 	const token = await microsoft.accessToken(settings, person, "devops")
 	if (!token) return null
+	// Signed in for Microsoft 365 before one sign-in covered both: find their organizations now.
+	if (!(await microsoft.account(person))?.devops)
+		await microsoft
+			.findOrganizations(settings, person)
+			.catch(error =>
+				console.warn("[ado] couldn't list organizations:", error),
+			)
 	const found = await microsoft.account(person)
 	return {
 		accessToken: token,

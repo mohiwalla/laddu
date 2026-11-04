@@ -10,9 +10,9 @@ import {
 	makeDirInContainer,
 	writeIntoContainer,
 } from "./containers"
-import type { Step } from "./steps"
+import type { Step, Todos } from "./steps"
 
-/** The Slack user a turn runs for; picks their container in the Docker runtime. */
+/** The Slack user a turn runs for; picks their container. */
 export type TurnUser = { teamId: string; userId: string }
 
 /** A file attached in Slack; images are also shown to the model. */
@@ -43,6 +43,8 @@ export type ModelOption = {
 	fast: boolean
 	/** Takes images as input; otherwise attached images are only saved as files. */
 	images: boolean
+	/** The agent's own default, used when neither the person nor the bot picked a model. */
+	isDefault?: boolean
 }
 
 export type TurnResult = {
@@ -75,6 +77,8 @@ export type TurnOptions = {
 		scheduled?: boolean
 	}
 	onStep?: (step: Step) => void
+	/** The agent's to-do list, each time it changes. */
+	onTodos?: (todos: Todos) => void
 	/** Called with a way to steer the turn once it runs, and with null once it can't be any more. */
 	onSteerable?: (steer: Steer | null) => void
 }

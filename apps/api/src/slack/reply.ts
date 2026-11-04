@@ -2,9 +2,11 @@
  * The bot's reply after a tool action starts. Uses Slack's streaming messages: each step is a native task card
  * (spinner, then done or failed) with its command tucked into the card's details, and the answer
  * lands in the same message. Falls back to editing a plain placeholder if streaming is unavailable.
+ * Once the agent writes a to-do list, that list is the progress instead: one plain message, edited
+ * as it goes, and the answer follows it as a message of its own.
  */
 import type { App } from "@slack/bolt"
-import type { Step } from "../agent/steps"
+import type { Step, Todos } from "../agent/steps"
 
 type WebClient = App["client"]
 type Chunk = NonNullable<
@@ -43,6 +45,8 @@ async function readMessage(
 
 export type Reply = {
 	step(step: Step): void
+	/** The agent's to-do list; from then on it replaces the steps. */
+	todos(todos: Todos): void
 	/** Posts the answer; an empty answer (files only) just closes the progress. */
 	finish(text: string): Promise<void>
 	fail(message: string): Promise<void>
@@ -53,7 +57,7 @@ export type Reply = {
 }
 
 type ReplyMessage = { ts: string; streaming: boolean }
-type PostedReply = Reply & ReplyMessage
+type PostedReply = Omit<Reply, "todos"> & ReplyMessage
 
 /** Slack's limit for `markdown_text`. */
 const MAX_MARKDOWN = 12_000
@@ -127,6 +131,21 @@ function taskChunk(step: Step, failed = false): TaskChunk {
 	return chunk
 }
 
+/** Replies in progress, by person and thread, so `slack todo` reaches the one it was run for. */
+const live = new Map<string, (todos: Todos) => void>()
+const liveKey = (target: Omit<ReplyTarget, "as">) =>
+	[target.teamId, target.userId, target.channel, target.threadTs].join(":")
+
+/** Shows a to-do list in their reply in progress there; false if none is. */
+export function showTodos(
+	target: Omit<ReplyTarget, "as">,
+	todos: Todos,
+): boolean {
+	const show = live.get(liveKey(target))
+	show?.(todos)
+	return !!show
+}
+
 export async function openReply(
 	client: WebClient,
 	target: ReplyTarget,
@@ -134,6 +153,7 @@ export async function openReply(
 ): Promise<Reply> {
 	const started = Date.now()
 	let posted: Promise<PostedReply> | undefined
+	let board: TodoBoard | undefined
 	let chain: Promise<void> = Promise.resolve()
 	let closed = false
 	const remember = (message: ReplyMessage) =>
@@ -170,12 +190,35 @@ export async function openReply(
 	}
 	const settle = async () => {
 		closed = true
+		if (live.get(liveKey(target)) === todos) live.delete(liveKey(target))
 		await chain
+		await board?.settle()
 		return posted?.catch(() => undefined)
 	}
+	const todos = (list: Todos) => {
+		if (closed) return
+		if (!board) {
+			board = todoBoard(client, target, remember)
+			// The list takes over from the steps so far; the answer follows it on its own.
+			const stream = posted
+			posted = undefined
+			if (stream)
+				chain = chain
+					.then(async () => (await stream).discard())
+					.catch(error =>
+						console.warn(
+							"[reply] couldn't clear the steps:",
+							error,
+						),
+					)
+		}
+		board.show(list)
+	}
+	live.set(liveKey(target), todos)
 	return {
+		todos,
 		step(step) {
-			if (closed) return
+			if (closed || board) return
 			// The native agent status covers the time before the first real action.
 			if (!posted) {
 				posted = show(step)
@@ -205,6 +248,149 @@ export async function openReply(
 		},
 		async discard() {
 			await (await settle())?.discard()
+			await board?.remove()
+		},
+	}
+}
+
+const TODO_FLUSH_MS = 1_000
+const TODO_MARKS = {
+	completed: ":heavy_check_mark:",
+	in_progress: ":arrows_counterclockwise:",
+	pending: ":white_circle:",
+} as const
+const escape = (text: string) =>
+	text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+
+/** The to-do list as a message: a check for done, arrows for the one it's on, a circle for the rest. */
+export function todoMessage(todos: Todos, now = Date.now()) {
+	const lines = todos.items.map(item => {
+		const text = escape(clip(item.text.trim(), 150))
+		return `${TODO_MARKS[item.status]} ${item.status === "in_progress" ? `*${text}*` : text}`
+	})
+	const done = todos.items.filter(item => item.status === "completed").length
+	const seconds = Math.floor(now / 1000)
+	const section = (text: string) => ({
+		type: "section" as const,
+		text: { type: "mrkdwn" as const, text },
+	})
+	return {
+		text: `To-dos: ${done} of ${todos.items.length} done`,
+		blocks: [
+			section(clip(lines.join("\n"), 3000)),
+			...(todos.title ? [section(escape(clip(todos.title, 300)))] : []),
+			{
+				type: "context" as const,
+				elements: [
+					{
+						type: "mrkdwn" as const,
+						text: `_todos as of <!date^${seconds}^{time} ({ago})|${new Date(now).toUTCString()}>_`,
+					},
+				],
+			},
+		],
+	}
+}
+
+/** Whether the thread has moved on since this message: anyone posted, or (`people`) a person did. */
+async function buried(
+	client: WebClient,
+	target: ReplyTarget,
+	ts: string,
+	people = false,
+) {
+	try {
+		const page = await client.conversations.replies({
+			channel: target.channel,
+			ts: target.threadTs,
+			oldest: ts,
+			limit: 20,
+		})
+		return !!page.messages?.some(
+			message =>
+				Number(message.ts) > Number(ts) && !(people && message.bot_id),
+		)
+	} catch {
+		return false
+	}
+}
+
+type TodoBoard = ReturnType<typeof todoBoard>
+
+/** Each thread's to-do list message, so a later turn there updates it instead of adding another. */
+const lists = new Map<string, string>()
+
+/**
+ * The thread's to-do list message, picked up from an earlier turn there if there was one. Changes
+ * are batched into one edit; if someone has posted in the thread since (a question, a change of
+ * plan), the list is posted again at the bottom, where people look, and the old one removed.
+ */
+function todoBoard(
+	client: WebClient,
+	target: ReplyTarget,
+	remember: (message: ReplyMessage) => Promise<void>,
+) {
+	const { channel } = target
+	const thread = `${channel}:${target.threadTs}`
+	let ts = lists.get(thread)
+	let latest: Todos | undefined
+	let timer: Timer | undefined
+	let chain: Promise<unknown> = Promise.resolve()
+	const send = async (todos: Todos) => {
+		const message = todoMessage(todos)
+		// Its own posts (parts sent as they're ready) don't count: each move is a new message,
+		// and a notification.
+		// Edited in place unless the thread moved on, or the old one is gone (deleted by someone).
+		if (
+			ts &&
+			!(await buried(client, target, ts, true)) &&
+			(await client.chat.update({ channel, ts, ...message }).then(
+				() => true,
+				() => false,
+			))
+		)
+			return
+		const old = ts
+		const posted = await client.chat.postMessage({
+			channel,
+			thread_ts: target.threadTs,
+			...message,
+			...target.as,
+		})
+		ts = posted.ts
+		if (ts) {
+			lists.set(thread, ts)
+			await remember({ ts, streaming: false })
+		}
+		if (old) await client.chat.delete({ channel, ts: old }).catch(() => {})
+	}
+	const flush = () => {
+		timer = undefined
+		const todos = latest
+		latest = undefined
+		if (todos)
+			chain = chain
+				.then(() => send(todos))
+				.catch(error =>
+					console.warn("[reply] couldn't show the to-dos:", error),
+				)
+	}
+	const settle = async () => {
+		clearTimeout(timer)
+		flush()
+		await chain
+	}
+	return {
+		show(todos: Todos) {
+			latest = todos
+			timer ??= setTimeout(flush, TODO_FLUSH_MS)
+		},
+		settle,
+		async remove() {
+			await settle()
+			if (!ts) return
+			if (lists.get(thread) === ts) lists.delete(thread)
+			await client.chat.delete({ channel, ts }).catch(() => {})
 		},
 	}
 }
@@ -377,7 +563,11 @@ async function openStream(
 		},
 		async finish(text) {
 			const tasks = await settle("complete")
-			const [first, ...rest] = text ? chunkMarkdown(text) : []
+			const rest = text ? chunkMarkdown(text) : []
+			// Parts it posted on its own (`slack post`) came after this message: the answer goes
+			// below them.
+			const below = rest.length > 0 && (await buried(client, target, ts))
+			const inline = below ? undefined : rest.shift()
 			const done: Chunk[] = [
 				...tasks,
 				{
@@ -389,8 +579,8 @@ async function openStream(
 				await client.chat.stopStream({
 					channel,
 					ts,
-					chunks: first
-						? [...done, { type: "markdown_text", text: first }]
+					chunks: inline
+						? [...done, { type: "markdown_text", text: inline }]
 						: done,
 				})
 			} catch (error) {
@@ -402,7 +592,7 @@ async function openStream(
 				await client.chat
 					.stopStream({ channel, ts, chunks: done })
 					.catch(() => {})
-				if (first) rest.unshift(first)
+				if (inline) rest.unshift(inline)
 			}
 			for (const part of rest)
 				await client.chat.postMessage({

@@ -101,8 +101,7 @@ in `docs/ARCHITECTURE.md` and `docs/SETUP.md`; this is the why and the where-nex
   It reacts instead of replying when a message needs no answer, and adds no status reactions
   except ❌ on failure.
 
-What it won't do: identify people from photos (the model refuses), generate images (the ChatGPT
-plan route doesn't offer it), or search the web through a built-in tool (it uses `curl` instead).
+What it won't do: identify people from photos (the model refuses).
 
 ### Next
 
@@ -112,7 +111,6 @@ plan route doesn't offer it), or search the web through a built-in tool (it uses
 
 Low priority for now (decided 15 Oct):
 
-- **Per-person usage limits** on the ChatGPT plan.
 - **Acting in Slack:** search Slack, react, create canvases, lists and reminders, with guardrails.
   (Messaging people is done.)
 
@@ -129,18 +127,23 @@ Further out:
 - **A dashboard** to watch what laddu is doing on its computer.
 - **Always on:** host it on a server (a VPS) for the whole team instead of a personal machine.
 - **Guardrails:** an audit log of changes.
-- **Per-user billing** (each person signs in with their own ChatGPT) and teammates running their
-  own laddu.
+- **Teammates running their own laddu.**
 
 ### Open questions
 
-- Everyone's usage bills the owner's ChatGPT plan. laddu explains a used-up plan and backs off, but
-  there are no per-person limits yet, and OpenAI's terms on serving others from a personal plan
-  need checking before this spreads.
-- Sign in with ChatGPT plan usage is meant for local, personal projects; hosting laddu remotely may
-  need OpenAI's approval.
+- Each person's ChatGPT login sits in their container, so whoever runs the machine could read it.
+  Fine for a team that trusts its host; worth revisiting before anyone else hosts laddu.
 - Once private integrations exist, anyone who can tag laddu could reach them. They'll need scoping
   per user.
 - Other people's messages, linked threads and anything laddu fetches are untrusted input (prompt
   injection). Memory refuses entries that look like injection and the containers limit the damage,
   but the rules matter more once laddu can act on someone's accounts.
+
+## 3rd November 2026
+
+- **Everyone signs in with their own ChatGPT.** The shared Sign in with ChatGPT route (the owner's
+  plan, through a proxy) couldn't run sub-agents: OpenAI's plan sharing rejects their items. Now
+  each person signs in from Slack with a device code, the same login the Codex CLI uses, kept in
+  their own container. Their turns bill their own plan, usage limits pause only them, and all of
+  Codex works, sub-agents included. `bun run login`, the model proxy,
+  `CODEX_USERS` and the host runtime are gone: everything runs in per-person containers.

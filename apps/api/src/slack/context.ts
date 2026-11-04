@@ -3,6 +3,7 @@
  */
 import type { App } from "@slack/bolt"
 import type { Session } from "../sessions"
+import { commandName, systemName } from "./system"
 
 type WebClient = App["client"]
 
@@ -474,7 +475,7 @@ async function readChannel(
 		return {
 			note:
 				code === "not_in_channel"
-					? `I'm not in ${access.label}; someone can add me with /invite @laddu.`
+					? `I'm not in ${access.label}; someone can add me with /invite @${systemName()}.`
 					: `I couldn't read ${access.label} (${code ?? error}).`,
 		}
 	}
@@ -504,7 +505,7 @@ async function resolveLink(
 		const code = (error as { data?: { error?: string } }).data?.error
 		const note =
 			code === "not_in_channel"
-				? `I'm not in ${label}; someone can add me with /invite @laddu.`
+				? `I'm not in ${label}; someone can add me with /invite @${systemName()}.`
 				: `I couldn't read it (${code ?? error}).`
 		return { link, note }
 	}
@@ -683,9 +684,9 @@ export async function buildTurnInput(options: {
 		trigger.via === "reaction"
 			? `${requester} reacted with :${request}: to the last message above, asking you to handle it on their behalf. Respond to that message.`
 			: trigger.via === "command"
-				? `${requester} asked you with /laddu: "${request}". Respond to that request.`
+				? `${requester} asked you with the /${commandName()} command: "${request}". Respond to that request.`
 				: trigger.via === "shortcut"
-					? `${requester} used "Ask laddu" on the last message above${request ? ` and asked: "${request}"` : ", asking you to help with it"}. Respond to that.`
+					? `${requester} used "Ask ${systemName()}" on the last message above${request ? ` and asked: "${request}"` : ", asking you to help with it"}. Respond to that.`
 					: trigger.via === "answer"
 						? `${requester} answered the question you asked them in this thread. ${request} Carry on with what you were doing.`
 						: trigger.untagged === "group"

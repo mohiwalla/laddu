@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+"""
+What you can use on the person's behalf beyond laddu's built-in sign-ins: keys they've given you
+(API keys, tokens, passwords), MCP servers you've connected, and accounts signed in on this
+computer (AWS, GitHub, Azure, gcloud…). Their Home tab lists the same.
+
+  connections                          everything, by name (never the keys' values)
+  connections key request NAME "what it's for"
+                                       asks them for it with a private, secure form; the value
+                                       never goes through the chat. Ends with your turn; you hear
+                                       back when they've added it.
+  connections key remove NAME
+  connections mcp add NAME --url URL [--bearer KEY] [--header Header=KEY]… [--note "…"]
+  connections mcp add NAME --command "cmd arg…" [--env KEY]… [--note "…"]
+  connections mcp remove NAME
+
+A key is the file ~/.laddu/keys/NAME: use it as "$(cat ~/.laddu/keys/NAME)" in a command, never
+print, log, commit or paste it, and never ask for one in chat. NAME is in capitals (GITHUB_TOKEN);
+an MCP server gets each key as an environment variable of that name, so name a key after the
+variable the server expects. A new MCP server's tools are there from their next message.
+
+For the bot (not for you to use): connections json, connections key save NAME [--note "…"] (the
+value on stdin).
+"""
+import argparse
+import json
+import os
+import re
+import shlex
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+HOME = Path.home()
+DIR = HOME / ".laddu"
+KEYS = DIR / "keys"
+STATE = DIR / "connections.json"
+CODEX_MCP = DIR / "mcp.toml"
+OPENCODE_MCP = DIR / "opencode.json"
+KEY_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+MCP_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+# Built in (codex-config.ts, opencode.ts).
+RESERVED_MCP = {"desktop"}
+MAX_KEY_BYTES = 16 * 1024
+
+
+def load():
+    try:
+        state = json.loads(STATE.read_text())
+    except (OSError, ValueError):
+        state = {}
+    state.setdefault("keys", {})
+    state.setdefault("mcp", {})
+    # A key file without a note (put there by hand) still counts.
+    if KEYS.is_dir():
+        for path in KEYS.iterdir():
+            if path.is_file() and KEY_NAME.match(path.name):
+                state["keys"].setdefault(path.name, {})
+    for name in [name for name in state["keys"] if not (KEYS / name).is_file()]:
+        del state["keys"][name]
+    return state
+
+
+def write_private(path, text):
+    DIR.mkdir(mode=0o700, exist_ok=True)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.touch(mode=0o600)
+    temp.write_text(text)
+    temp.replace(path)
+
+
+def save(state):
+    write_private(STATE, json.dumps(state, indent=2) + "\n")
+    toml, opencode = [], {}
+    for name, server in sorted(state["mcp"].items()):
+        toml.append(f"\n[mcp_servers.{name}]")
+        if "url" in server:
+            toml.append(f"url = {json.dumps(server['url'])}")
+            if server.get("bearer"):
+                toml.append(f"bearer_token_env_var = {json.dumps(server['bearer'])}")
+            headers = server.get("headers") or {}
+            if headers:
+                toml.append(f"[mcp_servers.{name}.env_http_headers]")
+                toml += [f"{json.dumps(header)} = {json.dumps(key)}" for header, key in headers.items()]
+            sent = {header: f"{{env:{key}}}" for header, key in headers.items()}
+            if server.get("bearer"):
+                sent["Authorization"] = f"Bearer {{env:{server['bearer']}}}"
+            opencode[name] = {"type": "remote", "url": server["url"], **({"headers": sent} if sent else {})}
+        else:
+            command, *args = server["command"]
+            toml.append(f"command = {json.dumps(command)}")
+            toml.append(f"args = {json.dumps(args)}")
+            if server.get("env"):
+                toml.append(f"env_vars = {json.dumps(server['env'])}")
+            opencode[name] = {
+                "type": "local",
+                "command": server["command"],
+                **({"environment": {key: f"{{env:{key}}}" for key in server["env"]}} if server.get("env") else {}),
+            }
+    # Read by scripts/codex-docker.sh and scripts/opencode-docker.sh before each run.
+    write_private(CODEX_MCP, ("# Written by `connections`; edits are overwritten.\n" + "\n".join(toml) + "\n") if toml else "")
+    write_private(OPENCODE_MCP, json.dumps({"mcp": opencode}, indent=2) + "\n")
+
+
+def now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def check_key_name(name):
+    if not KEY_NAME.match(name):
+        sys.exit("error: a key's name is capitals, digits and _, starting with a letter (e.g. GITHUB_TOKEN).")
+
+
+def accounts():
+    """Sign-ins found on this computer, from the tools' own config files."""
+    found = []
+
+    def read(path):
+        try:
+            return (HOME / path).read_text()
+        except OSError:
+            return None
+
+    sections = re.findall(r"^\s*\[([^\]]+)\]", f"{read('.aws/credentials')}\n{read('.aws/config')}", re.M)
+    aws = sorted({re.sub(r"^profile\s+", "", section).strip() for section in sections
+                  if not section.startswith(("sso-session ", "services "))})
+    if aws:
+        found.append({"name": "AWS", "detail": "profiles: " + ", ".join(aws)})
+    gh = read(".config/gh/hosts.yml")
+    if gh:
+        hosts = re.findall(r"^([^\s:#][^:]*):\s*$", gh, re.M)
+        users = re.findall(r"^\s+user:\s*(\S+)", gh, re.M)
+        if hosts:
+            found.append({"name": "GitHub CLI", "detail": ", ".join(
+                f"{user} on {host}" if user else host for host, user in zip(hosts, users + [""] * len(hosts)))})
+    azure = read(".azure/azureProfile.json")
+    if azure:
+        try:
+            subscriptions = json.loads(azure.lstrip("﻿")).get("subscriptions") or []
+            users = sorted({(item.get("user") or {}).get("name", "") for item in subscriptions} - {""})
+            if subscriptions:
+                found.append({"name": "Azure CLI", "detail": ", ".join(users) or f"{len(subscriptions)} subscriptions"})
+        except ValueError:
+            pass
+    gcloud = re.search(r"^\s*account\s*=\s*(\S+)", read(".config/gcloud/configurations/config_default") or "", re.M)
+    if gcloud:
+        found.append({"name": "Google Cloud", "detail": gcloud.group(1)})
+    kube = re.findall(r"^-\s+context:[\s\S]*?^\s+name:\s*(\S+)", read(".kube/config") or "", re.M)
+    if kube:
+        found.append({"name": "Kubernetes", "detail": "contexts: " + ", ".join(kube)})
+    try:
+        registries = list((json.loads(read(".docker/config.json") or "{}").get("auths") or {}))
+        if registries:
+            found.append({"name": "Docker registries", "detail": ", ".join(registries)})
+    except ValueError:
+        pass
+    npm = re.findall(r"^//([^/:]+)[^:]*:_authToken=", read(".npmrc") or "", re.M)
+    if npm:
+        found.append({"name": "npm", "detail": ", ".join(npm)})
+    git = re.findall(r"^\w+://[^:@\s]+(?::[^@\s]*)?@([^/\s]+)", read(".git-credentials") or "", re.M)
+    if git:
+        found.append({"name": "Git", "detail": ", ".join(sorted(set(git)))})
+    if (HOME / ".local/share/tailscale/tailscaled.state").is_file():
+        found.append({"name": "Tailscale", "detail": "joined their tailnet (`tailnet status`)"})
+    ssh = [host for line in (read(".ssh/config") or "").splitlines()
+           if (match := re.match(r"\s*Host\s+(.+)", line, re.I))
+           for host in match.group(1).split() if not any(char in host for char in "*?!")]
+    if ssh:
+        found.append({"name": "Computers over SSH", "detail": ", ".join(ssh)})
+    return found
+
+
+def describe_mcp(server):
+    target = server["url"] if "url" in server else shlex.join(server["command"])
+    keys = [server.get("bearer"), *(server.get("headers") or {}).values(), *(server.get("env") or [])]
+    return target, [key for key in keys if key]
+
+
+def listing(state):
+    return {
+        "keys": [{"name": name, "note": info.get("note", ""), "added": info.get("added", "")}
+                 for name, info in sorted(state["keys"].items())],
+        "mcp": [{"name": name, "target": describe_mcp(server)[0], "keys": describe_mcp(server)[1],
+                 "note": server.get("note", ""), "added": server.get("added", "")}
+                for name, server in sorted(state["mcp"].items())],
+        "accounts": accounts(),
+    }
+
+
+def show(state):
+    found = listing(state)
+    lines = ["Keys (use as \"$(cat ~/.laddu/keys/NAME)\"):"]
+    lines += [f"  {key['name']}" + (f" — {key['note']}" if key["note"] else "") for key in found["keys"]] or ["  none"]
+    lines.append("MCP servers (yours; the built-in ones aren't listed):")
+    lines += [f"  {server['name']}: {server['target']}" + (f" (keys: {', '.join(server['keys'])})" if server["keys"] else "")
+              + (f" — {server['note']}" if server["note"] else "") for server in found["mcp"]] or ["  none"]
+    lines.append("Accounts signed in on this computer:")
+    lines += [f"  {account['name']}: {account['detail']}" for account in found["accounts"]] or ["  none found"]
+    print("\n".join(lines))
+
+
+def bot(method, path, body):
+    import urllib.error
+    import urllib.request
+    api, caller = os.environ.get("LADDU_API"), os.environ.get("LADDU_CALLER")
+    if not api or not caller:
+        sys.exit("error: this needs a conversation with the person (not available here).")
+    request = urllib.request.Request(f"{api}{path}", method=method, data=json.dumps(body).encode(),
+                                     headers={"x-laddu-caller": caller, "content-type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            print(json.load(response)["text"])
+    except urllib.error.HTTPError as error:
+        try:
+            message = json.load(error)["text"]
+        except Exception:
+            message = f"HTTP {error.code}"
+        sys.exit(f"error: {message}")
+    except urllib.error.URLError as error:
+        sys.exit(f"error: couldn't reach the bot ({error.reason}).")
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="connections", description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = parser.add_subparsers(dest="command")
+    commands.add_parser("json")
+    key = commands.add_parser("key").add_subparsers(dest="action", required=True)
+    request = key.add_parser("request")
+    request.add_argument("name")
+    request.add_argument("note")
+    key_save = key.add_parser("save")
+    key_save.add_argument("name")
+    key_save.add_argument("--note", default="")
+    key.add_parser("remove").add_argument("name")
+    mcp = commands.add_parser("mcp").add_subparsers(dest="action", required=True)
+    add = mcp.add_parser("add")
+    add.add_argument("name")
+    target = add.add_mutually_exclusive_group(required=True)
+    target.add_argument("--url")
+    target.add_argument("--command", dest="run")
+    add.add_argument("--bearer")
+    add.add_argument("--header", action="append", default=[])
+    add.add_argument("--env", action="append", default=[])
+    add.add_argument("--note", default="")
+    mcp.add_parser("remove").add_argument("name")
+    args = parser.parse_args()
+    state = load()
+
+    if args.command is None:
+        return show(state)
+    if args.command == "json":
+        return print(json.dumps(listing(state)))
+    if args.command == "key":
+        check_key_name(args.name)
+        if args.action == "request":
+            return bot("POST", "/keys/request", {"name": args.name, "note": args.note})
+        if args.action == "save":
+            value = sys.stdin.read().strip()
+            if not value:
+                sys.exit("error: give the value on stdin.")
+            if len(value.encode()) > MAX_KEY_BYTES:
+                sys.exit("error: that's over 16 KB; keep a file that big in the workspace instead.")
+            DIR.mkdir(mode=0o700, exist_ok=True)
+            KEYS.mkdir(mode=0o700, exist_ok=True)
+            path = KEYS / args.name
+            path.touch(mode=0o600)
+            path.write_text(value)
+            state["keys"][args.name] = {"note": args.note.strip()[:200], "added": now()}
+            save(state)
+            return print(f"Saved {args.name}.")
+        if args.name not in state["keys"]:
+            sys.exit(f"error: no key called {args.name}.")
+        (KEYS / args.name).unlink(missing_ok=True)
+        del state["keys"][args.name]
+        users = [name for name, server in state["mcp"].items() if args.name in describe_mcp(server)[1]]
+        save(state)
+        return print(f"Removed {args.name}." + (f" MCP servers still expecting it: {', '.join(users)}." if users else ""))
+
+    name = args.name
+    if args.action == "remove":
+        if name not in state["mcp"]:
+            sys.exit(f"error: no MCP server called {name}.")
+        del state["mcp"][name]
+        save(state)
+        return print(f"Removed {name}; its tools are gone from their next message.")
+    if not MCP_NAME.match(name) or name in RESERVED_MCP:
+        sys.exit("error: an MCP server's name is lowercase letters, digits, - and _ (and not `desktop`).")
+    keys = [*([args.bearer] if args.bearer else []), *args.env]
+    headers = {}
+    for header in args.header:
+        field, _, key_name = header.partition("=")
+        if not field or not key_name:
+            sys.exit("error: give --header as Header-Name=KEY_NAME.")
+        headers[field] = key_name
+        keys.append(key_name)
+    for key_name in keys:
+        check_key_name(key_name)
+    if args.url:
+        if not re.match(r"^https?://", args.url):
+            sys.exit("error: give an http(s) URL.")
+        if args.env:
+            sys.exit("error: --env is for --command servers; use --bearer or --header with --url.")
+        server = {"url": args.url, **({"bearer": args.bearer} if args.bearer else {}), **({"headers": headers} if headers else {})}
+    else:
+        if args.bearer or headers:
+            sys.exit("error: --bearer and --header are for --url servers; use --env with --command.")
+        command = shlex.split(args.run)
+        if not command:
+            sys.exit("error: give the command that starts the server.")
+        server = {"command": command, **({"env": args.env} if args.env else {})}
+    server.update({"note": args.note.strip()[:200], "added": now()})
+    state["mcp"][name] = server
+    save(state)
+    missing = [key_name for key_name in keys if key_name not in state["keys"]]
+    print(f"Added {name}; its tools are there from their next message."
+          + (f" It needs {', '.join(missing)}: ask them with `connections key request`." if missing else ""))
+
+
+if __name__ == "__main__":
+    main()

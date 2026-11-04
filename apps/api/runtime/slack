@@ -18,6 +18,8 @@ send you this:".
   slack automate add '<JSON rule>' | list | history | remove|enable|disable <id>
   slack form '<JSON form>'
   slack ask "<question>" [--choice "A" --choice "B" ...] [--multiple | --buttons] [--no-other]
+  slack post "text" [--file <path>]...                    a message in this thread now, as you
+  slack todo "done: First" "now: Second" "Third" [--title "Task name"]   your to-do list here
   slack ask '<JSON question>'                              a form: several fields in a popup
 
 ask puts a question to the person in this thread. Choices show as radio buttons (checkboxes with
@@ -26,6 +28,15 @@ a typed answer unless --no-other. --buttons: up to 5 choices as one-click button
 typed answer. Use it instead of asking in your reply when you need their answer to carry on. It
 doesn't wait: end your turn right after it, replying with just [REACT:speech_balloon] (the
 question is your message). Their answer comes to you as a new message.
+
+post sends part of your answer while you keep working: when they ask for results as each one is
+ready, or a long task has a useful piece done. It goes out as you (your name and picture for them),
+with files attached (up to 10, 50 MB in all). Don't repeat what you posted in your final reply.
+
+todo shows your to-do list in the thread as one live checklist, updated in place. Give the whole
+list every time, in order: "done: " for finished items, "now: " for the one you're on, no prefix
+for the rest; at most 12. --title names the whole task; keep it the same each time. Never write a
+to-do list out in a message instead.
 
 A JSON question: {"text": "...", "title": "popup title, 24 max", "fields": [...]} (or choices,
 multiple, buttons, other as above). Each field: {"label", "type", "name", "required" (default
@@ -76,6 +87,41 @@ def call(path, body=None, method="POST"):
         sys.exit(f"error: {message}")
     except urllib.error.URLError as error:
         sys.exit(f"error: couldn't reach the bot ({error.reason}).")
+
+
+def post(text, paths):
+    import base64
+    files, total = [], 0
+    if len(paths) > 10:
+        sys.exit("error: attach at most 10 files.")
+    for path in paths:
+        try:
+            with open(path, "rb") as source:
+                data = source.read()
+        except OSError as error:
+            sys.exit(f"error: {error}")
+        total += len(data)
+        if not data or total > 50 * 1024 * 1024:
+            sys.exit("error: files must be between 1 byte and 50 MB in all.")
+        files.append({"name": os.path.basename(path), "data": base64.b64encode(data).decode()})
+    if not text.strip() and not files:
+        sys.exit("error: give some text or a file.")
+    call("/slack/post", {"text": text, "files": files})
+
+
+def todo(entries, title):
+    items = []
+    for entry in entries:
+        status, text = "pending", entry.strip()
+        for prefix, value in (("done:", "completed"), ("now:", "in_progress")):
+            if text.lower().startswith(prefix):
+                status, text = value, text[len(prefix):].strip()
+        if not text:
+            sys.exit(f"error: an item has no text: {entry!r}")
+        items.append({"text": text, "status": status})
+    if not 1 <= len(items) <= 12:
+        sys.exit("error: give 1 to 12 items.")
+    call("/slack/todo", {"items": items, **({"title": title} if title else {})})
 
 
 def ask(body):
@@ -182,6 +228,12 @@ def main():
     send.add_argument("text")
     send.add_argument("--thread")
     send.add_argument("--as", dest="identity", choices=["auto", "user", "laddu"], default="auto")
+    posting = commands.add_parser("post")
+    posting.add_argument("text")
+    posting.add_argument("--file", action="append", default=[])
+    todos = commands.add_parser("todo")
+    todos.add_argument("items", nargs="+")
+    todos.add_argument("--title")
     upload = commands.add_parser("upload")
     upload.add_argument("channel")
     upload.add_argument("path")
@@ -242,6 +294,10 @@ def main():
         if args.thread:
             parameters["thread_ts"] = args.thread
         call("/slack/api", {"method": "chat.postMessage", "args": parameters, "as": args.identity})
+    elif args.command == "post":
+        post(args.text, args.file)
+    elif args.command == "todo":
+        todo(args.items, args.title)
     elif args.command == "upload":
         query = urllib.parse.urlencode({"channel": args.channel, "filename": os.path.basename(args.path), **({"thread_ts": args.thread} if args.thread else {})})
         file_transfer(f"/slack/upload?{query}", upload=args.path)

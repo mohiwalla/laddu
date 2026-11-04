@@ -4,7 +4,6 @@ import {
 	configure,
 	doctor,
 	list,
-	login,
 	logs,
 	power,
 	uninstall,
@@ -18,9 +17,8 @@ const HELP = `${bold("laddu")}: set up and run laddu, the Slack assistant backed
 
 ${bold("Usage")}  laddu <command> [--name <bot>]
 
-  setup        Set up a bot (or fix one): Slack app, ChatGPT sign-in, service
+  setup        Set up a bot (or fix one): Slack app, service
   configure    Change a bot's settings
-  login        Sign in to ChatGPT again
   doctor       Check that everything a bot needs works
   update       Update laddu and restart every bot
   list         The bots on this machine
@@ -80,8 +78,6 @@ async function main(): Promise<boolean> {
 	switch (command) {
 		case "configure":
 			return configure(instance)
-		case "login":
-			return login(instance)
 		case "doctor":
 			return doctor(instance)
 		case "logs":

@@ -1,14 +1,12 @@
 /**
  * One Docker container per Slack user. Codex runs inside it (see scripts/codex-docker.sh),
  * so commands it executes can't see the host: no home directory, keys, tokens or this repo.
- * A named volume keeps each user's workspace and Codex sessions across restarts.
+ * A named volume keeps each user's workspace, Codex sessions and ChatGPT login across restarts.
  */
 import type { BotConfig } from "../config"
 import { instance, paths } from "../config"
 import { writePrivate } from "../files"
 import { codexConfig } from "./codex-config"
-import { startModelProxy, type ModelProxy } from "./model-proxy"
-import { getAccessToken, RESOURCE } from "../auth/siwc"
 import { botApiUrl } from "./bot-api"
 
 const appRoot = Bun.fileURLToPath(new URL("../../", import.meta.url))
@@ -18,7 +16,7 @@ const dirname = (path: string) => path.slice(0, path.lastIndexOf("/"))
 export const CONTAINER_HOME = "/home/laddu"
 export const CONTAINER_WORKDIR = `${CONTAINER_HOME}/workspace`
 
-/** Commands for Codex (`memory`, `recall`) in runtime/; the host runtime uses them in place. */
+/** Commands for Codex (`memory`, `recall`) in runtime/, copied into the runtime mount. */
 export const TOOLS_DIR = `${appRoot}runtime`
 /** The same commands in the runtime mount; scripts/codex-docker.sh puts them on PATH. */
 export const CONTAINER_TOOLS_DIR = "/opt/laddu/runtime/bin"
@@ -33,8 +31,6 @@ export const OPENCODE_DOCKER_WRAPPER = `${appRoot}scripts/opencode-docker.sh`
 
 const runtimeDir = `${paths.dataDir}/runtime`
 const hostConfigToml = `${runtimeDir}/config.toml`
-/** The containers' model catalog, as the host sees it. */
-export const hostModelCatalog = `${runtimeDir}/models.json`
 
 let imageTag: string | null = null
 
@@ -77,65 +73,6 @@ async function codexDistribution() {
 	)
 }
 
-/**
- * Writes Codex's model catalog to each path, with sub-agents switched off for every model.
- * The catalog is the plan's live one, the list the Codex app shows, so a newly launched model
- * appears without waiting for a codex release; the bundled one (from the codex build the SDK
- * uses) if that can't be fetched. Current models enable sub-agents from their catalog entry
- * (`multi_agent_version`) whatever `[features]` says, and a sub-agent's reply is an input item
- * the ChatGPT plan rejects, failing the turn. Responses-Lite is off too: it refuses the hosted
- * web search tool, the only search the plan allows (Codex's own search endpoint rejects plan
- * credentials). Each file is replaced whole, so a run starting meanwhile never reads half of one.
- */
-export async function writeModelCatalog(...targets: string[]): Promise<void> {
-	const { version, dir } = await codexDistribution()
-	const catalog =
-		(await liveModelCatalog(version)) ??
-		// The bot's own CODEX_HOME, so this never reads or writes your personal ~/.codex.
-		((await Bun.$`mkdir -p ${paths.codexHome} && ${dir}/bin/codex debug models --bundled`
-			.env({ ...Bun.env, CODEX_HOME: paths.codexHome })
-			.quiet()
-			.json()) as { models: Record<string, unknown>[] })
-	for (const model of catalog.models) {
-		model.multi_agent_version = null
-		model.use_responses_lite = false
-	}
-	for (const target of targets) {
-		await writePrivate(`${target}.tmp`, JSON.stringify(catalog, null, "\t"))
-		await Bun.$`mv ${target}.tmp ${target}`.quiet()
-	}
-}
-
-/** The plan's model catalog as Codex fetches it (same format as the bundled one); null if unavailable. */
-async function liveModelCatalog(
-	version: string,
-): Promise<{ models: Record<string, unknown>[] } | null> {
-	try {
-		const response = await fetch(
-			`${RESOURCE}/models?client_version=${version}`,
-			{
-				headers: { authorization: `Bearer ${await getAccessToken()}` },
-				signal: AbortSignal.timeout(15_000),
-			},
-		)
-		if (!response.ok) throw new Error(`HTTP ${response.status}`)
-		const catalog = (await response.json()) as { models?: unknown }
-		if (!Array.isArray(catalog.models) || !catalog.models.length)
-			throw new Error("no models in the response")
-		return catalog as { models: Record<string, unknown>[] }
-	} catch (error) {
-		console.warn(
-			"[codex] couldn't fetch the live model catalog, using the bundled one:",
-			error,
-		)
-		return null
-	}
-}
-
-/**
- * Builds the runtime image if this Dockerfile + codex version hasn't been built yet, starts the
- * model proxy and points the containers' Codex config at it. Returns the image tag and proxy.
- */
 /** Builds the runtime image unless this Dockerfile + codex version is already built; returns its tag. */
 export async function ensureImage(): Promise<string> {
 	const dockerfile = await Bun.file(`${appRoot}docker/Dockerfile`).text()
@@ -158,10 +95,15 @@ export async function ensureImage(): Promise<string> {
 	return tag
 }
 
-export async function prepareDocker(config: BotConfig): Promise<{
-	tag: string
-	proxy: ModelProxy
-}> {
+/** The Docker bridge's address on this machine, where containers reach the bot API. */
+let gateway: Promise<string> | null = null
+export const bridgeGateway = () =>
+	(gateway ??= Bun.$`docker network inspect bridge --format ${"{{(index .IPAM.Config 0).Gateway}}"}`
+		.text()
+		.then(text => text.trim()))
+
+/** Builds the runtime image and writes what every container mounts; returns the image tag. */
+export async function prepareDocker(config: BotConfig): Promise<string> {
 	const tag = await ensureImage()
 
 	// Copied, not linked: the mount can't follow a symlink out of runtimeDir. Cleared first so
@@ -183,23 +125,17 @@ export async function prepareDocker(config: BotConfig): Promise<{
 	await Bun.write(`${runtimeDir}/bin/bun`, Bun.file(Bun.argv[0]!))
 	await Bun.$`chmod 755 ${runtimeDir}/bin/bun`.quiet()
 
-	await writeModelCatalog(hostModelCatalog)
-	const proxy = await startModelProxy()
-	// Bind-mounted into every container. Each run also passes its own proxy address (see codex.ts),
-	// so another bot process rewriting this file can't point a run at the wrong proxy.
+	// Bind-mounted into every container.
 	await writePrivate(
 		hostConfigToml,
 		codexConfig({
-			baseUrl: proxy.baseUrl,
-			envKey: "LADDU_PROXY_KEY",
-			modelCatalog: "/opt/laddu/runtime/models.json",
 			desktop: config.desktop
 				? `${CONTAINER_TOOLS_DIR}/desktop`
 				: undefined,
 		}),
 	)
 	imageTag = tag
-	return { tag, proxy }
+	return tag
 }
 
 const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "")
@@ -298,8 +234,8 @@ export function ensureContainer(
 			"ALL",
 			"--security-opt",
 			"no-new-privileges",
-			// Always networked: Codex reaches the model through the proxy on the bridge gateway. With
-			// ISOLATE_NETWORK on, it's then limited to the internet (see isolate()).
+			// Always networked: Codex reaches the model over the internet. With ISOLATE_NETWORK on,
+			// it's limited to the internet (see isolate()).
 			"--volume",
 			`${["laddu-home", slug(instance), slug(teamId), slug(userId)].filter(Boolean).join("-")}:${CONTAINER_HOME}`,
 			// Directories, not files: a file bind mount keeps the old inode when an editor replaces the
@@ -379,7 +315,7 @@ const isolatedAt = new Map<string, string>()
 
 /**
  * Internet only: blocks this machine's services (databases, SSH…), the home network and other
- * containers, except laddu's model proxy and bot API, replies to the desktop viewer gateway, and
+ * containers, except laddu's bot API, replies to the desktop viewer gateway, and
  * DNS to the container's nameservers.
  * The rules live in the container's own network namespace and are set from a short-lived root
  * helper with NET_ADMIN; the container itself has no capabilities, so it can't change them.
@@ -391,9 +327,8 @@ async function isolate(name: string): Promise<void> {
 	).trim()
 	if (isolatedAt.get(name) === started) return
 
-	const proxy = new URL((await startModelProxy()).baseUrl)
+	const host = await bridgeGateway()
 	const api = botApiUrl()
-	const ports = [proxy.port, api && new URL(api).port].filter(Boolean)
 	const nameservers = (
 		await Bun.$`docker exec ${name} cat /etc/resolv.conf`.text()
 	)
@@ -404,9 +339,11 @@ async function isolate(name: string): Promise<void> {
 		"*filter",
 		":OUTPUT ACCEPT [0:0]",
 		"-A OUTPUT -o lo -j ACCEPT",
-		`-A OUTPUT -d ${proxy.hostname} -p tcp -m multiport --dports ${ports.join(",")} -j ACCEPT`,
+		...(api
+			? [`-A OUTPUT -d ${host} -p tcp --dport ${new URL(api).port} -j ACCEPT`]
+			: []),
 		// Replies from the desktop's web viewer to the bot's gateway (see agent/desktop.ts).
-		`-A OUTPUT -d ${proxy.hostname} -p tcp --sport ${DESKTOP_VIEWER_PORT} -j ACCEPT`,
+		`-A OUTPUT -d ${host} -p tcp --sport ${DESKTOP_VIEWER_PORT} -j ACCEPT`,
 		...nameservers.flatMap(server => [
 			`-A OUTPUT -d ${server} -p udp --dport 53 -j ACCEPT`,
 			`-A OUTPUT -d ${server} -p tcp --dport 53 -j ACCEPT`,

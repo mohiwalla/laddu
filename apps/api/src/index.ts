@@ -1,13 +1,12 @@
 import { App, LogLevel } from "@slack/bolt"
-import { prepareCodexHome } from "./agent/codex"
 import { picturesWork, servePicturesAt } from "./appearance"
 import {
+	bridgeGateway,
 	nameContainersWith,
 	prepareDocker,
 	stopOrphanedRuns,
 } from "./agent/containers"
 import { startDesktopGateway, startDesktopReaper } from "./agent/desktop"
-import { getAccessToken } from "./auth/siwc"
 import { loadBotConfig } from "./config"
 import { recognizeOwnMessages, userFirstName } from "./slack/context"
 import {
@@ -16,22 +15,17 @@ import {
 	scheduledRunner,
 } from "./slack/handlers"
 import { startBotApi } from "./agent/bot-api"
-import { startModelProxy } from "./agent/model-proxy"
 import { startScheduler } from "./scheduler"
 import { BunSocketModeReceiver } from "./slack/socket-mode"
 import { oauthCallback } from "./slack/user-tokens"
 import { SlackAutomations } from "./slack/automations"
 import { SlackForms } from "./slack/forms"
+import { setSystemName } from "./slack/system"
 
 const config = loadBotConfig()
 
-// Docker: per-user containers from one runtime image. Host: Codex runs on this machine.
-const runtime =
-	config.runtime === "docker"
-		? `docker (${(await prepareDocker(config)).tag})`
-		: (await prepareCodexHome(config.workdir, config.localDir), "host")
-// Fail fast if `bun run login` hasn't been run (or the session has ended).
-await getAccessToken()
+// Per-user containers from one runtime image.
+const runtime = `docker (${await prepareDocker(config)})`
 // Socket Mode: Slack connects over a websocket, so no public URL is needed.
 const app = new App({
 	token: config.slackBotToken,
@@ -40,6 +34,7 @@ const app = new App({
 })
 
 const auth = await app.client.auth.test()
+setSystemName(auth.user ?? "")
 const slack = {
 	automations: new SlackAutomations(app.client, auth.user_id!, {
 		allowed: user =>
@@ -48,14 +43,9 @@ const slack = {
 	}),
 	forms: new SlackForms(app.client),
 }
-// For laddu's commands that need the bot (`schedule`, `ado`): next to the model proxy, where
-// containers can reach it; on localhost for the host runtime.
-startBotApi(
-	config.runtime === "docker"
-		? new URL((await startModelProxy()).baseUrl).hostname
-		: "127.0.0.1",
-	{ config, client: app.client, slack },
-)
+// For laddu's commands that need the bot (`schedule`, `ado`): on the Docker bridge, where
+// containers can reach it.
+startBotApi(await bridgeGateway(), { config, client: app.client, slack })
 // Container names carry the person's first name, for whoever looks at `docker ps`.
 nameContainersWith(userId => userFirstName(app.client, userId))
 const { slackSignIn } = config
@@ -81,7 +71,7 @@ if (config.desktop) startDesktopReaper(config)
 recognizeOwnMessages(auth.bot_id!, auth.user_id!)
 registerHandlers(app, config, auth.user_id!, slack)
 // A previous bot process may have left Codex runs going in containers (they hold thread locks).
-if (config.runtime === "docker") await stopOrphanedRuns(auth.team_id!)
+await stopOrphanedRuns(auth.team_id!)
 
 await app.start()
 // Turns the previous process was in the middle of: close their replies and answer again.

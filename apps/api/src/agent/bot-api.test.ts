@@ -128,7 +128,8 @@ test("unconnected DM exits cleanly and sends only the sender a sign-in link", as
 	expect(await command.exited).toBe(0)
 	expect(output).toContain("Not sent yet:")
 	expect(posts).toHaveLength(1)
-	expect(posts[0]?.channel).toBe(caller.userId)
+	// Where they asked (their DM with laddu here), not somewhere else.
+	expect(posts[0]?.channel).toBe(caller.channel)
 	expect(posts[0]?.text).toContain("https://slack.com/oauth/v2/authorize?")
 	expect(opens).toHaveLength(0)
 })
@@ -155,7 +156,7 @@ test("unsigned requests cannot send messages or sign-in links", async () => {
 
 test("after sign-in, the DM uses the sender's token and their conversation", async () => {
 	await dm()
-	const link = /<(https:\/\/slack\.com\/oauth\/v2\/authorize\?[^|]+)\|/.exec(
+	const link = /(https:\/\/slack\.com\/oauth\/v2\/authorize\?\S+)/.exec(
 		String(posts[0]?.text),
 	)![1]!
 	const state = new URL(link).searchParams.get("state")!

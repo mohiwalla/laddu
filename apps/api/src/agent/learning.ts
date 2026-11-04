@@ -57,13 +57,13 @@ export async function afterTurn(
 	const owner = `${user.teamId}-${user.userId}`
 	counts ??= (await readJson<Record<string, number>>(countsFile)) ?? {}
 	counts[owner] = (counts[owner] ?? 0) + 1
-	// Not while the ChatGPT plan is out of quota (for Codex); the count keeps, so it runs on the
+	// Not while their ChatGPT plan is out of quota (for Codex); the count keeps, so it runs on the
 	// next turn after.
 	const personal = await configFor(config, user)
 	const due =
 		counts[owner] >= config.memoryReviewEvery &&
 		!reviewing.has(owner) &&
-		!(personal.agent === "codex" && usagePause())
+		!(personal.agent === "codex" && usagePause(user))
 	if (due) counts[owner] = 0
 	await writeJsonPrivate(countsFile, counts).catch(() => {})
 	if (due) void review(personal, user, owner)
@@ -84,7 +84,7 @@ async function review(config: BotConfig, user: TurnUser, owner: string) {
 	} catch (error) {
 		console.warn(`[review] ${owner} failed:`, error)
 		const failure = classify(error)
-		if (failure.kind === "usage_limit") pauseForUsageLimit(failure)
+		if (failure.kind === "usage_limit") pauseForUsageLimit(user, failure)
 	} finally {
 		reviewing.delete(owner)
 	}

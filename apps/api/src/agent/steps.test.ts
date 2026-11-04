@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { ThreadItem } from "@openai/codex-sdk"
-import { stepTracker, type Step } from "./steps"
+import { stepTracker, type Step, type Todos } from "./steps"
 
 test.each([
 	["rg missing file.txt", 1, "complete"],
@@ -44,4 +44,44 @@ test("desktop exec keeps the computer viewer available", () => {
 		false,
 	)
 	expect(steps[0]?.computer).toBe(true)
+})
+
+test("the to-do list goes out whole, and actions stay steps", () => {
+	const steps: Step[] = []
+	const lists: Todos[] = []
+	const track = stepTracker(
+		step => steps.push(step),
+		todos => lists.push(todos),
+	)
+	track(
+		{
+			type: "plan",
+			title: " Scheduled exports ",
+			items: [
+				{ text: "Design the table", status: "completed" },
+				{ text: "Cron dispatcher", status: "in_progress" },
+				{ text: " ", status: "pending" },
+			],
+		},
+		false,
+	)
+	expect(lists).toEqual([
+		{
+			title: "Scheduled exports",
+			items: [
+				{ text: "Design the table", status: "completed" },
+				{ text: "Cron dispatcher", status: "in_progress" },
+			],
+		},
+	])
+	expect(steps).toEqual([])
+	track(
+		{
+			id: "search",
+			type: "web_search",
+			query: "cron",
+		} satisfies ThreadItem,
+		true,
+	)
+	expect(steps.map(step => step.id)).toEqual(["search"])
 })

@@ -1,22 +1,10 @@
 /**
- * Runs laddu's own commands (runtime/: `memory`, `recall`, `skills`) for a user, where their Codex runs:
- * inside their container, or on the host against that user's data directories.
+ * Runs laddu's own commands (runtime/: `memory`, `recall`, `skills`) for a user, inside their
+ * container, where their agent runs.
  */
 import type { BotConfig } from "../config"
-import { paths } from "../config"
 import type { TurnUser } from "./turn"
-import { CONTAINER_TOOLS_DIR, ensureContainer, TOOLS_DIR } from "./containers"
-
-/** Host runtime: where each user's memory, history and skills live (the commands read these env vars). */
-export function hostToolEnv(user: TurnUser) {
-	const owner = `${user.teamId}-${user.userId}`
-	return {
-		LADDU_MEMORY_DIR: `${paths.dataDir}/memory/${owner}`,
-		LADDU_HISTORY_DIR: `${paths.dataDir}/history/${owner}`,
-		LADDU_CODE_DIR: `${paths.dataDir}/code/${owner}`,
-		LADDU_SKILLS_DIR: `${paths.codexHome}/skills`,
-	}
-}
+import { CONTAINER_TOOLS_DIR, ensureContainer } from "./containers"
 
 export async function runTool(
 	config: BotConfig,
@@ -26,12 +14,6 @@ export async function runTool(
 ): Promise<string> {
 	const [name, ...rest] = args
 	const input = new TextEncoder().encode(stdin ?? "")
-	if (config.runtime === "host") {
-		return Bun.$`${TOOLS_DIR}/${name} ${rest} < ${input}`
-			.env({ ...Bun.env, ...hostToolEnv(user) })
-			.quiet()
-			.text()
-	}
 	const container = await ensureContainer(config, user.teamId, user.userId)
 	return Bun.$`docker exec -i ${container} ${CONTAINER_TOOLS_DIR}/${name} ${rest} < ${input}`
 		.quiet()

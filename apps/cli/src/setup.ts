@@ -2,7 +2,6 @@
  * `laddu setup`: from a machine with Bun and Docker to a bot answering in Slack. Safe to run
  * again; every step keeps what already works.
  */
-import { existingChatGpt, signInWithChatGpt } from "./chatgpt"
 import { Instance, type SlackApp } from "./instance"
 import { instanceNames, isRoot } from "./paths"
 import {
@@ -42,8 +41,6 @@ import {
 	warn,
 } from "./terminal"
 
-/** The ChatGPT consent screen shows this name at the first sign-in. */
-const APP_NAME = "laddu"
 const MEMBER_ID = /^[UW][A-Z0-9]{2,}$/
 
 export async function setup(name: string): Promise<boolean> {
@@ -57,7 +54,7 @@ export async function setup(name: string): Promise<boolean> {
 			),
 	)
 
-	const docker = await preflight()
+	await preflight()
 	await instance.create()
 	const env = await instance.env()
 	const saved = await instance.slackApp()
@@ -70,30 +67,10 @@ export async function setup(name: string): Promise<boolean> {
 				? undefined
 				: "Up to 35 characters.",
 	})
-	const runtime = docker
-		? await choose(
-				"Where does it run what people ask it to?",
-				[
-					{
-						label: "Docker",
-						value: "docker" as const,
-						hint: "a container per person; safe to share with your team",
-					},
-					{
-						label: "This machine",
-						value: "host" as const,
-						hint: "Codex's sandbox only; for just yourself",
-					},
-				],
-				env.CODEX_RUNTIME === "host" ? 1 : 0,
-			)
-		: "host"
-	const desktop =
-		runtime === "docker" &&
-		(await confirm(
-			"Give it a computer (a desktop it can drive and people can watch)?",
-			env.DESKTOP !== "false",
-		))
+	const desktop = await confirm(
+		"Give it a computer (a desktop it can drive and people can watch)?",
+		env.DESKTOP !== "false",
+	)
 	say(
 		dim(
 			"  A public HTTPS address for this machine lets people watch that desktop and lets the bot\n  DM as them. Point it (a reverse proxy or tunnel) at the port below. Leave it blank to skip.",
@@ -152,33 +129,11 @@ export async function setup(name: string): Promise<boolean> {
 					)
 				: owner
 
-	step("Model")
-	const chatgpt = await connectChatGpt(instance)
-	const model = chatgpt.models.length
-		? await choose(
-				"Which model?",
-				chatgpt.models.map(model => ({
-					label: model.slug,
-					value: model.slug,
-					hint: model.name,
-				})),
-				Math.max(
-					0,
-					chatgpt.models.findIndex(
-						model => model.slug === env.CODEX_MODEL,
-					),
-				),
-			)
-		: await ask("Model slug (couldn't list your plan's models)", {
-				default: env.CODEX_MODEL,
-				check: value => (value ? undefined : "A model is required."),
-			})
-
 	await instance.setEnv({
 		LADDU_INSTANCE: name,
 		DATA_DIR: instance.dataDir,
 		CODEX_LOCAL_DIR: instance.dir,
-		APP_NAME,
+		APP_NAME: null,
 		SLACK_BOT_TOKEN: slack.tokens.bot,
 		SLACK_APP_TOKEN: slack.tokens.app_level,
 		SLACK_USER_TOKEN: slack.tokens.user ?? env.SLACK_USER_TOKEN ?? null,
@@ -188,8 +143,7 @@ export async function setup(name: string): Promise<boolean> {
 			(publicUrl && slack.credentials?.client_secret) || null,
 		OWNER_SLACK_USER_ID: owner,
 		ALLOWED_SLACK_USERS: allowed,
-		CODEX_MODEL: model,
-		CODEX_RUNTIME: runtime,
+		CODEX_RUNTIME: null,
 		DESKTOP: String(desktop),
 		DESKTOP_VIEWER_PORT: port,
 		DESKTOP_PUBLIC_URL: publicUrl,
@@ -224,7 +178,7 @@ export async function setup(name: string): Promise<boolean> {
 }
 
 /** Checks the machine; returns whether Docker is usable. */
-async function preflight(): Promise<boolean> {
+async function preflight(): Promise<void> {
 	step("This machine")
 	done(`Bun ${Bun.version}`)
 	if (!(await Bun.$`systemctl --version`.quiet().nothrow()).exitCode)
@@ -244,21 +198,12 @@ async function preflight(): Promise<boolean> {
 	const info = await Bun.$`docker info --format ${"{{.ServerVersion}}"}`
 		.quiet()
 		.nothrow()
-	if (info.exitCode === 0) {
-		done(`Docker ${info.text().trim()}`)
-		return true
-	}
-	const denied = info.stderr.toString().includes("permission denied")
-	warn(
-		denied
+	if (info.exitCode === 0) return done(`Docker ${info.text().trim()}`)
+	throw new Error(
+		info.stderr.toString().includes("permission denied")
 			? "Docker is installed, but you can't use it yet. Log out and back in (you were just added to the docker group), then run setup again."
-			: "Docker isn't available, so the bot can only run things on this machine directly (for just yourself).",
+			: "laddu runs everyone's work in Docker containers, and Docker isn't available here. Install it, then run setup again.",
 	)
-	if (denied && !(await confirm("Continue without Docker?", false)))
-		throw new Error(
-			"Stopped; run `laddu setup` again after logging back in.",
-		)
-	return false
 }
 
 /** A viewer port no other bot here uses, from 6900 up. */
@@ -447,18 +392,6 @@ async function askToken(
 			)
 		}
 	}
-}
-
-async function connectChatGpt(instance: Instance) {
-	const current = await existingChatGpt(instance.dataDir, APP_NAME)
-	if (current) {
-		done(`Signed in to ChatGPT as ${current.email ?? "someone"}`)
-		if (!(await confirm("Sign in with a different account?", false)))
-			return current
-	}
-	const result = await signInWithChatGpt(instance.dataDir, APP_NAME)
-	done(`Signed in to ChatGPT as ${result.email ?? "someone"}`)
-	return result
 }
 
 /** Installs the service and (re)starts it; true once the bot says it's listening. */

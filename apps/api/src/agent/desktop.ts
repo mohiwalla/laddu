@@ -16,6 +16,7 @@ import type { BotConfig } from "../config"
 import { paths } from "../config"
 import { readJson, writeJsonPrivate, writePrivate } from "../files"
 import { refreshHome } from "../slack/home"
+import { noticeMessage, systemName } from "../slack/system"
 import {
 	CONTAINER_HOME,
 	CONTAINER_TOOLS_DIR,
@@ -601,8 +602,7 @@ export async function computerInUse(
 		client,
 		config,
 		target,
-		"I have my own computer and I'm using it for this.",
-		"Watch me or take over anytime from my *Home* tab (open my profile → Home); it always has a fresh link.",
+		`${systemName()} is using its computer for this.`,
 	)
 	await writeJsonPrivate(introducedFile, {
 		...introduced,
@@ -618,15 +618,20 @@ export async function sendDesktopLink(
 	client: WebClient,
 	config: BotConfig,
 	target: Owner & { channel: string; threadTs?: string },
-	lead = "Here's my computer.",
-	after = `Take over from there when you need to (just for you; valid ${LINK_HOURS} hours, and my *Home* tab always has a fresh link).`,
+	lead?: string,
 ): Promise<void> {
 	const link = await desktopLink(config, target)
 	await client.chat.postEphemeral({
 		channel: target.channel,
 		user: target.userId,
 		thread_ts: target.threadTs,
-		text: `:desktop_computer: ${lead} <${link}|Watch it live>. ${after}`,
+		...noticeMessage({
+			icon: ":desktop_computer:",
+			title: `${systemName()}'s computer`,
+			text: lead,
+			link: { label: "Watch or take over", url: link },
+			footer: `Only for you; works for ${LINK_HOURS} hours. ${systemName()}'s Home tab always has a fresh link.`,
+		}),
 	})
 }
 

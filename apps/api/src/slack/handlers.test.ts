@@ -131,6 +131,7 @@ test.each(["success", "failure", "stop"] as const)(
 			ts: "3.001",
 			streaming: true,
 			step: mock(() => {}),
+			todos: mock(() => {}),
 			finish: mock(async () => {}),
 			fail: mock(async () => {}),
 			cancel: mock(async () => {}),
@@ -203,7 +204,6 @@ test.each(["success", "failure", "stop"] as const)(
 				app,
 				{
 					allowedUsers: new Set([userId]),
-					codexUsers: "*",
 					agent: "codex",
 				} as BotConfig,
 				botUserId,

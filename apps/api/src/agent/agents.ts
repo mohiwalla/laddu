@@ -1,11 +1,12 @@
 /**
  * The agents laddu can run a turn on, one per person (picked on the Home tab, see preferences.ts):
- * Codex on the owner's ChatGPT plan (native app-server), or OpenCode's free models (over ACP).
+ * Codex on their own ChatGPT plan (native app-server), or OpenCode's free models (over ACP).
  * Everything for a person runs on their pick, background memory reviews included.
  */
 import { listCodexModels, runCodexTurn } from "./codex"
 import { listOpenCodeModels, runOpenCodeTurn } from "./opencode"
-import type { ModelOption, TurnOptions, TurnResult } from "./turn"
+import type { BotConfig } from "../config"
+import type { ModelOption, TurnOptions, TurnResult, TurnUser } from "./turn"
 
 export type AgentId = "codex" | "opencode"
 
@@ -15,20 +16,21 @@ export const AGENTS: Record<
 		name: string
 		/** What it runs on, for the Home tab. */
 		plan: string
-		listModels: () => Promise<ModelOption[]>
+		/** The models this person can pick. */
+		listModels: (config: BotConfig, user: TurnUser) => Promise<ModelOption[]>
 		runTurn: (options: TurnOptions) => Promise<TurnResult>
 	}
 > = {
 	codex: {
 		name: "Codex",
-		plan: "ChatGPT subscription",
+		plan: "Your ChatGPT plan",
 		listModels: listCodexModels,
 		runTurn: runCodexTurn,
 	},
 	opencode: {
 		name: "OpenCode",
 		plan: "Free models",
-		listModels: listOpenCodeModels,
+		listModels: () => listOpenCodeModels(),
 		runTurn: runOpenCodeTurn,
 	},
 }

@@ -2,12 +2,14 @@
  * laddu's Home tab: each person's own page, split into tabs (Slack allows apps no tabs of their
  * own, so these are buttons that switch what the page shows). Overview: what laddu is working on,
  * scheduled tasks and automations. Skills: the how-to guides laddu keeps for them. Memory: what
- * laddu remembers. Settings: agent and model, name and picture, connected accounts. Redrawn
+ * laddu remembers. Settings: agent and model, name and picture, connected accounts (ChatGPT, Slack, Microsoft),
+ * and everything else it can use for them (keys, MCP servers, accounts on its computer). Redrawn
  * whenever they open it and after every change made here; only they can see it, and every control
  * acts only on their own things.
  */
 import type { App, types } from "@slack/bolt"
 import type { BotConfig } from "../config"
+import { codexAccount, signIn, signOut } from "../agent/account"
 import { AGENTS, isAgent } from "../agent/agents"
 import {
 	appearance,
@@ -28,7 +30,6 @@ import { runTool } from "../agent/tools"
 import * as microsoft from "../integrations/microsoft"
 import {
 	agentFor,
-	canUseCodex,
 	effective,
 	preferences,
 	setPreferences,
@@ -37,7 +38,9 @@ import { listJobs, nextRun, removeJob, type Job } from "../scheduler"
 import type { AgentSessions } from "./agent-sessions"
 import type { SlackAutomations } from "./automations"
 import { userFirstName } from "./context"
+import { noticeClicked, systemName } from "./system"
 import * as slackSignIn from "./user-tokens"
+import { keyView, readKeyForm, saveKey } from "./keys"
 
 type WebClient = App["client"]
 type Block = types.KnownBlock
@@ -171,6 +174,18 @@ const EFFORTS: Record<string, string> = {
 // Each section is a large header and compact rows: a short bold label on the left, its control
 // on the right, and a grey hint underneath only where it helps. Dividers separate sections.
 
+/** ChatGPT plans as people know them (Codex's planType). */
+const PLANS: Record<string, string> = {
+	free: "Free",
+	go: "Go",
+	plus: "Plus",
+	pro: "Pro",
+	team: "Business",
+	business: "Business",
+	enterprise: "Enterprise",
+	edu: "Edu",
+}
+
 const ON = ":large_green_circle:"
 const OFF = ":white_circle:"
 const hint = (text: string) => context(text)
@@ -180,8 +195,8 @@ async function agentSection(
 	person: Person,
 ): Promise<Block[]> {
 	const picked = await preferences(person)
-	const agent = agentFor(config, person, picked)
-	const models = await AGENTS[agent].listModels()
+	const agent = agentFor(config, picked)
+	const models = await AGENTS[agent].listModels(config, person)
 	const chosen = effective(config, agent, picked, models)
 	const option: ModelOption | undefined = chosen.option
 	const blocks: Block[] = [
@@ -190,11 +205,10 @@ async function agentSection(
 			"*Agent*",
 			select(
 				"home_agent",
-				Object.entries(AGENTS)
-					.filter(
-						([id]) => id !== "codex" || canUseCodex(config, person),
-					)
-					.map(([id, about]) => ({ text: about.name, value: id })),
+				Object.entries(AGENTS).map(([id, about]) => ({
+					text: about.name,
+					value: id,
+				})),
 				agent,
 			),
 		),
@@ -271,7 +285,8 @@ async function agentSection(
 async function appearanceSection(person: Person): Promise<Block[]> {
 	const { name, picture } = await appearance(person)
 	const icon = picture && pictureUrl(picture)
-	const text = `*${escape(name ?? "laddu")}*\n${name || picture ? "On laddu's messages for you, for everyone in the conversation." : "laddu's own name and picture."}`
+	const own = systemName()
+	const text = `*${escape(name ?? own)}*\n${name || picture ? `On ${own}'s messages for you, for everyone in the conversation.` : `${own}'s own name and picture.`}`
 	return [
 		header(":art:  Name & picture"),
 		icon
@@ -281,7 +296,7 @@ async function appearanceSection(person: Person): Promise<Block[]> {
 					accessory: {
 						type: "image",
 						image_url: icon,
-						alt_text: name ?? "laddu",
+						alt_text: name ?? own,
 					},
 				} as Block)
 			: row(text),
@@ -295,7 +310,7 @@ async function appearanceSection(person: Person): Promise<Block[]> {
 			],
 		},
 		hint(
-			"Or ask laddu, e.g. _“call yourself Jalebi”_. You still tag it as @laddu.",
+			`Or ask ${own}, e.g. _“call yourself Jalebi”_. You still tag it as @${own}.`,
 		),
 	]
 }
@@ -304,7 +319,7 @@ async function placeLabel(client: WebClient, channel: string): Promise<string> {
 	const info = await client.conversations.info({ channel }).catch(() => null)
 	const found = info?.channel
 	if (!found) return "A conversation"
-	if (found.is_im) return "Your DM with laddu"
+	if (found.is_im) return `Your DM with ${systemName()}`
 	if (found.is_mpim) return "A group DM"
 	return `#${found.name}`
 }
@@ -333,7 +348,7 @@ async function workingSection(
 					style: "danger",
 					confirm: {
 						title: "Stop this?",
-						text: "laddu stops working on it there, along with anything else you asked there that hasn't started.",
+						text: `${systemName()} stops working on it there, along with anything else you asked there that hasn't started.`,
 						yes: "Stop",
 					},
 				}),
@@ -350,9 +365,25 @@ async function connectionsSection(
 	config: BotConfig,
 	person: Person,
 ): Promise<Block[]> {
-	const rows: Block[] = []
 	const connect = (value: string) =>
 		button("Connect", "home_connect", value, { style: "primary" })
+	const account = await codexAccount(config, person).catch(() => null)
+	const rows: Block[] = [
+		row(
+			`*ChatGPT*\n${account ? `${ON}  Connected${account.email ? ` as ${escape(account.email)}` : ""}${PLANS[account.plan] ? `  ·  ${PLANS[account.plan]}` : ""}` : `${OFF}  Not connected`}`,
+			account
+				? button("Disconnect", "home_chatgpt", "signout", {
+						confirm: {
+							title: "Disconnect ChatGPT?",
+							text: `${systemName()} won't run on Codex for you until you connect it again.`,
+							yes: "Disconnect",
+						},
+					})
+				: button("Connect", "home_chatgpt", "signin", {
+						style: "primary",
+					}),
+		),
+	]
 	if (config.slackSignIn) {
 		const connection = await slackSignIn.connection(person)
 		rows.push(
@@ -362,7 +393,7 @@ async function connectionsSection(
 					? button("Disconnect", "home_disconnect", "slack", {
 							confirm: {
 								title: "Disconnect Slack?",
-								text: "laddu will only be able to message people as itself.",
+								text: `${systemName()} will only be able to message people as itself.`,
 								yes: "Disconnect",
 							},
 						})
@@ -380,27 +411,140 @@ async function connectionsSection(
 			{
 				confirm: {
 					title: "Disconnect Microsoft?",
-					text: "This signs laddu out of Microsoft 365 *and* Azure DevOps; they share one sign-in.",
+					text: `This signs ${systemName()} out of Microsoft 365 *and* Azure DevOps; they share one sign-in.`,
 					yes: "Disconnect",
 				},
 			},
 		)
+		// One sign-in for both; a service it doesn't cover yet gets its own approve button.
+		const { ready, missing } = account
+			? await microsoft.reach(config.microsoft, person)
+			: { ready: [], missing: [] }
+		const services = (ready.length ? ready : (["graph", "devops"] as const))
+			.map(resource => microsoft.NAMES[resource])
+			.join(" and ")
 		rows.push(
 			row(
-				`*Microsoft 365*\n${account?.tokens.graph ? `${ON}  Connected${as}` : `${OFF}  Not connected`}`,
-				account?.tokens.graph ? disconnect : connect("graph"),
+				`*Microsoft*\n${ready.length ? `${ON}  Connected${as}` : `${OFF}  Not connected`}  ·  ${services}`,
+				ready.length ? disconnect : connect("graph"),
 			),
-			row(
-				`*Azure DevOps*\n${account?.tokens.devops ? `${ON}  Connected${as}` : `${OFF}  Not connected`}`,
-				account?.tokens.devops ? disconnect : connect("devops"),
-			),
+			...(ready.length
+				? missing.map(({ resource }) =>
+						row(
+							`${OFF}  ${microsoft.NAMES[resource]} isn't approved for ${systemName()} yet`,
+							button("Approve", "home_connect", resource),
+						),
+					)
+				: []),
 		)
 	}
-	if (!rows.length) return []
 	return [
 		header(":link:  Connections"),
 		...rows,
-		hint("Connecting sends you a sign-in link in your DMs with laddu."),
+		hint(
+			`Connecting sends you a sign-in link in your DM with ${systemName()}. ChatGPT runs Codex on your own plan.`,
+		),
+	]
+}
+
+type Connections = {
+	keys: { name: string; note: string; added: string }[]
+	mcp: {
+		name: string
+		target: string
+		keys: string[]
+		note: string
+		added: string
+	}[]
+	accounts: { name: string; detail: string }[]
+}
+const MAX_LISTED = 15
+
+/** Everything else laddu can use for them: keys, MCP servers, accounts on its computer. */
+async function toolsSection(
+	config: BotConfig,
+	person: Person,
+): Promise<Block[]> {
+	const found = JSON.parse(
+		await runTool(config, person, ["connections", "json"]),
+	) as Connections
+	const added = (when: string) =>
+		when && !Number.isNaN(Date.parse(when))
+			? `  ·  added ${slackTime(new Date(when))}`
+			: ""
+	const remove = (kind: "key" | "mcp", name: string, text: string) =>
+		button("Remove", "home_connection_remove", `${kind}|${name}`, {
+			confirm: {
+				title: `Remove ${clip(name, 15)}?`,
+				text,
+				yes: "Remove",
+			},
+		})
+	const saved = new Set(found.keys.map(key => key.name))
+	const rows: Block[] = [
+		...found.keys
+			.slice(0, MAX_LISTED)
+			.map(key =>
+				row(
+					`*\`${key.name}\`*  ·  key\n${key.note ? escape(key.note) : "_No note_"}${added(key.added)}`,
+					remove(
+						"key",
+						key.name,
+						`${systemName()} won't be able to use \`${key.name}\` any more.`,
+					),
+				),
+			),
+		...found.mcp.slice(0, MAX_LISTED).map(server => {
+			const missing = server.keys.filter(key => !saved.has(key))
+			return row(
+				`*${escape(server.name)}*  ·  MCP server\n${escape(clip(server.target, 120))}${server.note ? ` · ${escape(server.note)}` : ""}${added(server.added)}${missing.length ? `\n:warning:  Needs ${missing.map(key => `\`${key}\``).join(", ")}` : ""}`,
+				remove(
+					"mcp",
+					server.name,
+					`${systemName()} won't have the *${escape(server.name)}* tools any more.`,
+				),
+			)
+		}),
+	]
+	const profile = config.codeCommit?.profiles[person.userId]
+	const accounts = [
+		...(profile
+			? [
+					`*AWS CodeCommit*: profile \`${escape(profile)}\`, set up by whoever runs ${systemName()}`,
+				]
+			: []),
+		...found.accounts.map(
+			account => `*${escape(account.name)}*: ${escape(account.detail)}`,
+		),
+	]
+	if (accounts.length)
+		rows.push(
+			row(
+				`*Signed in on ${systemName()}'s computer*\n${clip(accounts.join("\n"), 2800)}`,
+			),
+		)
+	const more =
+		Math.max(0, found.keys.length - MAX_LISTED) +
+		Math.max(0, found.mcp.length - MAX_LISTED)
+	return [
+		header(":key:  Keys & tools"),
+		...(rows.length
+			? rows
+			: [hint("Nothing yet: no keys, MCP servers or other accounts.")]),
+		...(more
+			? [hint(`…and ${more} more. Ask ${systemName()} to list them.`)]
+			: []),
+		{
+			type: "actions",
+			elements: [
+				button("Add a key", "home_key_add", "add", {
+					style: "primary",
+				}),
+			],
+		},
+		hint(
+			`Keys go in a private form, never in the chat. Or ask ${systemName()} to connect something, e.g. _“connect the Linear MCP server”_ or _“sign in to the AWS CLI”_.`,
+		),
 	]
 }
 
@@ -431,7 +575,7 @@ async function scheduledSection(person: Person): Promise<Block[]> {
 				)
 			: [
 					hint(
-						"Nothing scheduled. Ask laddu, e.g. _“every Monday at 9, summarise #sales”_.",
+						`Nothing scheduled. Ask ${systemName()}, e.g. _“every Monday at 9, summarise #sales”_.`,
 					),
 				]),
 	]
@@ -462,10 +606,10 @@ const EVENTS: Record<string, string> = {
 	channel_archive: "a channel is archived",
 	link_shared: "a link is shared",
 }
-const ACTIONS: Record<Rule["action"], string> = {
-	message: "laddu posts a message",
-	reaction: "laddu reacts",
-	task: "laddu works on it",
+const ACTIONS: Record<Rule["action"], () => string> = {
+	message: () => `${systemName()} posts a message`,
+	reaction: () => `${systemName()} reacts`,
+	task: () => `${systemName()} works on it`,
 }
 
 function describeRule(rule: Rule): string {
@@ -479,7 +623,7 @@ function describeRule(rule: Rule): string {
 			: rule.domain
 				? ` from ${escape(rule.domain)}`
 				: ""
-	return `When ${EVENTS[rule.event] ?? rule.event}${where}${filter}, ${ACTIONS[rule.action]}`
+	return `When ${EVENTS[rule.event] ?? rule.event}${where}${filter}, ${ACTIONS[rule.action]()}`
 }
 
 async function automationsSection(
@@ -516,7 +660,7 @@ async function automationsSection(
 				)
 			: [
 					hint(
-						"No automations. Ask laddu, e.g. _“when someone joins #general, welcome them”_.",
+						`No automations. Ask ${systemName()}, e.g. _“when someone joins #general, welcome them”_.`,
 					),
 				]),
 	]
@@ -573,12 +717,12 @@ async function memorySection(
 			"user",
 			":bust_in_silhouette:  About you",
 			"Who you are and how you like answers.",
-			"Nothing yet. laddu saves things as you work together.",
+			`Nothing yet. ${systemName()} saves things as you work together.`,
 		),
 		divider,
 		...store(
 			"notes",
-			":notebook:  laddu's notes",
+			`:notebook:  ${systemName()}'s notes`,
 			"Your setup, standing conventions and lessons learned.",
 			"No notes yet.",
 		),
@@ -586,7 +730,7 @@ async function memorySection(
 			? [
 					divider,
 					row(
-						"*Start over*\nladdu forgets everything above and learns about you again.",
+						`*Start over*\n${systemName()} forgets everything above and learns about you again.`,
 						button(
 							"Forget everything",
 							"home_memory_clear",
@@ -595,7 +739,7 @@ async function memorySection(
 								style: "danger",
 								confirm: {
 									title: "Forget everything?",
-									text: "laddu starts over and learns about you again from scratch.",
+									text: `${systemName()} starts over and learns about you again from scratch.`,
 									yes: "Forget everything",
 								},
 							},
@@ -623,7 +767,7 @@ async function skillsSection(
 	return [
 		header(":hammer_and_wrench:  Skills"),
 		hint(
-			"How-to guides laddu writes as it learns your work, and follows when a task matches. Changes apply from your next message.",
+			`How-to guides ${systemName()} writes as it learns your work, and follows when a task matches. Changes apply from your next message.`,
 		),
 		{
 			type: "actions",
@@ -668,13 +812,13 @@ async function skillsSection(
 				)
 			: [
 					hint(
-						"No skills yet. laddu writes one when it works out something likely to come up again, or ask it, e.g. _“remember how to pull the weekly sales report”_.",
+						`No skills yet. ${systemName()} writes one when it works out something likely to come up again, or ask it, e.g. _“remember how to pull the weekly sales report”_.`,
 					),
 				]),
 		...(skills.length > MAX_SKILLS
 			? [
 					hint(
-						`…and ${skills.length - MAX_SKILLS} more. Ask laddu to list or tidy them.`,
+						`…and ${skills.length - MAX_SKILLS} more. Ask ${systemName()} to list or tidy them.`,
 					),
 				]
 			: []),
@@ -721,6 +865,7 @@ function buildTab(
 			["Agent", () => agentSection(config, person)],
 			["Name & picture", () => appearanceSection(person)],
 			["Connections", () => connectionsSection(config, person)],
+			["Keys & tools", () => toolsSection(config, person)],
 		],
 	}
 	return Promise.all(builds[tab].map(([name, build]) => safe(name, build)))
@@ -741,14 +886,16 @@ async function publish(
 			await userFirstName(client, person.userId).catch(() => ""),
 		)
 	// Slack fetches images itself, so only with a public address (assets/home-banner.png; bump ?v
-	// when it changes, Slack caches it).
-	const banner = config.desktopViewer.publicUrl.startsWith("https:")
-		? `${config.desktopViewer.publicUrl}/_laddu/home-banner.png?v=3`
-		: null
+	// when it changes, Slack caches it). It reads "laddu", so only when that's the bot's name.
+	const banner =
+		config.desktopViewer.publicUrl.startsWith("https:") &&
+		systemName() === "laddu"
+			? `${config.desktopViewer.publicUrl}/_laddu/home-banner.png?v=3`
+			: null
 	const blocks: Block[] = [
 		banner
-			? { type: "image", image_url: banner, alt_text: "laddu" }
-			: header("laddu"),
+			? { type: "image", image_url: banner, alt_text: systemName() }
+			: header(systemName()),
 		row(
 			`*Hi ${escape(firstNames.get(key) || "there")}* :wave:\nOnly you can see this page.`,
 		),
@@ -873,7 +1020,8 @@ function toolProblem(error: unknown): string {
 		: "That didn't work. Please try again."
 }
 
-const MEMORY_STORES = { user: "About you", notes: "laddu's notes" } as const
+const memoryStore = (store: keyof Memory) =>
+	store === "user" ? "About you" : `${systemName()}'s notes`
 
 function memoryEntryView(
 	store: keyof Memory,
@@ -891,11 +1039,11 @@ function memoryEntryView(
 			{
 				type: "input",
 				block_id: "entry",
-				label: plain(MEMORY_STORES[store]),
+				label: plain(memoryStore(store)),
 				hint: plain(
 					store === "user"
 						? "One fact about you, e.g. your role or how you like answers."
-						: "One note for laddu, e.g. a convention or where something lives.",
+						: `One note for ${systemName()}, e.g. a convention or where something lives.`,
 				),
 				element: {
 					type: "plain_text_input",
@@ -973,7 +1121,7 @@ function skillEditView(
 				block_id: "description",
 				label: plain("When to use it"),
 				hint: plain(
-					"laddu sees only this until a task matches, so say what it does and when.",
+					`${systemName()} sees only this until a task matches, so say what it does and when.`,
 				),
 				element: {
 					type: "plain_text_input",
@@ -1032,7 +1180,7 @@ const OWN = "own"
 function appearanceView(current: Appearance): types.ModalView {
 	const uploaded = current.picture && !(current.picture in PRESETS)
 	const choices = [
-		{ text: "laddu's own", value: OWN },
+		{ text: `${systemName()}'s own`, value: OWN },
 		...Object.entries(PRESETS).map(([value, text]) => ({ text, value })),
 		...(uploaded ? [{ text: "The one you uploaded", value: KEEP }] : []),
 	]
@@ -1050,13 +1198,13 @@ function appearanceView(current: Appearance): types.ModalView {
 				optional: true,
 				label: plain("Name"),
 				hint: plain(
-					"What laddu is called on its messages for you. Empty for laddu.",
+					`What ${systemName()} is called on its messages for you. Empty for ${systemName()}.`,
 				),
 				element: {
 					type: "plain_text_input",
 					action_id: "value",
 					max_length: MAX_NAME,
-					placeholder: plain("laddu"),
+					placeholder: plain(systemName()),
 					...(current.name ? { initial_value: current.name } : {}),
 				},
 			},
@@ -1088,7 +1236,7 @@ function appearanceView(current: Appearance): types.ModalView {
 					] as Block[])
 				: [
 						context(
-							"Pictures need a public HTTPS address for laddu (DESKTOP_PUBLIC_URL); this one has none.",
+							`Pictures need a public HTTPS address for ${systemName()} (DESKTOP_PUBLIC_URL); this one has none.`,
 						),
 					]),
 		],
@@ -1178,14 +1326,18 @@ export function registerHome(app: App, given: Deps) {
 
 	// The Computer button is a link; Slack still sends the click.
 	app.action("open_computer", async ({ ack }) => ack())
+	// Link buttons on system messages (sign-ins); the click lets the message be replaced later.
+	app.action("system_link", async ({ ack, body, action }) => {
+		await ack()
+		noticeClicked(
+			"value" in action ? action.value : undefined,
+			"response_url" in body ? body.response_url : undefined,
+		)
+	})
 	control("home_refresh", async () => {})
 
 	control("home_agent", async ({ person, value }) => {
-		if (
-			!isAgent(value) ||
-			(value === "codex" && !canUseCodex(config, person))
-		)
-			return
+		if (!isAgent(value)) return
 		// Each agent has its own models; the picks for the old one don't carry over.
 		await setPreferences(person, {
 			agent: value,
@@ -1255,11 +1407,26 @@ export function registerHome(app: App, given: Deps) {
 
 	control("home_connect", async ({ person, client, value }) => {
 		if (value === "slack" && config.slackSignIn)
-			await slackSignIn.connect(config.slackSignIn, client, person)
+			await slackSignIn.connect(config.slackSignIn, client, person, null)
 		else if ((value === "graph" || value === "devops") && config.microsoft)
-			await microsoft.connect(config.microsoft, client, person, value)
+			await microsoft.connect(
+				config.microsoft,
+				client,
+				person,
+				value,
+				null,
+			)
 		else return
-		return ":envelope_with_arrow:  Sent you a sign-in link in your DMs with laddu. Come back here once you're done."
+		return `:envelope_with_arrow:  Sign-in link sent to your DM with ${systemName()}. Press Refresh here once you're done.`
+	})
+	control("home_chatgpt", async ({ person, client, value }) => {
+		if (value === "signout") return signOut(config, person)
+		await signIn(config, client, person, null, () =>
+			refreshHome(client, person).catch(error =>
+				console.warn("[home] couldn't publish", error),
+			),
+		)
+		return `:envelope_with_arrow:  Sign-in code sent to your DM with ${systemName()}. This page updates once you're connected.`
 	})
 	control("home_disconnect", async ({ person, client, value }) => {
 		if (value === "slack") await slackSignIn.disconnect(client, person)
@@ -1325,6 +1492,33 @@ export function registerHome(app: App, given: Deps) {
 			console.warn("[home] couldn't publish", error),
 		)
 	}
+
+	control("home_connection_remove", async ({ person, value }) => {
+		const [kind, name] = value.split("|") as [string, string]
+		if (kind !== "key" && kind !== "mcp") return
+		await runTool(config, person, ["connections", kind, "remove", name])
+	})
+	control("home_key_add", async ({ client, body }) => {
+		await client.views.open({
+			trigger_id: body.trigger_id,
+			view: keyView("home_key_save", ""),
+		})
+	})
+	app.view("home_key_save", async ({ ack, body, view, client }) => {
+		const person = viewPerson(body)
+		if (!isAllowed(person.userId)) return ack()
+		const form = readKeyForm(view)
+		if ("problem" in form)
+			return ack({
+				response_action: "errors",
+				errors: { [form.field]: form.problem },
+			})
+		await ack()
+		await saved(client, person, async () => {
+			await saveKey(config, person, form.name, form.note, form.value)
+			return `:lock:  Saved \`${form.name}\`. ${systemName()} can use it from your next message.`
+		})
+	})
 
 	control("home_memory_add", async ({ client, value, body }) => {
 		if (value !== "user" && value !== "notes") return
@@ -1402,7 +1596,7 @@ export function registerHome(app: App, given: Deps) {
 			const { body: steps } = splitSkill(text)
 			if (steps.trim().length > MAX_STEPS)
 				throw new Error(
-					"This skill is too long to edit here. Ask laddu to change it.",
+					`This skill is too long to edit here. Ask ${systemName()} to change it.`,
 				)
 			return skillEditView({
 				name,
@@ -1452,7 +1646,7 @@ export function registerHome(app: App, given: Deps) {
 					front,
 				),
 			)
-			return `:white_check_mark:  Saved the *${escape(name)}* skill. laddu uses it from your next message.`
+			return `:white_check_mark:  Saved the *${escape(name)}* skill. ${systemName()} uses it from your next message.`
 		})
 	})
 }

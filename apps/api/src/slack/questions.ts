@@ -8,6 +8,7 @@
  */
 import type { App, types } from "@slack/bolt"
 import { postAs } from "../appearance"
+import { systemName } from "./system"
 import { sessionKey } from "../sessions"
 import {
 	type Field,
@@ -244,7 +245,7 @@ export async function ask(
 	const title =
 		typeof input.title === "string" && input.title.trim()
 			? input.title.trim()
-			: "Answer laddu"
+			: `Answer ${systemName()}`.slice(0, 24)
 	if (title.length > 24)
 		throw new QuestionError("The title is at most 24 characters.")
 	const key = sessionKey(asker.channel, asker.threadTs, asker.userId)

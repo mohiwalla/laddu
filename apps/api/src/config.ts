@@ -1,4 +1,4 @@
-import type { ModelReasoningEffort, SandboxMode } from "@openai/codex-sdk"
+import type { ModelReasoningEffort } from "@openai/codex-sdk"
 import type { AgentId } from "./agent/agents"
 
 /** apps/api/, as a directory URL; relative paths in env vars resolve against it. */
@@ -33,17 +33,11 @@ function agentId(value: string): AgentId {
 
 const dataDir = fromAppRoot(optional("DATA_DIR", ".data"))
 
-/** Settings needed by every entrypoint, including `bun run login`. */
+/** Settings needed by every entrypoint. */
 export const paths = {
 	dataDir,
-	auth: `${dataDir}/chatgpt-auth.json`,
-	hostId: `${dataDir}/chatgpt-host.json`,
 	sessions: `${dataDir}/sessions.json`,
-	/** The bot's own Codex home, isolated from your personal ~/.codex. */
-	codexHome: `${dataDir}/codex-home`,
 }
-
-export const appName = optional("APP_NAME", "slack-codex-bot")
 
 /**
  * Set by `laddu setup` (the instance's name). Labels this bot's containers and volumes, so
@@ -52,7 +46,7 @@ export const appName = optional("APP_NAME", "slack-codex-bot")
  */
 export const instance = optional("LADDU_INSTANCE", "")
 
-/** Settings only the bot process needs. Read lazily so `bun run login` works without Slack tokens. */
+/** Settings only the bot process needs. Read lazily, so importing this needs no Slack tokens. */
 export function loadBotConfig() {
 	const workdir = fromAppRoot(optional("CODEX_WORKDIR", "agent-home"))
 	const ownerUserId = required("OWNER_SLACK_USER_ID")
@@ -96,49 +90,33 @@ export function loadBotConfig() {
 		ownerUserId,
 		/** Who can use the bot: "*" for everyone in the workspace, else comma-separated user IDs. */
 		allowedUsers: users(allowed),
-		/**
-		 * Who can run on Codex (the owner's ChatGPT plan): "*" or comma-separated user IDs. Everyone
-		 * else is on OpenCode, whatever LADDU_AGENT or their pick says.
-		 */
-		codexUsers: users(optional("CODEX_USERS", "*")),
-		/** "docker": Codex runs in a per-user container (default). "host": on this machine, sandboxed only by Codex. */
-		runtime: optional("CODEX_RUNTIME", "docker") as "docker" | "host",
 		/** The agent people get until they pick one on the Home tab: "codex" or "opencode". */
 		agent: agentId(optional("LADDU_AGENT", "codex")),
 		/**
-		 * The model a turn runs on. From CODEX_MODEL here; configFor() (preferences.ts) swaps in the
-		 * person's pick, or OPENCODE_MODEL when their agent is OpenCode.
+		 * The model a turn runs on. From CODEX_MODEL here (empty: Codex's default for their plan);
+		 * configFor() (preferences.ts) swaps in the person's pick, or OPENCODE_MODEL on OpenCode.
 		 */
-		model: required("CODEX_MODEL"),
+		model: optional("CODEX_MODEL", ""),
 		opencodeModel: optional("OPENCODE_MODEL", "opencode/big-pickle"),
 		reasoningEffort: optional(
 			"CODEX_REASONING_EFFORT",
 			"medium",
 		) as ModelReasoningEffort,
-		/** Fast mode (Codex's service_tier "fast"): quicker answers that use more of the plan's limits. */
+		/** Fast mode (Codex's service_tier "fast"): quicker answers that use more of their plan's limits. */
 		fast: optional("CODEX_FAST", "false") === "true",
 		/**
-		 * Docker runtime: every container gets internet only, without access to
+		 * Every container gets internet only, without access to
 		 * this machine's services, its local network or other people's containers.
 		 */
 		isolateNetwork: optional("ISOLATE_NETWORK", "true") === "true",
 		/**
-		 * Docker runtime: each person's laddu gets a desktop in their container (started when first
+		 * Each person's laddu gets a desktop in their container (started when first
 		 * used, stopped when idle) that Codex can drive, and that they can watch or take over.
 		 */
-		desktop:
-			optional("DESKTOP", "true") === "true" &&
-			optional("CODEX_RUNTIME", "docker") === "docker",
+		desktop: optional("DESKTOP", "true") === "true",
 		desktopViewer,
 		/** Minutes without actions or viewers before a desktop is stopped (files and logins stay). */
 		desktopIdleMinutes: Number(optional("DESKTOP_IDLE_MINUTES", "10")),
-		/** Host runtime only; in Docker the container is the boundary. */
-		sandbox: optional("CODEX_SANDBOX", "workspace-write") as SandboxMode,
-		/**
-		 * Host runtime only: internet access for Codex's shell (curl etc.). Containers are always
-		 * networked, since Codex reaches the model through the proxy. No hosted web search on the plan route.
-		 */
-		network: optional("CODEX_NETWORK", "true") === "true",
 		workdir,
 		/**
 		 * Where the deployment's own AGENTS.local.md and skills.local/ live. Defaults to the persona

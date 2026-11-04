@@ -14,7 +14,7 @@ setup, for development from this repo.
 
 ## Manual setup
 
-Needs Bun ≥ 1.4, Docker (your user in the `docker` group) and a ChatGPT Plus or Pro account. All
+Needs Bun ≥ 1.4 and Docker (your user in the `docker` group); each person who uses Codex signs in with their own ChatGPT account. All
 commands run from `apps/api` unless noted. The first start builds the `laddu-runtime` image (a minute or two).
 
 ## 1. Install
@@ -99,31 +99,15 @@ References: [agent development](https://docs.slack.dev/ai/developing-agents/),
 [agent sessions](https://docs.slack.dev/ai/agent-sessions/) and
 [agent display](https://slack.com/help/articles/33077521383059-Display-AI-agents-and-assistants-in-Slack).
 
-## 3. Sign in with ChatGPT
+## 3. ChatGPT: everyone signs in themselves
 
-```sh
-bun run login
-```
+Nothing to do here. Codex runs on each person's own ChatGPT plan: the first time someone asks
+laddu (or picks *Sign in* under Settings on its Home tab), laddu DMs them a link and a code. Their
+login stays in their own container. If OpenAI says device codes are off for their account, they
+turn on device code sign-in for Codex in ChatGPT's security settings.
 
-This opens a browser. Sign in, then **allow ChatGPT plan usage**. When it's done, the terminal lists
-the models your plan can use. Put one in `.env` as `CODEX_MODEL`.
-
-Credentials are saved to `.data/chatgpt-auth.json` (mode 600, git-ignored). The bot refreshes them
-on its own. Run `bun run login` again only if the bot tells you the session ended.
-
-Spending caps for this app: <https://chatgpt.com/settings/usage>.
-
-### Running on a server without a browser
-
-The OAuth callback goes to `127.0.0.1` on the machine with the browser, so:
-
-1. On the server, run `bun run login` once and stop it with Ctrl-C. This creates
-   `.data/chatgpt-host.json` (the server's own host ID).
-2. On your laptop, run `bun run login` with the same ChatGPT account.
-3. Copy only `.data/chatgpt-auth.json` to the server over SSH. Keep the server's `chatgpt-host.json`.
-
-From then on the server handles refreshes. Read the eligibility note in
-[ARCHITECTURE.md](ARCHITECTURE.md#constraints-we-designed-around) before hosting it remotely.
+`CODEX_MODEL` in `.env` is only a default; people pick their own model on the Home tab, from the
+ones their plan offers.
 
 ## 4. Run
 
@@ -193,7 +177,7 @@ later apply within minutes after admin consent; otherwise people run the sign-in
 
 ### laddu's computer: watch links
 
-On by default with the Docker runtime. The links laddu sends to watch or take over its computer point
+On by default. The links laddu sends to watch or take over its computer point
 at a gateway on `http://localhost:6900`, so they open only on this machine. For people on other
 machines, put a tunnel or an HTTPS reverse proxy in front of it and point the links there.
 
@@ -373,16 +357,12 @@ offline).
 | ------------------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `SLACK_BOT_TOKEN`        | required                | `xoxb-…`, from installing the app                                                                                |
 | `SLACK_APP_TOKEN`        | required                | `xapp-…`, app-level token with `connections:write` (Socket Mode)                                                 |
-| `CODEX_MODEL`            | required                | Model slug from `bun run login`                                                                                  |
+| `CODEX_MODEL`            | Codex's default         | Default model slug; people pick their own on the Home tab                                                         |
 | `OWNER_SLACK_USER_ID`    | required                | You; see step 2.4. Only the default for `ALLOWED_SLACK_USERS`, no special treatment                              |
 | `ALLOWED_SLACK_USERS`    | the owner               | `"*"` for everyone, or comma-separated member IDs                                                                |
-| `CODEX_USERS`            | `"*"`                   | Who can run on Codex (your ChatGPT plan): `"*"` or member IDs; everyone else is on OpenCode                      |
-| `CODEX_RUNTIME`          | `docker`                | `docker`: one container per Slack user; `host`: on this machine (just yourself, at most)                         |
 | `CODEX_REASONING_EFFORT` | `medium`                | `minimal` … `xhigh`                                                                                              |
-| `CODEX_FAST`             | `false`                 | `true`: fast mode, quicker answers that use more of the plan's limits                                            |
+| `CODEX_FAST`             | `false`                 | `true`: fast mode, quicker answers that use more of each plan's limits                                           |
 | `ISOLATE_NETWORK`        | `true`                  | Docker: every container (yours too) gets internet only, not this machine's services, the LAN or other containers |
-| `CODEX_SANDBOX`          | `workspace-write`       | Host runtime only: `read-only`, `workspace-write`, `danger-full-access`                                          |
-| `CODEX_NETWORK`          | `true`                  | Host runtime only: internet for Codex's shell; containers are always networked                                   |
 | `CODEX_WORKDIR`          | `agent-home`            | Codex's working directory; its `AGENTS.md` is the persona                                                        |
 | `CONTEXT_MESSAGES`       | `20`                    | Channel messages read before a top-level tag                                                                     |
 | `MEMORY_REVIEW_EVERY`    | `3`                     | Turns per person between background memory reviews; `"0"` turns them off                                         |

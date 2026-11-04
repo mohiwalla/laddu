@@ -6,7 +6,6 @@
 	"scripts": {
 		"start": "bun run src/index.ts",
 		"dev": "bun --watch run src/index.ts",
-		"login": "bun run src/auth/login.ts",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {

@@ -14,8 +14,17 @@ export type ToolItem = {
 	status: "in_progress" | "completed" | "failed"
 }
 
-/** What an agent reports as it works: Codex's items, plus ACP agents' other tools. */
-export type AgentItem = ThreadItem | ToolItem
+/** The agent's to-do list for the turn (Codex's plan, an ACP agent's plan), as a whole. */
+export type Todos = {
+	/** What the whole list is for, when the agent named it. */
+	title?: string
+	items: { text: string; status: "pending" | "in_progress" | "completed" }[]
+}
+
+export type PlanItem = Todos & { type: "plan" }
+
+/** What an agent reports as it works: Codex's items, plus ACP agents' other tools and plans. */
+export type AgentItem = ThreadItem | ToolItem | PlanItem
 
 export type Step = {
 	id: string
@@ -73,6 +82,8 @@ export function commandTitle(command: string): string {
 		return "Looking through files"
 	if (/^(mkdir|cp|mv|rm|touch|ln)$/.test(program)) return "Organizing files"
 	if (program === "git") return "Working with git"
+	if (program === "slack" && /^\s*slack\s+todo\s/.test(command))
+		return "Updating the to-do list"
 	if (program === "memory")
 		return /^\s*memory\s+show\b/.test(command)
 			? "Checking memory"
@@ -176,8 +187,12 @@ function toStep(item: AgentItem, done: boolean): Step | null {
 /**
  * Feed it every item event; it reports each step's latest state, keeping its first title.
  * Back-to-back actions on laddu's computer (dozens of clicks and keys) share one row, with a count.
+ * The agent's to-do list goes to `onTodos` as a whole, each time it changes.
  */
-export function stepTracker(onStep: (step: Step) => void) {
+export function stepTracker(
+	onStep: (step: Step) => void,
+	onTodos: (todos: Todos) => void = () => {},
+) {
 	const titles = new Map<string, string>()
 	let narration: string | null = null
 	let computer: { id: string; title: string; actions: Set<string> } | null =
@@ -185,6 +200,12 @@ export function stepTracker(onStep: (step: Step) => void) {
 	return (item: AgentItem, done: boolean) => {
 		if (item.type === "agent_message") {
 			if (done) narration = narrationTitle(item.text)
+			return
+		}
+		if (item.type === "plan") {
+			const items = item.items.filter(todo => todo.text.trim())
+			if (items.length)
+				onTodos({ title: item.title?.trim() || undefined, items })
 			return
 		}
 		const step = toStep(item, done)

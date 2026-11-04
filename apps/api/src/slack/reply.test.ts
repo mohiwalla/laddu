@@ -1,6 +1,6 @@
 import { expect, mock, spyOn, test } from "bun:test"
 import type { App } from "@slack/bolt"
-import { openReply } from "./reply"
+import { openReply, showTodos } from "./reply"
 
 type StreamArgs = Parameters<App["client"]["chat"]["appendStream"]>[0]
 type StartArgs = Parameters<App["client"]["chat"]["startStream"]>[0]
@@ -313,7 +313,9 @@ test("a long turn moves its progress to a new message before Slack ends the stre
 	].flatMap(chunk => (chunk.type === "task_update" ? [chunk.id] : []))
 	expect(new Set(ids)).toEqual(new Set(["a", "c"]))
 	expect(stopStream.mock.calls[1]![0].chunks).toContainEqual(
-		expect.objectContaining({ title: expect.stringMatching(/^Done · 3 steps/) }),
+		expect.objectContaining({
+			title: expect.stringMatching(/^Done · 3 steps/),
+		}),
 	)
 })
 
@@ -335,4 +337,141 @@ test("progress continues in a new message when Slack already ended the stream", 
 	expect(startStream.mock.calls[1]![0].chunks).toContainEqual(
 		expect.objectContaining({ id: "b", status: "in_progress" }),
 	)
+})
+
+const todos = (current: number) => ({
+	title: "Scheduled exports",
+	items: ["Design the table", "Cron dispatcher", "Backfill job"].map(
+		(text, index) => ({
+			text,
+			status:
+				index < current
+					? ("completed" as const)
+					: index === current
+						? ("in_progress" as const)
+						: ("pending" as const),
+		}),
+	),
+})
+
+test("a to-do list replaces the steps, and the answer follows it", async () => {
+	const { client, startStream, stopStream, postMessage, remove } =
+		streamingClient()
+	const reply = await openReply(client, target)
+	reply.step({ id: "read", title: "Reading", status: "in_progress" })
+	reply.todos(todos(0))
+	reply.todos(todos(1))
+	reply.step({ id: "cron", title: "Writing the cron", status: "in_progress" })
+	await reply.finish("All three are in.")
+	expect(startStream).toHaveBeenCalledTimes(1)
+	// The steps so far make way for the list.
+	expect(stopStream).toHaveBeenCalledTimes(1)
+	expect(remove).toHaveBeenCalledWith({ channel: "C_ONE", ts: "2.001" })
+	// Batched: one message with the latest list, then the answer.
+	expect(postMessage).toHaveBeenCalledTimes(2)
+	const list = postMessage.mock.calls[0]![0] as {
+		blocks: { text?: { text: string } }[]
+	}
+	expect(list.blocks[0]!.text!.text).toBe(
+		":heavy_check_mark: Design the table\n:arrows_counterclockwise: *Cron dispatcher*\n:white_circle: Backfill job",
+	)
+	expect(list.blocks[1]!.text!.text).toBe("Scheduled exports")
+	expect(postMessage.mock.calls[1]![0]).toMatchObject({
+		markdown_text: "All three are in.",
+	})
+})
+
+test("the to-do list moves back to the bottom once the thread moves on", async () => {
+	const { client, postMessage, update, remove } = streamingClient()
+	let latest = "3.001"
+	let bot: string | undefined
+	;(client as unknown as { conversations: unknown }).conversations = {
+		replies: mock(async () => ({
+			messages: [{ ts: thread.threadTs }, { ts: latest, bot_id: bot }],
+		})),
+	}
+	const thread = { ...target, threadTs: "0.601" }
+	const reply = await openReply(client, thread)
+	reply.todos(todos(0))
+	await Bun.sleep(1_100)
+	expect(postMessage).toHaveBeenCalledTimes(1)
+	// Nothing new since: edited in place.
+	reply.todos(todos(1))
+	await Bun.sleep(1_100)
+	expect(update).toHaveBeenCalledTimes(1)
+	// Its own posts don't move it.
+	bot = "B1"
+	latest = "3.501"
+	reply.todos(todos(1))
+	await Bun.sleep(1_100)
+	expect(update).toHaveBeenCalledTimes(2)
+	// Someone replied: posted again below, the old one removed.
+	bot = undefined
+	latest = "4.001"
+	reply.todos(todos(2))
+	await reply.cancel()
+	expect(update).toHaveBeenCalledTimes(2)
+	expect(postMessage).toHaveBeenCalledTimes(3)
+	expect(remove).toHaveBeenCalledWith({ channel: "C_ONE", ts: "3.001" })
+	expect(postMessage.mock.calls[2]![0]).toMatchObject({
+		markdown_text: "_Stopped._",
+	})
+})
+
+test("the answer goes below parts posted while it worked", async () => {
+	const { client, stopStream, postMessage } = streamingClient()
+	;(client as unknown as { conversations: unknown }).conversations = {
+		replies: mock(async () => ({
+			messages: [{ ts: target.threadTs }, { ts: "9.001", bot_id: "B1" }],
+		})),
+	}
+	const reply = await openReply(client, target)
+	reply.step({ id: "post", title: "Posting the haiku", status: "complete" })
+	await reply.finish("All three are up.")
+	const chunks = stopStream.mock.calls[0]![0].chunks ?? []
+	expect(chunks.some(chunk => chunk.type === "markdown_text")).toBe(false)
+	expect(postMessage).toHaveBeenCalledWith({
+		channel: target.channel,
+		thread_ts: target.threadTs,
+		markdown_text: "All three are up.",
+	})
+})
+
+test("`slack todo` reaches the reply in progress for that person and thread", async () => {
+	const { client, postMessage } = streamingClient()
+	const thread = { ...target, threadTs: "7.001" }
+	const reply = await openReply(client, thread)
+	expect(showTodos({ ...thread, userId: "U_TWO" }, todos(0))).toBe(false)
+	expect(showTodos(thread, todos(0))).toBe(true)
+	await reply.finish("Done.")
+	expect(postMessage).toHaveBeenCalledTimes(2)
+	expect(showTodos(thread, todos(1))).toBe(false)
+})
+
+test("a later turn in the thread picks up its to-do list instead of adding another", async () => {
+	const { client, postMessage, update, remove } = streamingClient()
+	const thread = { ...target, threadTs: "5.001" }
+	let person = false
+	;(client as unknown as { conversations: unknown }).conversations = {
+		replies: mock(async () => ({
+			messages: person ? [{ ts: "9.001", user: "U_ONE" }] : [],
+		})),
+	}
+	const first = await openReply(client, thread)
+	first.todos(todos(0))
+	await first.finish("")
+	expect(postMessage).toHaveBeenCalledTimes(1)
+	// Nobody posted since: the next turn edits it.
+	const second = await openReply(client, thread)
+	second.todos(todos(1))
+	await second.finish("")
+	expect(update).toHaveBeenCalledTimes(1)
+	expect(postMessage).toHaveBeenCalledTimes(1)
+	// They replied: the next turn's list goes below it, and the old one goes.
+	person = true
+	const third = await openReply(client, thread)
+	third.todos(todos(2))
+	await third.finish("")
+	expect(postMessage).toHaveBeenCalledTimes(2)
+	expect(remove).toHaveBeenCalledWith({ channel: "C_ONE", ts: "3.001" })
 })

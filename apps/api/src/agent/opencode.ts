@@ -1,7 +1,7 @@
 /**
  * OpenCode (https://opencode.ai) as laddu's agent, on its free models: no sign-in, no plan. It runs
  * as an ACP agent inside the person's container (scripts/opencode-docker.sh, acp.ts), with the
- * same persona, commands, skills and computer as Codex. Docker runtime only.
+ * same persona, commands, skills and computer as Codex.
  *
  * Free models may log what they're sent; laddu is experimental, so that's accepted for now.
  */
@@ -119,9 +119,10 @@ export async function runOpenCodeTurn(
 ): Promise<TurnResult> {
 	options.signal?.throwIfAborted()
 	const { config, user } = options
-	if (config.runtime !== "docker")
-		throw new Error("OpenCode runs only in the Docker runtime.")
-	const track = stepTracker(step => options.onStep?.(step))
+	const track = stepTracker(
+		step => options.onStep?.(step),
+		todos => options.onTodos?.(todos),
+	)
 	const turnId = newTurnId()
 	const [container, models] = await Promise.all([
 		ensureContainer(config, user.teamId, user.userId),

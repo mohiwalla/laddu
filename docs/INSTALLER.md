@@ -1,6 +1,6 @@
 # Installer plan: one-command setup
 
-Status: built (`apps/cli`). Not yet run end to end against a real Slack workspace and ChatGPT account.
+Status: built (`apps/cli`). Not yet run end to end against a real Slack workspace.
 
 ## Goal
 
@@ -69,12 +69,9 @@ The default name is `laddu`. Each instance directory holds `.env`, `.data/`, `AG
    - The token's `user_id` becomes `OWNER_SLACK_USER_ID`.
    - Fallback when that's blocked (for example, installs need admin approval): paste an app
      configuration token, approve the install from a printed link, and paste the `xoxb` and `xapp` tokens.
-3. **Model provider**: only ChatGPT plan for now; the step is pluggable for API keys and other providers later.
-   - Headless sign-in: print the authorize URL, the user opens it on any device, and the redirect
-     to `127.0.0.1:1455` fails on their machine. They paste that redirected URL back into the
-     terminal (the same flow as `gh` and `rclone`). This replaces copying `chatgpt-auth.json` over SSH.
-   - List the models the plan allows and pick one, which sets `CODEX_MODEL`.
-4. **Options**, all skippable with defaults: who can use it, Docker or host runtime, desktop and
+3. **No model provider step**: everyone signs in to ChatGPT themselves from Slack (laddu DMs them a
+   device code), and picks a model on the Home tab.
+4. **Options**, all skippable with defaults: who can use it, desktop and
    public URL, Microsoft, CodeCommit.
 5. **Write** `.env` with every value quoted.
 6. **Service**: install the `laddu@.service` template unit and enable and start
@@ -84,7 +81,7 @@ The default name is `laddu`. Each instance directory holds `.env`, `.data/`, `AG
 
 ## Other commands
 
-`configure`, `login`, `doctor`, `update` (upgrades the package and restarts every instance), `list`,
+`configure`, `doctor`, `update` (upgrades the package and restarts every instance), `list`,
 `logs`, `start`/`stop`/`restart`, `uninstall`. All take `--name`.
 
 ## Code changes
@@ -93,7 +90,6 @@ The default name is `laddu`. Each instance directory holds `.env`, `.data/`, `AG
   (`--env-file`, `DATA_DIR`, `CODEX_LOCAL_DIR`), never from the package directory.
 - `apps/cli` builds a package with the CLI entry point plus the bot and its non-code files
   (manifest, `agent-home`, `runtime`, `assets`).
-- `login` gains the paste-the-redirect-URL mode.
 - CI: on each tag, publish to npm.
 
 ## How it's built

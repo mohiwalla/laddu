@@ -8,6 +8,7 @@
 import type { App } from "@slack/bolt"
 import { paths } from "./config"
 import { readJson, writeJsonPrivate } from "./files"
+import { systemName } from "./slack/system"
 
 type WebClient = App["client"]
 type Person = { teamId: string; userId: string }
@@ -102,12 +103,17 @@ export async function postAs(
 	}
 }
 
-/** A line for the agent when they've renamed it, or null. */
+/** A line for the agent when the bot isn't called laddu here or they've renamed it, or null. */
 export async function nameNote(person: Person): Promise<string | null> {
 	const { name } = await appearance(person)
-	return name
-		? `The person you're working for calls you "${name}": your replies to them show that name, so answer to it.`
-		: null
+	const own = systemName()
+	const notes = [
+		own !== "laddu" &&
+			`In this workspace the bot is called "${own}", not laddu: people tag you as @${own}, so call yourself ${own}.`,
+		name &&
+			`The person you're working for calls you "${name}": your replies to them show that name, so answer to it.`,
+	].filter(Boolean)
+	return notes.length ? notes.join(" ") : null
 }
 
 /** Saves an uploaded picture (PNG, JPEG or GIF); its file name, or why it can't be used. */

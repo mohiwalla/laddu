@@ -8,13 +8,14 @@
  * Slack thread it came from. The command sends it back, so a request can only act as that person,
  * in that conversation; changing any part of it breaks the signature. The variable is named
  * LADDU_CALLER (no KEY/TOKEN/SECRET) so Codex passes it to the commands it runs. Listens on the
- * Docker bridge address (host runtime: localhost), like the model proxy.
+ * Docker bridge address, where containers can reach it.
  */
 import type { App } from "@slack/bolt"
 import {
 	appearance,
 	cleanName,
 	nameProblem,
+	postAs,
 	picturesWork,
 	PRESETS,
 	savePicture,
@@ -31,8 +32,12 @@ import * as slackSignIn from "../slack/user-tokens"
 import { callSlack, capabilities, object, slackFailure } from "../slack/api"
 import { transfer } from "../slack/transfers"
 import * as questions from "../slack/questions"
+import * as keys from "../slack/keys"
+import { uploadFiles } from "../slack/attachments"
+import { chunkMarkdown, showTodos } from "../slack/reply"
 import type { SlackAutomations } from "../slack/automations"
 import type { SlackForms } from "../slack/forms"
+import { systemName } from "../slack/system"
 import { sendDesktopLink } from "./desktop"
 import { refreshHome } from "../slack/home"
 import {
@@ -217,14 +222,17 @@ async function handleConnection(
 			return reply(403, "A scheduled run can't start a sign-in.")
 		return reply(
 			200,
-			await microsoft.connect(settings, client, person, resource),
+			await microsoft.connect(settings, client, person, resource, {
+				channel: caller.channel,
+				threadTs: caller.threadTs,
+			}),
 		)
 	}
 	if (request.method === "DELETE")
 		return reply(
 			200,
 			(await microsoft.disconnect(person))
-				? "Disconnected; laddu no longer keeps their Microsoft sign-in (Azure DevOps and Microsoft 365)."
+				? `Disconnected; ${systemName()} no longer keeps their Microsoft sign-in (Azure DevOps and Microsoft 365).`
 				: "They weren't connected.",
 		)
 	return null
@@ -373,7 +381,7 @@ async function handleDesktopLink(
 	if (!deps.config.desktop)
 		return reply(
 			501,
-			"laddu's computer is turned off on this bot (DESKTOP).",
+			`${systemName()}'s computer is turned off on this bot (DESKTOP).`,
 		)
 	if (caller.scheduled)
 		return reply(
@@ -393,7 +401,7 @@ async function handleDesktopLink(
 				channel: caller.channel,
 				threadTs: caller.threadTs,
 			},
-			reason?.trim() || "Here's my computer.",
+			reason?.trim() || undefined,
 		)
 	} catch (error) {
 		return failed(error, "Desktop link")
@@ -413,6 +421,8 @@ async function handleSlack(
 ): Promise<Response> {
 	const person = { teamId: caller.teamId, userId: caller.userId }
 	if (action === "ask") return handleAsk(request, caller, deps)
+	if (action === "post") return handlePost(request, caller, deps)
+	if (action === "todo") return handleTodo(request, caller)
 	try {
 		if (
 			["methods", "capabilities"].includes(action ?? "") &&
@@ -497,7 +507,7 @@ async function handleSlack(
 		return reply(
 			200,
 			(await slackSignIn.disconnect(deps.client, person))
-				? "Disconnected; laddu no longer keeps their Slack sign-in, and DMs come from laddu."
+				? `Disconnected; ${systemName()} no longer keeps their Slack sign-in, and DMs come from ${systemName()}.`
 				: "They weren't connected.",
 		)
 	if (request.method !== "POST") return reply(405, "Use POST.")
@@ -512,7 +522,7 @@ async function handleSlack(
 			if (!deps.config.slackSignIn)
 				return reply(
 					501,
-					"Sending as people isn't set up on this bot (the person running it needs to add SLACK_CLIENT_ID and SLACK_CLIENT_SECRET; see docs/SETUP.md). DMs can still come from laddu.",
+					`Sending as people isn't set up on this bot (the person running it needs to add SLACK_CLIENT_ID and SLACK_CLIENT_SECRET; see docs/SETUP.md). DMs can still come from ${systemName()}.`,
 				)
 			if (caller.scheduled)
 				return reply(403, "A scheduled run can't start a sign-in.")
@@ -522,6 +532,7 @@ async function handleSlack(
 					deps.config.slackSignIn,
 					deps.client,
 					person,
+					{ channel: caller.channel, threadTs: caller.threadTs },
 				),
 			)
 		}
@@ -549,7 +560,7 @@ async function handleSlack(
 			)
 				return reply(
 					200,
-					`Not sent yet: their Slack account isn't connected, so it can't come from them. ${await slackSignIn.connect(signIn, deps.client, person)} (Or send it from laddu now with \`slack dm --from-laddu\`.)`,
+					`Not sent yet: their Slack account isn't connected, so it can't come from them. ${await slackSignIn.connect(signIn, deps.client, person, { channel: caller.channel, threadTs: caller.threadTs })} (Or send it from ${systemName()} now with \`slack dm --from-laddu\`.)`,
 				)
 			return reply(result.ok ? 200 : 400, result.text)
 		}
@@ -585,6 +596,119 @@ async function handleAsk(
 	}
 }
 
+const TODO_STATUSES = ["pending", "in_progress", "completed"] as const
+
+/** `slack todo`: the to-do list shown in the thread while the turn works through it. */
+async function handleTodo(request: Request, caller: Caller): Promise<Response> {
+	if (request.method !== "POST") return reply(405, "Use POST.")
+	const input = await request.json().catch(() => null)
+	if (!object(input) || !Array.isArray(input.items))
+		return reply(400, "Give the list's items.")
+	const items = input.items.flatMap(item =>
+		object(item) &&
+		typeof item.text === "string" &&
+		item.text.trim() &&
+		TODO_STATUSES.includes(item.status as never)
+			? [
+					{
+						text: item.text.trim(),
+						status: item.status as (typeof TODO_STATUSES)[number],
+					},
+				]
+			: [],
+	)
+	if (
+		!items.length ||
+		items.length !== input.items.length ||
+		items.length > 12
+	)
+		return reply(400, "Give 1 to 12 items, each with text and a status.")
+	const title =
+		typeof input.title === "string" ? input.title.trim() : undefined
+	if (!showTodos(caller, { title: title || undefined, items }))
+		return reply(
+			409,
+			"There's no reply in progress here to show a to-do list in (e.g. a scheduled run). Carry on without it.",
+		)
+	return reply(
+		200,
+		"Shown in the thread. Run it again with the whole list each time an item starts or is done.",
+	)
+}
+
+/** `slack post`: part of the answer in the turn's own thread, as laddu, while the turn goes on. */
+async function handlePost(
+	request: Request,
+	caller: Caller,
+	deps: Deps,
+): Promise<Response> {
+	if (request.method !== "POST") return reply(405, "Use POST.")
+	const input = await request.json().catch(() => null)
+	if (!object(input)) return reply(400, "Give a JSON object.")
+	const text = typeof input.text === "string" ? input.text.trim() : ""
+	const files = Array.isArray(input.files) ? input.files : []
+	if (
+		files.length > 10 ||
+		files.some(
+			file =>
+				!object(file) ||
+				typeof file.name !== "string" ||
+				!file.name ||
+				typeof file.data !== "string",
+		)
+	)
+		return reply(400, "Give up to 10 files, each with a name and data.")
+	if (!text && !files.length) return reply(400, "Give some text or a file.")
+	const person = { teamId: caller.teamId, userId: caller.userId }
+	try {
+		const as = await postAs(person)
+		for (const part of text ? chunkMarkdown(text) : [])
+			await deps.client.chat.postMessage({
+				channel: caller.channel,
+				thread_ts: caller.threadTs,
+				markdown_text: part,
+				...as,
+			})
+		await uploadFiles(
+			deps.client,
+			caller.channel,
+			caller.threadTs,
+			(files as { name: string; data: string }[]).map(file => ({
+				name: file.name,
+				data: Uint8Array.fromBase64(file.data),
+			})),
+		)
+		return reply(
+			200,
+			"Posted in the thread. Carry on; don't repeat it in your final reply.",
+		)
+	} catch (error) {
+		return failed(error, "Slack")
+	}
+}
+
+/** `connections key request`: asks the person for a key with a private form (slack/keys.ts). */
+async function handleKeyRequest(
+	request: Request,
+	caller: Caller,
+	deps: Deps,
+): Promise<Response> {
+	if (caller.scheduled)
+		return reply(
+			403,
+			"A scheduled run can't ask for a key; nobody is in the conversation. Ask in a conversation with them.",
+		)
+	if (request.method !== "POST") return reply(405, "Use POST.")
+	try {
+		const input = await request.json().catch(() => null)
+		if (!object(input)) return reply(400, "Give a JSON object.")
+		return reply(200, await keys.requestKey(deps.client, caller, input))
+	} catch (error) {
+		if (error instanceof keys.KeyError) return reply(400, error.message)
+		return failed(error, "Slack")
+	}
+}
+
 /** `appearance`: the name and picture the person gave laddu (appearance.ts). */
 async function handleAppearance(
 	request: Request,
@@ -596,17 +720,17 @@ async function handleAppearance(
 	const describe = async () => {
 		const { name, picture } = await appearance(person)
 		const shown = !picture
-			? "laddu's own picture"
+			? `${systemName()}'s own picture`
 			: picture in PRESETS
 				? `the ${PRESETS[picture]} picture`
 				: "a picture of theirs"
-		return `Name: ${name ?? "laddu (its own)"}. Picture: ${shown}.${picture && !picturesWork() ? " (Pictures don't show on this bot: it has no public HTTPS address, DESKTOP_PUBLIC_URL.)" : ""}`
+		return `Name: ${name ?? `${systemName()} (its own)`}. Picture: ${shown}.${picture && !picturesWork() ? " (Pictures don't show on this bot: it has no public HTTPS address, DESKTOP_PUBLIC_URL.)" : ""}`
 	}
 	if (request.method === "GET" && !id) return reply(200, await describe())
 	if (caller.scheduled)
 		return reply(
 			403,
-			"A scheduled run can't change laddu's name or picture.",
+			`A scheduled run can't change ${systemName()}'s name or picture.`,
 		)
 	let change: Appearance
 	if (request.method === "PUT" && id === "picture") {
@@ -738,6 +862,8 @@ export function startBotApi(hostname: string, deps: Deps): BotApi {
 				return handleSlack(request, caller, id, deps)
 			if (resource === "appearance")
 				return handleAppearance(request, caller, id, deps)
+			if (resource === "keys" && id === "request")
+				return handleKeyRequest(request, caller, deps)
 			if (resource === "desktop" && id === "link")
 				return handleDesktopLink(request, caller, deps)
 			return reply(404, "Unknown endpoint.")

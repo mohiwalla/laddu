@@ -552,7 +552,7 @@ export class SlackAutomations {
 				await this.client.chat
 					.postMessage({
 						channel: rule.userId,
-						text: `Slack automation "${rule.name}" failed: ${problem}. Check slack automate history.`,
+						text: `Automation "${rule.name}" failed: ${problem}.`,
 					})
 					.catch(() => {})
 		} finally {
