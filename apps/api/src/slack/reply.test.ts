@@ -384,7 +384,7 @@ test("a to-do list goes above the steps, which carry on below it with the answer
 		blocks: { text?: { text: string } }[]
 	}
 	expect(list.blocks[0]!.text!.text).toBe(
-		":heavy_check_mark: Design the table\n:arrows_counterclockwise: *Cron dispatcher*\n:white_circle: Backfill job",
+		":heavy_check_mark: Design the table\n:loading: *Cron dispatcher*\n:white_circle: Backfill job",
 	)
 	expect(list.blocks[1]!.text!.text).toBe("Scheduled exports")
 	// The steps above it went; they start again below it, every one, and the answer ends them.
