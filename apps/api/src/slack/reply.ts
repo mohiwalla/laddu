@@ -2,8 +2,8 @@
  * The bot's reply after a tool action starts. Uses Slack's streaming messages: each step is a native task card
  * (spinner, then done or failed) with its command tucked into the card's details, and the answer
  * lands in the same message. Falls back to editing a plain placeholder if streaming is unavailable.
- * Once the agent writes a to-do list, that list is the progress instead: one plain message, edited
- * as it goes, and the answer follows it as a message of its own.
+ * Once the agent writes a to-do list, that goes above the steps: one plain message, edited as it
+ * goes, with the steps (and the answer) moved below it whenever it's posted anew.
  */
 import type { App } from "@slack/bolt"
 import type { Step, Todos } from "../agent/steps"
@@ -45,7 +45,7 @@ async function readMessage(
 
 export type Reply = {
 	step(step: Step): void
-	/** The agent's to-do list; from then on it replaces the steps. */
+	/** The agent's to-do list, shown above the steps. */
 	todos(todos: Todos): void
 	/** Posts the answer; an empty answer (files only) just closes the progress. */
 	finish(text: string): Promise<void>
@@ -56,7 +56,8 @@ export type Reply = {
 	discard(): Promise<void>
 }
 
-type ReplyMessage = { ts: string; streaming: boolean }
+/** A message of the reply; `list` marks the to-do list, which a restart leaves as it is. */
+type ReplyMessage = { ts: string; streaming: boolean; list?: boolean }
 type PostedReply = Omit<Reply, "todos"> & ReplyMessage
 
 /** Slack's limit for `markdown_text`. */
@@ -154,6 +155,8 @@ export async function openReply(
 	const started = Date.now()
 	let posted: Promise<PostedReply> | undefined
 	let board: TodoBoard | undefined
+	/** Every step so far, to start the steps again below a newly posted list. */
+	const steps = new Map<string, Step>()
 	let chain: Promise<void> = Promise.resolve()
 	let closed = false
 	const remember = (message: ReplyMessage) =>
@@ -191,34 +194,45 @@ export async function openReply(
 	const settle = async () => {
 		closed = true
 		if (live.get(liveKey(target)) === todos) live.delete(liveKey(target))
-		await chain
 		await board?.settle()
+		await chain
 		return posted?.catch(() => undefined)
+	}
+	/** The list was just posted below the steps: they start again under it, all of them. */
+	const restack = () => {
+		const old = posted
+		const [first, ...rest] = steps.values()
+		if (!old || !first) return
+		posted = (async () => {
+			await (
+				await old.catch(() => undefined)
+			)
+				?.discard()
+				.catch(error =>
+					console.warn("[reply] couldn't move the steps:", error),
+				)
+			const reply = await show(first)
+			for (const step of rest) reply.step(step)
+			return reply
+		})()
+		chain = chain
+			.then(() => posted)
+			.then(
+				() => {},
+				error => console.warn("[reply] progress unavailable:", error),
+			)
 	}
 	const todos = (list: Todos) => {
 		if (closed) return
-		if (!board) {
-			board = todoBoard(client, target, remember)
-			// The list takes over from the steps so far; the answer follows it on its own.
-			const stream = posted
-			posted = undefined
-			if (stream)
-				chain = chain
-					.then(async () => (await stream).discard())
-					.catch(error =>
-						console.warn(
-							"[reply] couldn't clear the steps:",
-							error,
-						),
-					)
-		}
+		board ??= todoBoard(client, target, remember, restack)
 		board.show(list)
 	}
 	live.set(liveKey(target), todos)
 	return {
 		todos,
 		step(step) {
-			if (closed || board) return
+			steps.set(step.id, step)
+			if (closed) return
 			// The native agent status covers the time before the first real action.
 			if (!posted) {
 				posted = show(step)
@@ -320,6 +334,14 @@ type TodoBoard = ReturnType<typeof todoBoard>
 /** Each thread's to-do list message, so a later turn there updates it instead of adding another. */
 const lists = new Map<string, string>()
 
+/** A list a turn cut off by a restart left in the thread: the retried turn carries it on. */
+export function keepList(
+	target: { channel: string; threadTs: string },
+	ts: string,
+) {
+	lists.set(`${target.channel}:${target.threadTs}`, ts)
+}
+
 /**
  * The thread's to-do list message, picked up from an earlier turn there if there was one. Changes
  * are batched into one edit; if someone has posted in the thread since (a question, a change of
@@ -329,6 +351,7 @@ function todoBoard(
 	client: WebClient,
 	target: ReplyTarget,
 	remember: (message: ReplyMessage) => Promise<void>,
+	onPosted: () => void,
 ) {
 	const { channel } = target
 	const thread = `${channel}:${target.threadTs}`
@@ -360,9 +383,10 @@ function todoBoard(
 		ts = posted.ts
 		if (ts) {
 			lists.set(thread, ts)
-			await remember({ ts, streaming: false })
+			await remember({ ts, streaming: false, list: true })
 		}
 		if (old) await client.chat.delete({ channel, ts: old }).catch(() => {})
+		onPosted()
 	}
 	const flush = () => {
 		timer = undefined

@@ -103,8 +103,9 @@ marketing site if this becomes something teammates can run.
         • a `codex app-server` per turn, through scripts/codex-docker.sh
         • on the requester's own ChatGPT plan, signed in once from Slack (not signed in: they get a DM)
         • the first action opens a detailed progress accordion; later actions update it
-        • once the agent writes a to-do list (`slack todo`, or a plan tool), that list replaces it: one message (✔️ 🔄 ⚪), edited as it
-          changes and posted again at the bottom once the thread has moved on; the answer follows it
+        • once the agent writes a to-do list (`slack todo`, or a plan tool), it goes above the accordion: one message (✔️ 🔄 ⚪),
+          edited as it changes and posted again at the bottom once the thread has moved on, with the
+          accordion (and then the answer) moved back below it
         • `slack post` sends finished parts to the thread while the turn goes on
    5. finish the activity record and post the answer (Markdown; split past 12k chars)
       • no actions: post only the answer, or react without posting

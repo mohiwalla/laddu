@@ -34,7 +34,7 @@ import {
 	type TurnInput,
 } from "./context"
 import { downloadAttachments, uploadFiles } from "./attachments"
-import { closeInterrupted, openReply, type Reply } from "./reply"
+import { closeInterrupted, keepList, openReply, type Reply } from "./reply"
 import { AgentSessions } from "./agent-sessions"
 import { configFor } from "../preferences"
 import { nameNote, postAs } from "../appearance"
@@ -521,7 +521,7 @@ export async function resumeInterrupted(
 	config: BotConfig,
 	botUserId: string,
 ): Promise<void> {
-	for (const { trigger, startedAt, reply } of await takeInterrupted()) {
+	for (const { trigger, startedAt, reply, list } of await takeInterrupted()) {
 		const retry = Date.now() - startedAt < RESUME_WITHIN_MS
 		const note = retry
 			? `_${systemName()} restarted mid-answer; starting over below._`
@@ -537,6 +537,15 @@ export async function resumeInterrupted(
 				note,
 			).catch(error =>
 				console.warn("[resume] couldn't close reply:", error),
+			)
+		// The list stays as it was; the retried turn updates it.
+		if (list)
+			keepList(
+				{
+					channel: trigger.channel,
+					threadTs: trigger.threadTs ?? trigger.ts,
+				},
+				list,
 			)
 		console.log(
 			`[resume] ${retry ? "retrying" : "dropping"} ${trigger.channel}:${trigger.ts}`,

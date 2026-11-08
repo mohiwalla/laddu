@@ -12,6 +12,8 @@ export type Inflight = {
 	startedAt: number
 	/** The reply message, once posted; `streaming` says whether it's a Slack stream. */
 	reply?: { ts: string; streaming: boolean }
+	/** Its to-do list message, if it wrote one. */
+	list?: string
 }
 
 const file = `${paths.dataDir}/inflight.json`
@@ -36,8 +38,14 @@ export const markStarted = (key: string, trigger: Trigger) =>
 
 export const markReply = (
 	key: string,
-	reply: { ts: string; streaming: boolean },
-) => change(all => void (all[key] && (all[key].reply = reply)))
+	{ ts, streaming, list }: { ts: string; streaming: boolean; list?: boolean },
+) =>
+	change(all => {
+		const entry = all[key]
+		if (!entry) return
+		if (list) entry.list = ts
+		else entry.reply = { ts, streaming }
+	})
 
 export const markDone = (key: string) => change(all => void delete all[key])
 

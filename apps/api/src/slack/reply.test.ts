@@ -354,21 +354,32 @@ const todos = (current: number) => ({
 	),
 })
 
-test("a to-do list replaces the steps, and the answer follows it", async () => {
-	const { client, startStream, stopStream, postMessage, remove } =
-		streamingClient()
+test("a to-do list goes above the steps, which carry on below it with the answer", async () => {
+	const {
+		client,
+		startStream,
+		appendStream,
+		stopStream,
+		postMessage,
+		remove,
+	} = streamingClient()
+	startStream
+		.mockResolvedValueOnce({ ok: true, ts: "2.001" })
+		.mockResolvedValueOnce({ ok: true, ts: "2.002" })
 	const reply = await openReply(client, target)
-	reply.step({ id: "read", title: "Reading", status: "in_progress" })
+	reply.step({ id: "read", title: "Reading", status: "complete" })
+	reply.step({
+		id: "todo",
+		title: "Updating the to-do list",
+		status: "in_progress",
+	})
 	reply.todos(todos(0))
 	reply.todos(todos(1))
+	await Bun.sleep(1_100)
 	reply.step({ id: "cron", title: "Writing the cron", status: "in_progress" })
 	await reply.finish("All three are in.")
-	expect(startStream).toHaveBeenCalledTimes(1)
-	// The steps so far make way for the list.
-	expect(stopStream).toHaveBeenCalledTimes(1)
-	expect(remove).toHaveBeenCalledWith({ channel: "C_ONE", ts: "2.001" })
-	// Batched: one message with the latest list, then the answer.
-	expect(postMessage).toHaveBeenCalledTimes(2)
+	// Batched: one message with the latest list.
+	expect(postMessage).toHaveBeenCalledTimes(1)
 	const list = postMessage.mock.calls[0]![0] as {
 		blocks: { text?: { text: string } }[]
 	}
@@ -376,8 +387,22 @@ test("a to-do list replaces the steps, and the answer follows it", async () => {
 		":heavy_check_mark: Design the table\n:arrows_counterclockwise: *Cron dispatcher*\n:white_circle: Backfill job",
 	)
 	expect(list.blocks[1]!.text!.text).toBe("Scheduled exports")
-	expect(postMessage.mock.calls[1]![0]).toMatchObject({
-		markdown_text: "All three are in.",
+	// The steps above it went; they start again below it, every one, and the answer ends them.
+	expect(remove).toHaveBeenCalledWith({ channel: "C_ONE", ts: "2.001" })
+	expect(startStream).toHaveBeenCalledTimes(2)
+	const ids = [
+		...(startStream.mock.calls[1]![0].chunks ?? []),
+		...appendStream.mock.calls
+			.filter(([args]) => args.ts === "2.002")
+			.flatMap(([args]) => args.chunks ?? []),
+		...(stopStream.mock.calls.at(-1)![0].chunks ?? []),
+	].flatMap(chunk => (chunk.type === "task_update" ? [chunk.id] : []))
+	expect(new Set(ids)).toEqual(new Set(["read", "todo", "cron"]))
+	const last = stopStream.mock.calls.at(-1)![0]
+	expect(last.ts).toBe("2.002")
+	expect(last.chunks).toContainEqual({
+		type: "markdown_text",
+		text: "All three are in.",
 	})
 })
 
