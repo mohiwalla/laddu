@@ -111,6 +111,20 @@ def check_key_name(name):
         sys.exit("error: a key's name is capitals, digits and _, starting with a letter (e.g. GITHUB_TOKEN).")
 
 
+def tailscale_profile(text):
+    """The tailnet they're signed in to, if any: the state keeps no profiles once they log out."""
+    import base64
+    try:
+        state = json.loads(text or "{}")
+        profiles = json.loads(base64.b64decode(state.get("_profiles", "")) or "{}")
+    except (ValueError, TypeError):
+        return None
+    for profile in profiles.values():
+        name = (profile.get("NetworkProfile") or {}).get("DomainName") or profile.get("Name")
+        return f"`{name}`" if name else "their tailnet"
+    return None
+
+
 def accounts():
     """Sign-ins found on this computer, from the tools' own config files."""
     found = []
@@ -160,8 +174,8 @@ def accounts():
     git = re.findall(r"^\w+://[^:@\s]+(?::[^@\s]*)?@([^/\s]+)", read(".git-credentials") or "", re.M)
     if git:
         found.append({"name": "Git", "detail": ", ".join(sorted(set(git)))})
-    if (HOME / ".local/share/tailscale/tailscaled.state").is_file():
-        found.append({"name": "Tailscale", "detail": "joined their tailnet (`tailnet status`)"})
+    if tailnet := tailscale_profile(read(".local/share/tailscale/tailscaled.state")):
+        found.append({"name": "Tailscale", "detail": f"joined {tailnet} (`tailnet status`)"})
     ssh = [host for line in (read(".ssh/config") or "").splitlines()
            if (match := re.match(r"\s*Host\s+(.+)", line, re.I))
            for host in match.group(1).split() if not any(char in host for char in "*?!")]
