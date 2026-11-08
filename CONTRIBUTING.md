@@ -10,7 +10,7 @@ license.
    none covers your change, open one.
 2. **Work on a short-lived branch.** Keep it to one issue.
 3. **Open a pull request** that says `Fixes #N` (it closes the issue) or `Part of #N` (it does part
-   of it).
+   of it). Fill in the template: the problem, the change, its scope, and how you verified it.
 4. **CI must pass.** It runs the typecheck and every app's tests on each push and PR.
 5. **Merge**, then delete the branch.
 
