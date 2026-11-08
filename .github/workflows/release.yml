@@ -16,8 +16,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
-      - run: bun test
-        working-directory: apps/cli
+      - run: bun run test
       - name: Tag matches the CLI's version
         run: test "v$(jq -r .version apps/cli/package.json)" = "$GITHUB_REF_NAME"
       - run: bun run build

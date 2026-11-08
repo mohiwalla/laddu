@@ -6,7 +6,8 @@
 	"scripts": {
 		"start": "bun run src/index.ts",
 		"dev": "bun --watch run src/index.ts",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"test": "bun test"
 	},
 	"dependencies": {
 		"@agentclientprotocol/sdk": "2.0.0",
