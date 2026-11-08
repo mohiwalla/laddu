@@ -14,6 +14,7 @@ import type { TurnUser } from "./turn"
 
 type WebClient = App["client"]
 
+/** A ChatGPT plan, or their own OpenAI API key (plan "apiKey", no email). */
 export type Account = { email: string | null; plan: string }
 
 const key = (user: TurnUser) => `${user.teamId}-${user.userId}`
@@ -38,6 +39,8 @@ export function codexAccount(
 				planType?: string
 			} | null
 		}>("account/read", {})
+		if (read.account?.type === "apiKey")
+			return { email: null, plan: "apiKey" }
 		return read.account?.type === "chatgpt"
 			? {
 					email: read.account.email ?? null,
@@ -124,6 +127,13 @@ export async function signIn(
 			],
 			code: started.userCode,
 			link: { label: "Open sign-in page", url: started.verificationUrl },
+			buttons: [
+				{
+					label: "Use an API key",
+					action: "home_chatgpt",
+					value: "key",
+				},
+			],
 			footer: `Works for ${CODE_MINUTES} minutes. Didn't ask for this? Ignore it.`,
 		})
 		signingIn.set(id, session)
@@ -171,6 +181,27 @@ export async function signIn(
 		await session.stop()
 		throw error
 	}
+}
+
+/**
+ * Codex on their own OpenAI API key instead of a plan: Codex's own API-key login, kept in its
+ * `auth.json` in their container like a ChatGPT one. A sign-in still waiting ends quietly.
+ */
+export async function useCodexKey(
+	config: BotConfig,
+	user: TurnUser,
+	apiKey: string,
+): Promise<void> {
+	const waiting = signingIn.get(key(user))
+	if (waiting) {
+		signingIn.delete(key(user))
+		waiting.server.close()
+		await waiting.stop()
+	}
+	await askCodex(config, user, server =>
+		server.request("account/login/start", { type: "apiKey", apiKey }),
+	)
+	forget(user)
 }
 
 /** Signs them out of ChatGPT in their container; their turns then ask them to sign in again. */

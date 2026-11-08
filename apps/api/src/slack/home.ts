@@ -2,15 +2,22 @@
  * laddu's Home tab: each person's own page, split into tabs (Slack allows apps no tabs of their
  * own, so these are buttons that switch what the page shows). Overview: what laddu is working on,
  * scheduled tasks and automations. Skills: the how-to guides laddu keeps for them. Memory: what
- * laddu remembers. Settings: agent and model, name and picture, connected accounts (ChatGPT, Slack, Microsoft),
- * and everything else it can use for them (keys, MCP servers, accounts on its computer). Redrawn
- * whenever they open it and after every change made here; only they can see it, and every control
- * acts only on their own things.
+ * laddu remembers. Settings: agent and model, name and picture, connected accounts (ChatGPT,
+ * Claude, Slack, Microsoft), and everything else it can use for them (keys, MCP servers, accounts
+ * on its computer). Redrawn whenever they open it and after every change made here; only they can
+ * see it, and every control acts only on their own things.
  */
 import type { App, types } from "@slack/bolt"
 import type { BotConfig } from "../config"
-import { codexAccount, signIn, signOut } from "../agent/account"
+import { codexAccount, signIn, signOut, useCodexKey } from "../agent/account"
 import { AGENTS, isAgent } from "../agent/agents"
+import {
+	CLAUDE_KEY,
+	claudeAccount,
+	connectedClaude,
+	claudeSignIn,
+	signOutClaude,
+} from "../agent/claude"
 import {
 	appearance,
 	cleanName,
@@ -186,6 +193,95 @@ const PLANS: Record<string, string> = {
 	edu: "Edu",
 }
 
+/** The API key form for Codex ("Use an API key"); Codex keeps it, not `connections`. */
+const OPENAI_KEY_FORM = {
+	name: "OPENAI_API_KEY",
+	note: "Your OpenAI API key, for Codex (platform.openai.com/api-keys)",
+}
+
+/**
+ * The API key form for Claude Code ("Use an API key"). A function: claude.ts imports this module
+ * back (through the turn helpers), so CLAUDE_KEY isn't there yet while modules load.
+ */
+const claudeKeyForm = () => ({
+	name: CLAUDE_KEY,
+	note: "Your Anthropic API key, for Claude Code (console.anthropic.com/settings/keys)",
+})
+
+/**
+ * Connect Claude (claude.ts claudeSignIn): sign in with the link, paste the code Claude shows. With
+ * no link yet, it says it's getting one; `problem` says why they're seeing it again.
+ */
+function claudeConnectView(
+	link: string | null,
+	problem?: string,
+): types.ModalView {
+	const steps: types.KnownBlock[] = link
+		? [
+				{
+					type: "section",
+					text: md(
+						"*1.  Sign in with Claude*\nApprove in your browser, then copy the code Claude shows you.",
+					),
+					accessory: {
+						type: "button",
+						action_id: "system_link",
+						text: plain("Sign in with Claude"),
+						url: link,
+						style: "primary",
+					},
+				},
+				{
+					type: "input",
+					block_id: "code",
+					label: plain("2.  Paste the code"),
+					hint: plain(
+						`It goes straight to Claude Code on ${systemName()}'s computer, which finishes signing you in. ${systemName()} doesn't keep it.`,
+					),
+					element: {
+						type: "plain_text_input",
+						action_id: "value",
+						max_length: 1000,
+						placeholder: plain("Code from Claude"),
+					},
+				},
+			]
+		: [context(":hourglass_flowing_sand:  Getting your sign-in link…")]
+	return {
+		type: "modal",
+		callback_id: "home_claude_code",
+		title: plain("Connect Claude"),
+		...(link ? { submit: plain("Connect") } : {}),
+		close: plain("Cancel"),
+		blocks: [
+			...(problem ? [row(`:warning:  ${problem}`)] : []),
+			context(
+				`${systemName()} runs Claude Code on your own Claude plan. Sign in once; it stays connected.`,
+			),
+			...steps,
+		],
+	}
+}
+
+/** The Connect Claude form after Connect: connecting, then the outcome. */
+function claudeDoneView(text: string, done = true): types.ModalView {
+	return {
+		type: "modal",
+		callback_id: "home_claude_done",
+		title: plain("Connect Claude"),
+		close: plain(done ? "Done" : "Close"),
+		blocks: [row(text)],
+	}
+}
+
+/** Claude plans as people know them (Claude Code's subscriptionType). */
+const CLAUDE_PLANS: Record<string, string> = {
+	pro: "Pro",
+	max: "Max",
+	team: "Team",
+	enterprise: "Enterprise",
+}
+
 const ON = ":large_green_circle:"
 const OFF = ":white_circle:"
 const hint = (text: string) => context(text)
@@ -217,10 +313,21 @@ async function agentSection(
 			`${AGENTS[agent].plan}${agent === "opencode" ? ". No sign-in; they may keep what they're sent" : ""}.\n\u200b`,
 		),
 	]
+	if (
+		!models.length &&
+		agent === "claude" &&
+		!(await claudeAccount(config, person).catch(() => true))
+	)
+		return [
+			...blocks,
+			hint(
+				":key:  Connect Claude under Connections below to pick a model.",
+			),
+		]
 	if (!models.length)
 		return [
 			...blocks,
-			row(`*Model*\n\`${escape(chosen.model)}\``),
+			row(`*Model*\n\`${escape(chosen.model || "default")}\``),
 			hint(":warning:  Couldn't load the model list right now."),
 		]
 	blocks.push(
@@ -370,7 +477,7 @@ async function connectionsSection(
 	const account = await codexAccount(config, person).catch(() => null)
 	const rows: Block[] = [
 		row(
-			`*ChatGPT*\n${account ? `${ON}  Connected${account.email ? ` as ${escape(account.email)}` : ""}${PLANS[account.plan] ? `  ·  ${PLANS[account.plan]}` : ""}` : `${OFF}  Not connected`}`,
+			`*ChatGPT*\n${account ? `${ON}  Connected${account.email ? ` as ${escape(account.email)}` : ""}${account.plan === "apiKey" ? "  ·  API key" : PLANS[account.plan] ? `  ·  ${PLANS[account.plan]}` : ""}` : `${OFF}  Not connected`}`,
 			account
 				? button("Disconnect", "home_chatgpt", "signout", {
 						confirm: {
@@ -379,11 +486,44 @@ async function connectionsSection(
 							yes: "Disconnect",
 						},
 					})
-				: button("Connect", "home_chatgpt", "signin", {
-						style: "primary",
-					}),
+				: undefined,
 		),
 	]
+	if (!account)
+		rows.push({
+			type: "actions",
+			elements: [
+				button("Sign in with ChatGPT", "home_chatgpt", "signin", {
+					style: "primary",
+				}),
+				button("Use an API key", "home_chatgpt_key", "key"),
+			],
+		} as Block)
+	const claude = await claudeAccount(config, person).catch(() => null)
+	rows.push(
+		row(
+			`*Claude*\n${claude ? `${ON}  Connected${claude.email ? ` as ${escape(claude.email)}` : ""}  ·  ${claude.method === "key" ? "API key" : (CLAUDE_PLANS[claude.plan ?? ""] ?? "Claude plan")}` : `${OFF}  Not connected`}`,
+			claude
+				? button("Disconnect", "home_claude", "signout", {
+						confirm: {
+							title: "Disconnect Claude?",
+							text: `${systemName()} won't run on Claude Code for you until you connect it again.`,
+							yes: "Disconnect",
+						},
+					})
+				: undefined,
+		),
+	)
+	if (!claude)
+		rows.push({
+			type: "actions",
+			elements: [
+				button("Sign in with Claude", "home_claude", "signin", {
+					style: "primary",
+				}),
+				button("Use an API key", "home_claude_key", "key"),
+			],
+		} as Block)
 	if (config.slackSignIn) {
 		const connection = await slackSignIn.connection(person)
 		rows.push(
@@ -442,7 +582,7 @@ async function connectionsSection(
 		header(":link:  Connections"),
 		...rows,
 		hint(
-			`Connecting sends you a sign-in link in your DM with ${systemName()}. ChatGPT runs Codex on your own plan.`,
+			`Connecting sends you a sign-in link in your DM with ${systemName()}. ChatGPT runs Codex on your own plan, Claude runs Claude Code on yours.`,
 		),
 	]
 }
@@ -1419,14 +1559,132 @@ export function registerHome(app: App, given: Deps) {
 		else return
 		return `:envelope_with_arrow:  Sign-in link sent to your DM with ${systemName()}. Press Refresh here once you're done.`
 	})
-	control("home_chatgpt", async ({ person, client, value }) => {
-		if (value === "signout") return signOut(config, person)
-		await signIn(config, client, person, null, () =>
-			refreshHome(client, person).catch(error =>
-				console.warn("[home] couldn't publish", error),
+	control(
+		/^home_chatgpt(_key)?$/,
+		async ({ person, client, value, body }) => {
+			if (value === "signout") return signOut(config, person)
+			if (value === "key")
+				return void (await client.views.open({
+					trigger_id: body.trigger_id,
+					view: keyView("home_chatgpt_key", "", OPENAI_KEY_FORM),
+				}))
+			await signIn(config, client, person, null, () =>
+				refreshHome(client, person).catch(error =>
+					console.warn("[home] couldn't publish", error),
+				),
+			)
+			return `:envelope_with_arrow:  Sign-in code sent to your DM with ${systemName()}. This page updates once you're connected.`
+		},
+	)
+	// One action id per button: Slack wants them unique within a view or message.
+	control(
+		/^home_claude(_key|_connect)?$/,
+		async ({ person, client, value, body }) => {
+			if (value === "signout") return signOutClaude(config, person)
+			if (value === "key")
+				return void (await client.views.open({
+					trigger_id: body.trigger_id,
+					view: keyView("home_claude_key", "", claudeKeyForm()),
+				}))
+			// Sign in (Home) or Connect Claude (a turn asked): the form opens at once, the link follows.
+			const opened = await client.views.open({
+				trigger_id: body.trigger_id,
+				view: claudeConnectView(null),
+			})
+			const viewId = opened.view?.id
+			if (!viewId) return
+			const signIn = await claudeSignIn(config, person).catch(error => {
+				console.warn("[home] couldn't start the Claude sign-in", error)
+				return null
+			})
+			await client.views.update({
+				view_id: viewId,
+				view: signIn
+					? claudeConnectView(signIn.link)
+					: claudeDoneView(
+							":warning:  Couldn't start the sign-in. Close this and try again.",
+						),
+			})
+		},
+	)
+	app.view("home_chatgpt_key", async ({ ack, body, view, client }) => {
+		const person = viewPerson(body)
+		if (!isAllowed(person.userId)) return ack()
+		const form = readKeyForm(view, OPENAI_KEY_FORM)
+		if ("problem" in form)
+			return ack({
+				response_action: "errors",
+				errors: { [form.field]: form.problem },
+			})
+		await ack()
+		await saved(client, person, async () => {
+			await useCodexKey(config, person, form.value)
+			return `:white_check_mark:  ChatGPT connected with your OpenAI API key. Send your message again.`
+		})
+	})
+	app.view("home_claude_code", async ({ ack, body, view, client }) => {
+		const person = viewPerson(body)
+		if (!isAllowed(person.userId)) return ack()
+		const code = (view.state.values.code?.value?.value ?? "").trim()
+		if (!code || /\s/.test(code))
+			return ack({
+				response_action: "errors",
+				errors: { code: "Paste the code Claude showed you." },
+			})
+		await ack({
+			response_action: "update",
+			view: claudeDoneView(
+				":hourglass_flowing_sand:  Connecting…",
+				false,
 			),
+		})
+		const update = (next: types.ModalView) =>
+			client.views
+				.update({ view_id: view.id, view: next })
+				.catch(error => console.warn("[home] couldn't update", error))
+		// The sign-in this form showed; a new one if it expired in the meantime.
+		const signIn = await claudeSignIn(config, person).catch(() => null)
+		const connected = await signIn?.paste(code).catch(() => false)
+		const account = connected
+			? await claudeAccount(config, person).catch(() => null)
+			: null
+		if (account) {
+			await update(
+				claudeDoneView(
+					`:white_check_mark:  *Claude connected*${account.email ? ` as ${escape(account.email)}` : ""}. ${systemName()} runs on it from your next message.`,
+				),
+			)
+			await refreshHome(client, person).catch(() => {})
+			return
+		}
+		// That code is spent either way: a fresh link to try again.
+		const again = await claudeSignIn(config, person).catch(() => null)
+		await update(
+			again
+				? claudeConnectView(
+						again.link,
+						"That code didn't work. Sign in again and paste the new code.",
+					)
+				: claudeDoneView(
+						":warning:  That code didn't work, and a new sign-in couldn't start. Close this and try again.",
+					),
 		)
-		return `:envelope_with_arrow:  Sign-in code sent to your DM with ${systemName()}. This page updates once you're connected.`
+	})
+	app.view("home_claude_key", async ({ ack, body, view, client }) => {
+		const person = viewPerson(body)
+		if (!isAllowed(person.userId)) return ack()
+		const form = readKeyForm(view, claudeKeyForm())
+		if ("problem" in form)
+			return ack({
+				response_action: "errors",
+				errors: { [form.field]: form.problem },
+			})
+		await ack()
+		await saved(client, person, async () => {
+			await saveKey(config, person, form.name, form.note, form.value)
+			await connectedClaude(person)
+			return `:white_check_mark:  Claude connected with your API key. Send your message again.`
+		})
 	})
 	control("home_disconnect", async ({ person, client, value }) => {
 		if (value === "slack") await slackSignIn.disconnect(client, person)

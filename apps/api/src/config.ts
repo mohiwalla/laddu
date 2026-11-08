@@ -27,8 +27,11 @@ function users(value: string): "*" | Set<string> {
 }
 
 function agentId(value: string): AgentId {
-	if (value === "codex" || value === "opencode") return value
-	throw new Error(`LADDU_AGENT must be "codex" or "opencode", not "${value}"`)
+	if (value === "codex" || value === "claude" || value === "opencode")
+		return value
+	throw new Error(
+		`LADDU_AGENT must be "codex", "claude" or "opencode", not "${value}"`,
+	)
 }
 
 const dataDir = fromAppRoot(optional("DATA_DIR", ".data"))
@@ -90,18 +93,25 @@ export function loadBotConfig() {
 		ownerUserId,
 		/** Who can use the bot: "*" for everyone in the workspace, else comma-separated user IDs. */
 		allowedUsers: users(allowed),
-		/** The agent people get until they pick one on the Home tab: "codex" or "opencode". */
+		/** The agent people get until they pick one on the Home tab: "codex", "claude" or "opencode". */
 		agent: agentId(optional("LADDU_AGENT", "codex")),
 		/**
 		 * The model a turn runs on. From CODEX_MODEL here (empty: Codex's default for their plan);
-		 * configFor() (preferences.ts) swaps in the person's pick, or OPENCODE_MODEL on OpenCode.
+		 * configFor() (preferences.ts) swaps in the person's pick, or CLAUDE_MODEL / OPENCODE_MODEL
+		 * on those agents.
 		 */
 		model: optional("CODEX_MODEL", ""),
+		/** Empty: Claude Code's own default. */
+		claudeModel: optional("CLAUDE_MODEL", ""),
 		opencodeModel: optional("OPENCODE_MODEL", "opencode/big-pickle"),
+		/** How hard it thinks; configFor() swaps in the person's pick, or the agent's own default below. */
 		reasoningEffort: optional(
 			"CODEX_REASONING_EFFORT",
 			"medium",
 		) as ModelReasoningEffort,
+		/** Empty: the model's own default. */
+		claudeEffort: optional("CLAUDE_REASONING_EFFORT", ""),
+		opencodeEffort: optional("OPENCODE_REASONING_EFFORT", ""),
 		/** Fast mode (Codex's service_tier "fast"): quicker answers that use more of their plan's limits. */
 		fast: optional("CODEX_FAST", "false") === "true",
 		/**

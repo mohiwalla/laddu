@@ -6,16 +6,23 @@
 import { systemName } from "../slack/system"
 import { LostSessionError } from "./acp"
 
-/** A Codex turn for someone who hasn't signed in to ChatGPT yet (see account.ts). */
+/**
+ * A turn for someone who hasn't connected their agent yet: ChatGPT for Codex (account.ts), their
+ * Claude plan for Claude Code (claude.ts).
+ */
 export class NotSignedInError extends Error {
-	constructor() {
-		super("Not signed in to ChatGPT")
+	constructor(readonly agent: "codex" | "claude" = "codex") {
+		super(agent === "claude" ? "Not signed in to Claude" : "Not signed in to ChatGPT")
 	}
 }
+
+/** Their Claude plan hit a usage limit; the message is Claude Code's ("… resets 5pm"). */
+export class ClaudeLimitError extends Error {}
 
 export type Failure = {
 	kind:
 		| "auth"
+		| "claude_auth"
 		| "usage_limit"
 		| "free_limit"
 		| "context_full"
@@ -48,6 +55,13 @@ const fail = (
 const firstLine = (text: string) => text.trim().split("\n")[0]!.slice(0, 300)
 
 export function classify(error: unknown): Failure {
+	if (error instanceof NotSignedInError && error.agent === "claude")
+		return fail(
+			"claude_auth",
+			`Claude isn't connected. Connect it under Settings on ${systemName()}'s Home tab, then send your message again.`,
+		)
+	if (error instanceof ClaudeLimitError)
+		return fail("usage_limit", `Your Claude plan hit its usage limit. ${error.message}`)
 	if (error instanceof NotSignedInError)
 		return fail(
 			"auth",
@@ -92,7 +106,7 @@ export function classify(error: unknown): Failure {
 		)
 	}
 	if (
-		/stream disconnected|connection failed|exceeded retry limit|unexpected status (429|5\d\d)|overloaded|timed? ?out|ECONNRESET|socket hang up/i.test(
+		/stream disconnected|connection failed|exceeded retry limit|unexpected status (429|5\d\d)|overloaded|rate_limit_error|timed? ?out|ECONNRESET|socket hang up/i.test(
 			text,
 		)
 	) {

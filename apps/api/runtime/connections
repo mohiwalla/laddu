@@ -20,7 +20,7 @@ an MCP server gets each key as an environment variable of that name, so name a k
 variable the server expects. A new MCP server's tools are there from their next message.
 
 For the bot (not for you to use): connections json, connections key save NAME [--note "…"] (the
-value on stdin).
+value on stdin), connections sync (rewrites each agent's MCP config).
 """
 import argparse
 import json
@@ -37,9 +37,10 @@ KEYS = DIR / "keys"
 STATE = DIR / "connections.json"
 CODEX_MCP = DIR / "mcp.toml"
 OPENCODE_MCP = DIR / "opencode.json"
+CLAUDE_MCP = DIR / "claude-mcp.json"
 KEY_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 MCP_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
-# Built in (codex-config.ts, opencode.ts).
+# Built in (codex-config.ts, acp-turn.ts).
 RESERVED_MCP = {"desktop"}
 MAX_KEY_BYTES = 16 * 1024
 
@@ -71,7 +72,7 @@ def write_private(path, text):
 
 def save(state):
     write_private(STATE, json.dumps(state, indent=2) + "\n")
-    toml, opencode = [], {}
+    toml, opencode, claude = [], {}, {}
     for name, server in sorted(state["mcp"].items()):
         toml.append(f"\n[mcp_servers.{name}]")
         if "url" in server:
@@ -86,6 +87,12 @@ def save(state):
             if server.get("bearer"):
                 sent["Authorization"] = f"Bearer {{env:{server['bearer']}}}"
             opencode[name] = {"type": "remote", "url": server["url"], **({"headers": sent} if sent else {})}
+            # Claude Code fills in ${KEY} from the environment, like the {env:KEY} above.
+            claude[name] = {
+                "type": "http",
+                "url": server["url"],
+                **({"headers": {header: value.replace("{env:", "${") for header, value in sent.items()}} if sent else {}),
+            }
         else:
             command, *args = server["command"]
             toml.append(f"command = {json.dumps(command)}")
@@ -97,9 +104,15 @@ def save(state):
                 "command": server["command"],
                 **({"environment": {key: f"{{env:{key}}}" for key in server["env"]}} if server.get("env") else {}),
             }
-    # Read by scripts/codex-docker.sh and scripts/opencode-docker.sh before each run.
+            claude[name] = {
+                "command": command,
+                "args": args,
+                **({"env": {key: f"${{{key}}}" for key in server["env"]}} if server.get("env") else {}),
+            }
+    # Read by scripts/codex-docker.sh and scripts/opencode-docker.sh before each run; Claude Code's by claude.ts.
     write_private(CODEX_MCP, ("# Written by `connections`; edits are overwritten.\n" + "\n".join(toml) + "\n") if toml else "")
     write_private(OPENCODE_MCP, json.dumps({"mcp": opencode}, indent=2) + "\n")
+    write_private(CLAUDE_MCP, json.dumps({"mcpServers": claude}, indent=2) + "\n")
 
 
 def now():
@@ -239,6 +252,7 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("json")
+    commands.add_parser("sync")
     key = commands.add_parser("key").add_subparsers(dest="action", required=True)
     request = key.add_parser("request")
     request.add_argument("name")
@@ -265,6 +279,8 @@ def main():
         return show(state)
     if args.command == "json":
         return print(json.dumps(listing(state)))
+    if args.command == "sync":
+        return save(state)
     if args.command == "key":
         check_key_name(args.name)
         if args.action == "request":

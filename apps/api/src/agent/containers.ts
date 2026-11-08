@@ -28,6 +28,8 @@ export const DESKTOP_VIEWER_PORT = 6901
 export const CODEX_DOCKER_WRAPPER = `${appRoot}scripts/codex-docker.sh`
 /** The same for OpenCode, as an ACP agent (`opencode acp`). */
 export const OPENCODE_DOCKER_WRAPPER = `${appRoot}scripts/opencode-docker.sh`
+/** The same for Claude Code (`claude`, headless). */
+export const CLAUDE_DOCKER_WRAPPER = `${appRoot}scripts/claude-docker.sh`
 
 const runtimeDir = `${paths.dataDir}/runtime`
 const hostConfigToml = `${runtimeDir}/config.toml`
@@ -407,7 +409,7 @@ export async function stopRun(
 }
 
 /**
- * Stops agent runs (Codex, OpenCode) left in this workspace's containers by a previous bot
+ * Stops agent runs (Codex, Claude Code, OpenCode) left in this workspace's containers by a previous bot
  * process. Killing the bot only ends `docker exec` on the host; the run inside keeps going and
  * holds its thread's lock ("already has an active writer"). Call at startup, before this process
  * starts any turn.
@@ -417,7 +419,7 @@ export async function stopOrphanedRuns(teamId: string): Promise<void> {
 		await Bun.$`docker ps ${ownContainers} --filter ${`label=laddu.team=${teamId}`} --format ${"{{.Names}}"}`.text()
 	for (const name of listing.split("\n").filter(Boolean)) {
 		const killed =
-			await Bun.$`docker exec ${name} pkill -f ${"^(codex(\\[turn=[^]]*\\])? (exec|app-server)|opencode\\[turn=[^]]*\\] acp)"}`
+			await Bun.$`docker exec ${name} pkill -f ${"^(codex(\\[turn=[^]]*\\])? (exec|app-server)|opencode\\[turn=[^]]*\\] acp|claude\\[turn=[^]]*\\] )"}`
 				.quiet()
 				.nothrow()
 		if (killed.exitCode === 0)

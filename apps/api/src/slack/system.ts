@@ -36,6 +36,13 @@ export type Notice = {
 	code?: string
 	/** The main button. */
 	link?: { label: string; url: string }
+	/** Other choices, after it: buttons an app.action handles (each action id once per message). */
+	buttons?: {
+		label: string
+		action: string
+		value: string
+		primary?: boolean
+	}[]
 	/** Small print: how long it works, what to do if they didn't ask. */
 	footer?: string
 }
@@ -79,17 +86,31 @@ export function noticeMessage(
 			type: "header",
 			text: { type: "plain_text", text: notice.code, emoji: false },
 		})
-	if (notice.link)
+	if (notice.link || notice.buttons?.length)
 		blocks.push({
 			type: "actions",
 			elements: [
-				{
-					type: "button",
-					action_id: "system_link",
-					text: { type: "plain_text", text: notice.link.label },
-					url: notice.link.url,
-					style: "primary",
-				},
+				...(notice.link
+					? [
+							{
+								type: "button" as const,
+								action_id: "system_link",
+								text: {
+									type: "plain_text" as const,
+									text: notice.link.label,
+								},
+								url: notice.link.url,
+								style: "primary" as const,
+							},
+						]
+					: []),
+				...(notice.buttons ?? []).map(button => ({
+					type: "button" as const,
+					action_id: button.action,
+					text: { type: "plain_text" as const, text: button.label },
+					value: button.value,
+					...(button.primary ? { style: "primary" as const } : {}),
+				})),
 			],
 		})
 	if (notice.footer)

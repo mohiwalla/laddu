@@ -66,7 +66,16 @@ export function effective(
 	picked: Preferences,
 	models: ModelOption[],
 ): Effective {
-	const fallback = agent === "codex" ? config.model : config.opencodeModel
+	const fallback = {
+		codex: config.model,
+		claude: config.claudeModel,
+		opencode: config.opencodeModel,
+	}[agent]
+	const fallbackEffort = {
+		codex: config.reasoningEffort,
+		claude: config.claudeEffort,
+		opencode: config.opencodeEffort,
+	}[agent]
 	const find = (id?: string) => models.find(model => model.id === id)
 	const option =
 		find(picked.model) ??
@@ -78,9 +87,9 @@ export function effective(
 		(!option || option.efforts.some(candidate => candidate.id === effort))
 	const effort = supports(picked.effort)
 		? picked.effort!
-		: supports(config.reasoningEffort)
-			? config.reasoningEffort
-			: (option?.defaultEffort ?? config.reasoningEffort)
+		: fallbackEffort && supports(fallbackEffort)
+			? fallbackEffort
+			: (option?.defaultEffort ?? fallbackEffort)
 	const fast =
 		(picked.fast ?? config.fast) &&
 		(option ? option.fast : agent === "codex")

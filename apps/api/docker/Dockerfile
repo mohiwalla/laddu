@@ -1,5 +1,5 @@
 # Per-user runtime for laddu: every Slack user gets their own container from this image.
-# Their agent (Codex or OpenCode) runs inside it, so whatever it executes only sees this
+# Their agent (Codex, Claude Code or OpenCode) runs inside it, so whatever it executes only sees this
 # container, never the host.
 # Built by src/agent/containers.ts; the build context also holds `codex/`, the platform
 # folder of the @openai/codex npm package (same version the SDK expects), layout intact.
@@ -18,7 +18,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --uid 1000 --shell /bin/bash laddu \
- && mkdir -p /home/laddu/workspace /home/laddu/.codex \
+ && mkdir -p /home/laddu/workspace /home/laddu/.codex /home/laddu/.claude \
  && chown -R laddu:laddu /home/laddu
 
 COPY codex /opt/codex
@@ -155,6 +155,21 @@ RUN case "$(dpkg --print-architecture)" in amd64) platform=x64 ;; arm64) platfor
       | tar -xz -C /tmp \
  && install -m 755 /tmp/package/bin/opencode /usr/local/bin/opencode \
  && rm -rf /tmp/package
+
+# Claude Code, the third agent (src/agent/claude.ts): Anthropic's own build, as published (the
+# platform package of @anthropic-ai/claude-code), run headless. People sign in with their own
+# Claude plan in the browser on their laddu computer, or bring an API key. Managed settings: no
+# permission prompts (nobody is there to answer; the container is the boundary), no auto-update,
+# and no suggested follow-ups (nobody would see them).
+ARG CLAUDE_CODE=2.1.318
+RUN case "$(dpkg --print-architecture)" in amd64) platform=x64 ;; arm64) platform=arm64 ;; esac \
+ && curl -fsSL "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-${platform}/-/claude-code-linux-${platform}-${CLAUDE_CODE}.tgz" \
+      | tar -xz -C /tmp \
+ && install -m 755 /tmp/package/claude /usr/local/bin/claude \
+ && rm -rf /tmp/package \
+ && mkdir -p /etc/claude-code \
+ && printf '%s\n' '{"permissions":{"defaultMode":"bypassPermissions"},"promptSuggestionEnabled":false,"env":{"DISABLE_AUTOUPDATER":"1","CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION":"false"}}' \
+      > /etc/claude-code/managed-settings.json
 
 # The person's own computers (runtime/desktop with `machine`): an SSH client, and Tailscale to
 # reach them on their tailnet. It runs in userspace (state on the user's volume), since the

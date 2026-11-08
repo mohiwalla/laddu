@@ -2,7 +2,8 @@
 
 A personal Slack assistant. You tag it in a channel (or DM it); it reads the conversation around the
 tag, hands the job to an agent, and replies in the thread. The agent is the brain for every request:
-Codex on the person's own ChatGPT plan, or OpenCode's free models, each person's pick on laddu's Home tab.
+Codex on the person's own ChatGPT plan, Claude Code on their own Claude plan, or OpenCode's free
+models, each person's pick on laddu's Home tab.
 The bot itself only moves messages between Slack and the agent.
 
 Status: **V0**, with per-person integrations, computer use and Azure Repos coding tasks.
@@ -34,6 +35,7 @@ apps/
       agent/account.ts each person's ChatGPT sign-in (device code via Codex's app-server)
       agent/acp.ts     runs a turn on any Agent Client Protocol agent (steps, steering, Stop)
       agent/opencode.ts OpenCode's free models over ACP (in the user's container)
+      agent/claude.ts  Claude Code on the person's own Claude plan: sign-in, models, headless turns
       agent/containers.ts runtime image + one Docker container per Slack user
       agent/codex-config.ts the containers' Codex config.toml
       agent/steps.ts   agent items → plain-language progress steps
@@ -522,10 +524,10 @@ plan shared through a proxy) rejected sub-agent items with `subscription_sharing
 - **Integrations vs. multi-user.** Anything private wired in later (email, repos) would be reachable
   by every allowed user unless scoped per user.
 
-## The other brain: OpenCode over ACP
+## The other brains: OpenCode over ACP, and Claude Code
 
 Each person picks their agent on laddu's Home tab (`preferences.ts`; `LADDU_AGENT` is the default), and
-everything for them runs on it, background memory reviews included. The second agent is
+everything for them runs on it, background memory reviews included. Another agent is
 [OpenCode](https://opencode.ai) on its free models: no sign-in, no plan. Free models may keep what
 they're sent; laddu is experimental, so that's accepted.
 
@@ -546,6 +548,38 @@ no sharing or snapshots) and web search through Exa (`OPENCODE_ENABLE_EXA`). Its
 live in the container's home volume; a thread remembers which agent it used, and switching agents
 starts it over. The model list on the Home tab is `opencode models opencode` in the image, free
 ones only; images are sent only to models that take them.
+
+### Claude Code
+
+[Claude Code](https://code.claude.com) is Anthropic's own `claude`, as published (the platform package
+of `@anthropic-ai/claude-code`, `ARG CLAUDE_CODE`), unmodified and run headless: a turn is
+`claude -p` speaking stream-json on stdin and stdout (`claude.ts`). The prompt goes in as a user
+message; messages that come in mid-turn are written as more user messages, which Claude Code takes at
+its next step (steering), and the turn ends at the result that has answered all of them. Stop sends
+an interrupt. The conversation is Claude Code's session, resumed with `--resume`. The Home tab's
+models and effort levels are what Claude Code reports on start (`initialize`), cached for a few
+hours.
+
+It runs on **each person's own Claude plan**, or their own API key. Anthropic's terms allow a
+platform to host the unmodified Claude Code binary and let each person sign in with their own plan;
+the sign-in must go through Anthropic's own flow, and the platform may not collect, store or
+intermediate the login. Claude Code has no device-code sign-in, so laddu uses its paste-code one:
+**Sign in with Claude** on the Home tab (or **Connect Claude** when a turn isn't signed in) opens one
+form and runs `claude auth login` in their container, with no browser to open (`LADDU_BROWSER`); the
+form shows the link it prints. They approve in their own browser, Anthropic's page shows a one-time
+code, and they paste it in the same form; laddu writes it to Claude Code's prompt, keeps nothing, and
+shows the outcome there (a fresh link if the code didn't work). Claude Code
+exchanges it and keeps and refreshes the login in their container. Whether passing that code along
+counts as intermediating is not settled in the terms: this is a proof of concept until Anthropic
+confirms it. **Use an API key** saves `ANTHROPIC_API_KEY` among their keys instead (Claude Code takes
+it over the plan).
+
+`scripts/claude-docker.sh` gives it the same persona (as the user `~/.claude/CLAUDE.md`), commands,
+skills (built-in, team and personal, linked one by one into `~/.claude/skills`) and desktop as Codex;
+the person's MCP servers come from `~/.laddu/claude-mcp.json` (`connections` writes it, keys as
+`${NAME}`), passed as `--mcp-config`. Managed settings in the image (`/etc/claude-code`) turn off
+permission prompts (the container is the boundary), auto-update and suggested follow-ups; Claude
+Code's own memory is off, since laddu keeps its own.
 
 ## Roadmap
 

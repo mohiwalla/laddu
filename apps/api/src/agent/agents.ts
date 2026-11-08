@@ -1,14 +1,16 @@
 /**
  * The agents laddu can run a turn on, one per person (picked on the Home tab, see preferences.ts):
- * Codex on their own ChatGPT plan (native app-server), or OpenCode's free models (over ACP).
+ * Codex on their own ChatGPT plan (native app-server), Claude Code on their own Claude plan
+ * (headless `claude`), or OpenCode's free models (over ACP).
  * Everything for a person runs on their pick, background memory reviews included.
  */
+import { listClaudeModels, runClaudeTurn } from "./claude"
 import { listCodexModels, runCodexTurn } from "./codex"
 import { listOpenCodeModels, runOpenCodeTurn } from "./opencode"
 import type { BotConfig } from "../config"
 import type { ModelOption, TurnOptions, TurnResult, TurnUser } from "./turn"
 
-export type AgentId = "codex" | "opencode"
+export type AgentId = "codex" | "claude" | "opencode"
 
 export const AGENTS: Record<
 	AgentId,
@@ -17,7 +19,10 @@ export const AGENTS: Record<
 		/** What it runs on, for the Home tab. */
 		plan: string
 		/** The models this person can pick. */
-		listModels: (config: BotConfig, user: TurnUser) => Promise<ModelOption[]>
+		listModels: (
+			config: BotConfig,
+			user: TurnUser,
+		) => Promise<ModelOption[]>
 		runTurn: (options: TurnOptions) => Promise<TurnResult>
 	}
 > = {
@@ -26,6 +31,12 @@ export const AGENTS: Record<
 		plan: "Your ChatGPT plan",
 		listModels: listCodexModels,
 		runTurn: runCodexTurn,
+	},
+	claude: {
+		name: "Claude Code",
+		plan: "Your Claude plan",
+		listModels: listClaudeModels,
+		runTurn: runClaudeTurn,
 	},
 	opencode: {
 		name: "OpenCode",
