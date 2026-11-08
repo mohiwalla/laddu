@@ -270,13 +270,13 @@ export async function openReply(
 const TODO_FLUSH_MS = 1_000
 const TODO_MARKS = {
 	completed: ":heavy_check_mark:",
-	in_progress: ":arrows_counterclockwise:",
+	in_progress: ":loading:",
 	pending: ":white_circle:",
 } as const
 const escape = (text: string) =>
 	text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 
-/** The to-do list as a message: a check for done, arrows for the one it's on, a circle for the rest. */
+/** The to-do list as a message: a check for done, a spinner for the one it's on, a circle for the rest. */
 export function todoMessage(todos: Todos, now = Date.now()) {
 	const lines = todos.items.map(item => {
 		const text = escape(clip(item.text.trim(), 150))
