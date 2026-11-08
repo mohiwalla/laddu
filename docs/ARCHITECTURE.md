@@ -22,7 +22,7 @@ apps/
     src/
       index.ts         boot: config, runtime image, Slack Socket Mode
       config.ts        env + paths
-      files.ts         JSON / private-file helpers
+      files.ts         JSON / private-file helpers (atomic writes: temp file, then rename)
       sessions.ts      (Slack thread, user) ↔ agent conversation map, per-key queue
       preferences.ts   each person's picks from the Home tab (agent, model, effort, speed)
       appearance.ts    the name and picture each person gives laddu (Home tab or `appearance`),

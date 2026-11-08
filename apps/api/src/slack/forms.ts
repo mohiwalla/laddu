@@ -45,9 +45,7 @@ export class SlackForms {
 		const next = this.chain.then(async () => {
 			const state = await this.read()
 			const result = fn(state)
-			const temp = `${this.file}.${crypto.randomUUID()}.tmp`
-			await writeJsonPrivate(temp, state)
-			await Bun.$`mv ${temp} ${this.file}`.quiet()
+			await writeJsonPrivate(this.file, state)
 			return result
 		})
 		this.chain = next.catch(() => {})
