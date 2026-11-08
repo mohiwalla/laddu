@@ -1,6 +1,7 @@
 {
 	"name": "laddu",
 	"private": true,
+	"license": "MIT",
 	"packageManager": "bun@1.4.2",
 	"workspaces": [
 		"apps/*",

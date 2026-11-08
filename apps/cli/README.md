@@ -1,6 +1,8 @@
 # laddu
 
-Set up and run **laddu**, a Slack assistant backed by Codex on each person's own ChatGPT plan, on a Linux server.
+Set up and run **laddu**, an AI teammate in Slack, on a Linux server. Each person uses their own
+AI subscription (ChatGPT, Claude) or OpenCode's free models. laddu is open source (MIT) and free
+forever. More at [github.com/mohiwalla/laddu](https://github.com/mohiwalla/laddu).
 
 ```sh
 curl -fsSL https://laddu.wtf/install.sh | sh

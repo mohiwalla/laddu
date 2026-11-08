@@ -19,8 +19,9 @@ laddu is a personal AI assistant that lives in Slack. You tag it in a channel, t
 
 - Self-hosted: it runs on the admin's own Linux server, not a vendor cloud.
 - Every person who tags it gets their own private computer (a container with a desktop, a browser, files that persist, internet only). laddu clicks and types through things no API reaches, and the person can watch, take over and hand back from laddu's Home tab in Slack.
-- It works *as* the person in Azure DevOps and Microsoft 365, seeing only what they can, and ships code as pull requests on Azure Repos or AWS CodeCommit.
-- Brains are each person's pick: Codex on the owner's ChatGPT plan, or OpenCode's free models.
+- It works _as_ the person in Azure DevOps and Microsoft 365, seeing only what they can, and ships code as pull requests on Azure Repos or AWS CodeCommit.
+- Brains are each person's pick: Codex on their own ChatGPT plan or OpenAI key, Claude Code on their own Claude plan or Anthropic key, or OpenCode's free models.
+- Open source (MIT) and free forever: laddu never charges anyone. Each person pays their AI provider directly.
 
 ## Operating Context
 
@@ -30,9 +31,9 @@ laddu is a personal AI assistant that lives in Slack. You tag it in a channel, t
 
 ## Capabilities and Constraints
 
-- The ChatGPT sign-in never enters the containers; a proxy on the host adds it.
+- Each person signs in to their own AI provider; the login lives only in their own container.
 - Containers have internet only: no way into the host's servers, network, or anyone else's computer.
-- **Not yet decided / not claimable:** the repository has no license, so the site must not say "open source". No pricing statement beyond what is true (Codex uses the owner's ChatGPT plan; OpenCode models are free). No user counts, stars, customers or testimonials exist to cite.
+- **Licence and price:** MIT licensed, so the site may say "open source". laddu is free forever and never charges; each person uses their own ChatGPT or Claude plan (or API key) and pays that provider, and OpenCode's models are free. No pricing tiers, credits or paid plans, ever. No user counts, stars, customers or testimonials exist to cite.
 
 ## Brand Commitments
 
@@ -50,8 +51,8 @@ laddu is a personal AI assistant that lives in Slack. You tag it in a channel, t
   - Status: "laddu is working" with a spinner.
   - laddu (AGENT): "I can help you with:" **Neon Rift:** build features, fix bugs, review code, and get changes ready to test. **Arch Linux:** troubleshoot problems, configure settings, and write scripts. **Research:** find current information and explain tricky topics. **Files:** analyse data and create spreadsheets, charts, documents, or slides. **Writing:** draft messages, polish résumés, and summarise documents. **Reminders:** remind you later or set up recurring tasks. "Send me a task, a file, or something that's broken 🙂"
   - The personalised lines (Neon Rift, Arch Linux) come from laddu's memory of the person, which is the point of showing them.
-  - On the site (owner's decision, 2026-11-02): the personal names are replaced with generic ones a first-time visitor understands ("Your code", "Your laptop"), the question shows the mention ("hi @laddu, …"), and the caption says the reply is *based on* a real one rather than verbatim.
-- Absent, must not be fabricated: testimonials, logos, metrics, star counts, license, pricing tiers.
+  - On the site (owner's decision, 2026-11-02): the personal names are replaced with generic ones a first-time visitor understands ("Your code", "Your laptop"), the question shows the mention ("hi @laddu, …"), and the caption says the reply is _based on_ a real one rather than verbatim.
+- Absent, must not be fabricated: testimonials, logos, metrics, star counts, pricing tiers.
 
 ## Product Principles
 
