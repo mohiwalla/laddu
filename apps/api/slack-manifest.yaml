@@ -177,7 +177,7 @@ oauth_config:
 settings:
   event_subscriptions:
     bot_events:
-      # No agent_session_stopped subscription: show working status without a native Stop button.
+      - agent_session_stopped
       - app_home_opened
       - app_mention
       - message.im

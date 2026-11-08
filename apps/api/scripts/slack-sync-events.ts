@@ -33,8 +33,7 @@ const previous: string[] =
 	remote.settings?.event_subscriptions?.bot_events ?? []
 const events = [
 	...new Set([...previous, ...local.settings.event_subscriptions.bot_events]),
-	// A Stop subscription makes Slack's working indicator clickable. Keep it hidden for everyone.
-].filter(event => event !== "agent_session_stopped")
+]
 const agentChanged = enableAgent && !remote.features?.agent_view
 const eventsChanged =
 	events.length !== previous.length ||

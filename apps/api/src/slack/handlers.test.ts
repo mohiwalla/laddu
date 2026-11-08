@@ -203,7 +203,7 @@ test.each(["success", "failure", "stop"] as const)(
 			registerHandlers(
 				app,
 				{
-					allowedUsers: new Set([userId]),
+					allowedUsers: new Set([userId, "U_OTHER"]),
 					agent: "codex",
 				} as BotConfig,
 				botUserId,
@@ -222,17 +222,29 @@ test.each(["success", "failure", "stop"] as const)(
 			await ready
 			if (outcome === "stop") {
 				const signal = run.mock.calls[0]![0].signal!
+				const postEphemeral = mock(async () => ({ ok: true }))
+				const stopClient = { chat: { postEphemeral } }
 				await onStop({
 					event: {
 						channel: "D_AGENT",
 						thread_ts: ts,
 						user: "U_OTHER",
 					},
+					client: stopClient,
 				})
 				expect(signal.aborted).toBe(false)
+				expect(postEphemeral).toHaveBeenCalledWith(
+					expect.objectContaining({
+						user: "U_OTHER",
+						thread_ts: ts,
+						text: expect.stringContaining(`Only <@${userId}> can stop this.`),
+					}),
+				)
 				await onStop({
 					event: { channel: "D_AGENT", thread_ts: ts, user: userId },
+					client: stopClient,
 				})
+				expect(postEphemeral).toHaveBeenCalledTimes(1)
 				expect(signal.aborted).toBe(true)
 			}
 			await done

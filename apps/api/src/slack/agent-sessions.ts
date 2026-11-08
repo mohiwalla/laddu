@@ -92,6 +92,15 @@ export class AgentSessions {
 		return found.sort((a, b) => a.startedAt - b.startedAt)
 	}
 
+	/** Who laddu is working for in this thread right now (not yet stopped). */
+	askers(channel: string, threadTs: string): string[] {
+		const found = new Set<string>()
+		for (const run of this.sessions.get(`${channel}:${threadTs}`)?.runs ??
+			[])
+			if (!run.controller.signal.aborted) found.add(run.userId)
+		return [...found]
+	}
+
 	/**
 	 * Cancels one person's active and already queued requests in this thread, leaving everyone
 	 * else's (and other threads) alone. Returns how many there were.

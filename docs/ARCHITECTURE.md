@@ -118,8 +118,8 @@ user's container volume; the bot stores only `{key → codex thread id, last see
 
 The Slack app declares `agent_view`. Interactive turns set `agents.sessions.setStatus` to
 `processing`, then `active` after success, failure or cancellation. The status remains processing
-while another person still has work running in that thread. The `agent_session_stopped` event is
-deliberately unsubscribed, so Slack shows working status without a native Stop button for anyone.
+while another person still has work running in that thread. Slack's native Stop button
+sends `agent_session_stopped`; it cancels only the clicker's own runs in that thread.
 These native surfaces supplement streamed task cards; unavailable agent APIs don't prevent replies.
 The native working indicator is the only progress UI until Codex executes its first action. That
 action opens the streamed accordion, titled with the current action and containing actual tools,

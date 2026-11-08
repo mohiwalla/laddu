@@ -86,9 +86,11 @@ bun run scripts/slack-sync-events.ts --app <APP_ID> --team <WORKSPACE> --agent-v
 systemctl --user restart laddu-srafis.service
 ```
 
-Laddu reports native working status while answering. The `agent_session_stopped` event is deliberately
-unsubscribed so Slack shows a non-interactive working indicator without a Stop button for anyone.
-The sync script removes any existing Stop subscription while preserving other remote events.
+Laddu reports native working status while answering. The `agent_session_stopped` subscription
+gives that indicator Slack's Stop button. Slack shows it to everyone in the thread and can't limit
+it, so a click only stops the clicker's own work there (running and queued), like sending `STOP`.
+Anyone else who clicks gets a private note naming who can stop it. Slack ends the progress message
+on any click, so laddu continues it in a new message below.
 The detailed progress accordion appears only after a real tool action, with the current action as
 its title. Simple responses use the native indicator until the answer or reaction is ready.
 If the workspace rejects agent status calls, ordinary replies and streamed progress still work.
