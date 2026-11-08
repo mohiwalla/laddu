@@ -27,7 +27,12 @@ import * as azureDevOps from "../integrations/azure-devops"
 import * as graph from "../integrations/graph"
 import * as codecommit from "../integrations/codecommit"
 import * as microsoft from "../integrations/microsoft"
-import { findPeople, recipient, sendOnBehalf } from "../slack/messaging"
+import {
+	findPeople,
+	namesFor,
+	recipient,
+	sendOnBehalf,
+} from "../slack/messaging"
 import * as slackSignIn from "../slack/user-tokens"
 import {
 	callSlack,
@@ -37,10 +42,18 @@ import {
 	object,
 	slackFailure,
 } from "../slack/api"
-import { requestOk } from "../slack/approvals"
+import { requestOk, wordsFor } from "../slack/approvals"
 import { markAction } from "../inflight"
 import { sessionKey } from "../sessions"
-import { needsOk, outsideAction, type ApiRequest } from "./actions"
+import {
+	askedFor,
+	needsOk,
+	outsideAction,
+	targetsOf,
+	type ApiRequest,
+	type Known,
+	type Target,
+} from "./actions"
 import { transfer } from "../slack/transfers"
 import * as questions from "../slack/questions"
 import * as keys from "../slack/keys"
@@ -915,12 +928,20 @@ async function guarded(
 					headers: request.headers,
 					body: raw,
 				})
-	// They asked for exactly this themselves (the command's --asked): no need to ask again.
-	const asked = request.headers.get("x-laddu-asked") === "1"
+	// They asked for exactly this themselves: no need to ask again. The command's --asked is only
+	// laddu's word for it, and anything in the container can send that, so the bot checks it against
+	// what they wrote themselves in this turn.
 	const risky = needsOk(described)
-	if (risky && asked)
+	const said = risky !== null && request.headers.get("x-laddu-asked") === "1"
+	const asked =
+		said &&
+		(await namedInTheirWords(described, caller, deps).catch(error => {
+			console.warn("[approval] couldn't check their words", error)
+			return false
+		}))
+	if (risky && said)
 		console.log(
-			`[approval] ${caller.teamId}-${caller.userId}: asked directly, so no OK needed to ${risky.label}`,
+			`[approval] ${caller.teamId}-${caller.userId}: --asked, and their own words ${asked ? "name it, so no OK needed" : "this turn don't name everyone and everything it acts on, so asking anyway"} to ${risky.label}`,
 		)
 	if (risky && !asked)
 		try {
@@ -953,6 +974,56 @@ async function guarded(
 			done,
 		).catch(() => {})
 	return response
+}
+
+/**
+ * Whether what the person wrote themselves in the turn running now names everyone and everything
+ * the request acts on (actions.ts). A scheduled run or automation has no words of theirs, so it
+ * never does; a name the bot can't look up just doesn't count.
+ */
+async function namedInTheirWords(
+	described: ApiRequest,
+	caller: Caller,
+	deps: Deps,
+): Promise<boolean> {
+	if (caller.scheduled) return false
+	const words = wordsFor(
+		sessionKey(caller.channel, caller.threadTs, caller.userId),
+	)
+	const targets = targetsOf(described)
+	if (!words.length || !targets) return false
+	const known = await Promise.all(
+		targets.map(target =>
+			identify(target, caller.teamId, deps).catch(() => ({
+				target,
+				names: [],
+			})),
+		),
+	)
+	return askedFor(words, known, caller.channel)
+}
+
+/** A target with its names: a person's that nobody else has, a channel's; a DM is who it's with. */
+async function identify(
+	target: Target,
+	teamId: string,
+	deps: Deps,
+): Promise<Known> {
+	if (target.kind === "person")
+		return { target, names: await namesFor(deps.client, teamId, target) }
+	if (target.kind !== "channel" || !target.id) return { target, names: [] }
+	// Slack's types leave out a DM's `user`.
+	const { channel } = (await deps.client.conversations.info({
+		channel: target.id,
+	})) as { channel?: { is_im?: boolean; user?: string; name?: string } }
+	if (channel?.is_im && channel.user) {
+		const person: Target = { kind: "person", id: channel.user }
+		return {
+			target: person,
+			names: await namesFor(deps.client, teamId, person),
+		}
+	}
+	return { target, names: channel?.name ? [channel.name] : [] }
 }
 
 /** Whether a DM or Slack call would go out as the person rather than as laddu. */

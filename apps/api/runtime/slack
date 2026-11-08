@@ -12,7 +12,7 @@ send you this:".
   slack api <method> '<JSON arguments>' [--as auto|user|laddu] [--asked]
   slack search "in:general decision" [--files] [--page 1]
   slack channels | history <channel> | thread <channel> <ts>
-  slack send <channel> "text" [--thread <ts>] [--as auto|user|laddu]
+  slack send <channel> "text" [--thread <ts>] [--as auto|user|laddu] [--asked]
   slack upload <channel> <path> [--thread <ts>] | download <file ID> <path>
   slack automate welcome <channel> "Welcome <@{user}>!"
   slack automate add '<JSON rule>' | list | history | remove|enable|disable <id>
@@ -54,6 +54,10 @@ arguments and token requirements. Results include pagination cursors; continue e
 Free history is limited to 90 days. Lists, Workflow Builder and paid agent surfaces aren't tools.
 
 Use IDs from "People here" or `slack find`; never guess one. At most 20 DMs an hour per person.
+
+A DM or change others see as them waits for their OK. --asked: their own message asked for exactly
+this; it goes straight through only when that message names everyone and everything it acts on
+(people it messages or pings, channels), otherwise it still waits.
 """
 import argparse
 import json
@@ -65,8 +69,9 @@ import urllib.parse
 
 API = os.environ.get("LADDU_API")
 CALLER = os.environ.get("LADDU_CALLER")
-# --asked (anywhere): the person asked for exactly this in their own words, so it doesn't wait for
-# their OK. The bot otherwise asks before risky actions as them.
+# --asked (anywhere): the person asked for exactly this in their own words. Only a hint: the bot
+# skips their OK for a risky action as them only when their own message this turn names everyone
+# and everything it acts on (people, channels, emails, work item numbers); otherwise it asks.
 ASKED = "--asked" in sys.argv
 while "--asked" in sys.argv:
     sys.argv.remove("--asked")

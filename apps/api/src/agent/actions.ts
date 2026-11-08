@@ -237,6 +237,235 @@ export function needsOk(request: ApiRequest): Risky | null {
 }
 
 /**
+ * Who or what a risky request reaches or changes, so the bot can tell whether the person named it
+ * in their own words (askedFor). A person by Slack ID or email, a channel by ID or name, a message
+ * by its channel and ts, an Azure DevOps work item or pull request by number, an @channel-style
+ * mention by its group ("here", "subteam^S123").
+ */
+export type Target =
+	| { kind: "person"; id?: string; email?: string }
+	| { kind: "channel"; id?: string; name?: string }
+	| { kind: "message"; channel: string; ts: string }
+	| { kind: "item"; number: string }
+	| { kind: "mention"; group: string }
+
+/** A target, with the names the bot found for it (a person's display and real names…). */
+export type Known = { target: Target; names: string[] }
+
+const record = (value: unknown) =>
+	value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: {}
+
+/** A Slack ID or email as a person; null for anything else. */
+function slackPerson(value: string): Target | null {
+	const trimmed = value.trim()
+	const id = /^<?@?([UW][A-Z0-9]{5,})(\|[^>]*)?>?$/.exec(trimmed)?.[1]
+	if (id) return { kind: "person", id }
+	const email = /^(?:<mailto:)?([^\s@<>|]+@[^\s@<>|]+\.[^\s@<>|]+)/.exec(
+		trimmed,
+	)?.[1]
+	return email ? { kind: "person", email } : null
+}
+
+/** Whoever a message's text notifies: the people it mentions, and @channel, @here or a group. */
+function notified(value: string): Target[] {
+	const targets: Target[] = [
+		...value.matchAll(/<@([UW][A-Z0-9]+)(?:\|[^>]*)?>/g),
+	].map(([, id]) => ({ kind: "person", id }))
+	for (const [, coded, typed] of value.matchAll(
+		/<!(channel|here|everyone|subteam\^[A-Z0-9]+)(?:\|[^>]*)?>|(?<![\w@])@(channel|here|everyone)\b/g,
+	))
+		targets.push({ kind: "mention", group: (coded ?? typed)! })
+	return targets
+}
+
+/** Slack arguments that point at something nobody can name in a message (a file, a bookmark…). */
+const UNNAMEABLE = [
+	"file",
+	"file_id",
+	"files",
+	"canvas_id",
+	"bookmark_id",
+	"scheduled_message_id",
+	"document_id",
+	"external_id",
+	"item_id",
+]
+
+function slackTargets(
+	method: string,
+	args: Record<string, unknown>,
+): Target[] | null {
+	if (UNNAMEABLE.some(key => args[key] !== undefined)) return null
+	const targets: Target[] = []
+	const where = text(args.channel ?? args.channel_id).trim()
+	const ts = text(args.ts ?? args.timestamp)
+	if (where) {
+		const id = /^<?#?([CGD][A-Z0-9]{6,})(\|[^>]*)?>?$/.exec(where)?.[1]
+		// A user ID as the channel is a DM with them.
+		const place: Target = id
+			? { kind: "channel", id }
+			: (slackPerson(where) ?? {
+					kind: "channel",
+					name: where.replace(/^#/, ""),
+				})
+		targets.push(place)
+		if (ts && place.kind === "channel" && id)
+			targets.push({ kind: "message", channel: id, ts })
+	} else if (ts) return null
+	for (const user of [args.users, args.user].map(text).join(",").split(","))
+		if (user.trim()) {
+			const person = slackPerson(user)
+			if (!person) return null
+			targets.push(person)
+		}
+	if (/^conversations\.(create|rename)$/.test(method) && text(args.name))
+		targets.push({ kind: "channel", name: text(args.name) })
+	return [...targets, ...notified(JSON.stringify(args))]
+}
+
+function graphTargets(
+	method: string,
+	path: string,
+	body: unknown,
+): Target[] | null {
+	// Deletes, replies, Teams chats and sharing links act on IDs nobody types.
+	if (method !== "POST") return null
+	const data = record(body)
+	const message = record(data.message ?? data)
+	const lists = /(^|\/)sendMail$/i.test(path)
+		? [message.toRecipients, message.ccRecipients, message.bccRecipients]
+		: /(^|\/)forward$/i.test(path)
+			? [
+					data.toRecipients,
+					message.toRecipients,
+					message.ccRecipients,
+					message.bccRecipients,
+				]
+			: /(^|\/)invite$/i.test(path)
+				? [data.recipients]
+				: null
+	if (!lists) return null
+	const emails = lists
+		.flatMap(list => (Array.isArray(list) ? list : []))
+		.map(entry =>
+			text(
+				record(record(entry).emailAddress).address ||
+					record(entry).email,
+			),
+		)
+	if (emails.some(email => !email)) return null
+	return emails.map(email => ({ kind: "person", email }))
+}
+
+/**
+ * Everyone and everything a risky request (needsOk) reaches or changes; null when something it
+ * acts on can't be named in words (an email's ID, a file, a Teams chat), so the person is asked.
+ */
+export function targetsOf(request: ApiRequest): Target[] | null {
+	const { resource, action, body } = request
+	let targets: Target[] | null = null
+	if (resource === "slack" && action === "dm") {
+		const to = slackPerson(text(body?.to))
+		targets = to && [to, ...notified(text(body?.text))]
+	} else if (resource === "slack" && action === "api")
+		targets = slackTargets(text(body?.method), record(body?.args))
+	else if (resource === "ms" && action === "request")
+		targets = graphTargets(
+			(text(body?.method) || "GET").toUpperCase(),
+			graphPath(body),
+			body?.body,
+		)
+	else if (resource === "ado" && action === "write") {
+		const number = /\/(?:workitems|pullrequests)\/(\d+)(?:$|[/?])/i.exec(
+			text(body?.path),
+		)?.[1]
+		targets = number ? [{ kind: "item", number }] : null
+	}
+	return targets?.length ? targets : null
+}
+
+const literal = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
+/**
+ * Whether `said` has `name` as a word of its own, any case: "Vikash" in "DM vikash a story" and
+ * U123 in "<@U123>", but not "ana@example.com" in "diana@example.com" or "Vikash" in an email.
+ */
+function says(said: string, name: string): boolean {
+	const clean = name.trim().normalize("NFKC")
+	if (clean.length < 2) return false
+	return new RegExp(
+		`(?<![\\p{L}\\p{N}._%+-])${literal(clean)}(?![\\p{L}\\p{N}]|[.@][\\p{L}\\p{N}])`,
+		"iu",
+	).test(said)
+}
+
+/** Ways of pointing at the conversation they're writing in. */
+const HERE =
+	/\b(this (channel|chat|conversation|group|thread|dm)|(in|to|into|from) here)\b/i
+
+/** "work item 123", "PR #7", "!7", or a link to it. */
+const item = (number: string) =>
+	new RegExp(
+		`(#|!|/edit/|/pullrequest/|\\b(work ?items?|items?|bugs?|tasks?|stor(y|ies)|prs?|pull ?requests?|issues?|tickets?|features?|epics?|ids?)\\s*(no\\.?|number)?\\s*#?)${number}(?!\\d)`,
+		"i",
+	)
+
+function named(said: string, known: Known, here: string): boolean {
+	const { target, names } = known
+	switch (target.kind) {
+		case "person":
+			return [target.id, target.email, ...names].some(
+				name => name && says(said, name),
+			)
+		case "channel": {
+			const channelNames = [target.name, ...names]
+				.map(name => name?.replace(/^#/, ""))
+				.filter(name => name !== undefined && name !== "")
+			return (
+				Boolean(
+					target.id &&
+					(says(said, target.id) ||
+						(target.id === here && HERE.test(said))),
+				) ||
+				channelNames.some(
+					name =>
+						says(said, `#${name}`) || says(said, `${name} channel`),
+				)
+			)
+		}
+		case "message":
+			return said.includes(
+				`/archives/${target.channel}/p${target.ts.replace(".", "")}`,
+			)
+		case "item":
+			return item(target.number).test(said)
+		case "mention":
+			return (
+				said.includes(`<!${target.group}`) ||
+				(!target.group.includes("^") && says(said, `@${target.group}`))
+			)
+	}
+}
+
+/**
+ * Whether the person asked for exactly this themselves: their own words in the running turn
+ * (`words`: the messages they wrote, nothing quoted from elsewhere) name every target, as a mention,
+ * ID, email, name the bot found, "#channel", "this channel" for `here`, or "work item 123". No
+ * words (a scheduled run, an answer) or unknown targets: no, so they're asked.
+ */
+export function askedFor(
+	words: string[],
+	known: Known[] | null,
+	here: string,
+): boolean {
+	const said = words.join("\n").normalize("NFKC")
+	if (!said.trim() || !known?.length) return false
+	return known.every(target => named(said, target, here))
+}
+
+/**
  * What the request did, if it changed something outside the conversation: "sent a Slack DM to
  * @ana". A turn cut off after one of these isn't started over on its own.
  */

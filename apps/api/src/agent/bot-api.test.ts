@@ -9,6 +9,8 @@ Bun.env.DATA_DIR = dataDir
 const { callerCredential, startBotApi } = await import("./bot-api")
 const { oauthCallback } = await import("../slack/user-tokens")
 const microsoft = await import("../integrations/microsoft")
+const { forgetWords, hearWords } = await import("../slack/approvals")
+const { sessionKey } = await import("../sessions")
 if (previousDataDir === undefined) delete Bun.env.DATA_DIR
 else Bun.env.DATA_DIR = previousDataDir
 
@@ -98,12 +100,17 @@ afterAll(async () => {
 	await Bun.$`rm -rf ${dataDir}`.quiet()
 })
 
-function dm(scheduled = false, text = "Please send a status update.") {
+function dm(
+	scheduled = false,
+	text = "Please send a status update.",
+	asked = false,
+) {
 	return fetch(`${api.url}/slack/dm`, {
 		method: "POST",
 		headers: {
 			"content-type": "application/json",
 			"x-laddu-caller": callerCredential({ ...caller, scheduled }),
+			...(asked ? { "x-laddu-asked": "1" } : {}),
 		},
 		body: JSON.stringify({ to: "U00000002", text }),
 	})
@@ -198,6 +205,39 @@ test("after sign-in, the DM uses the sender's token and their conversation", asy
 		text: "Needs your OK: send a Slack DM as them to U00000002",
 	})
 	expect(JSON.stringify(posts[0]?.blocks)).toContain("laddu_ok_allow")
+})
+
+test("--asked skips their OK only when their own words this turn name the recipient", async () => {
+	const key = sessionKey(caller.channel, caller.threadTs, caller.userId)
+	const sentAsThem = () =>
+		opens.filter(open => open.token === "test-user-token").length
+	const waits = async (response: Response) => {
+		expect(response.status).toBe(428)
+		expect(sentAsThem()).toBe(0)
+		posts.length = 0
+	}
+	try {
+		// The header alone, from anything in the container, isn't enough.
+		await waits(await dm(false, "Status update", true))
+		// Their words are about something else (the DM came from a file, page or someone else).
+		hearWords(key, "summarize the incident doc for me")
+		await waits(await dm(false, "Status update", true))
+		// Their words name the recipient, but laddu didn't say they asked: its own step, so it asks.
+		forgetWords(key)
+		hearWords(key, "DM <@U00000002> a status update")
+		await waits(await dm(false, "Status update"))
+		// A scheduled run in the same thread has no live words of theirs.
+		await waits(await dm(true, "Status update", true))
+		// They asked for exactly this.
+		const response = await dm(false, "Status update", true)
+		expect(response.status).toBe(200)
+		expect(sentAsThem()).toBe(1)
+		expect(posts.map(post => post.text)).not.toContain(
+			"Needs your OK: send a Slack DM as them to U00000002",
+		)
+	} finally {
+		forgetWords(key)
+	}
 })
 
 test("expanded Slack CLI commands reach signed API tools and persisted rules", async () => {
