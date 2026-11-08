@@ -180,7 +180,7 @@ export async function openReply(
 	const postText = async (text: string) => {
 		let first = true
 		for (const part of text ? chunkMarkdown(text) : []) {
-			const message = await client.chat.postMessage({
+			const message = await post(client, {
 				channel: target.channel,
 				thread_ts: target.threadTs,
 				markdown_text: part,
@@ -306,7 +306,35 @@ export function todoMessage(todos: Todos, now = Date.now()) {
 	}
 }
 
-/** Whether the thread has moved on since this message: anyone posted, or (`people`) a person did. */
+/**
+ * Recent messages replies posted (progress, answers, to-do lists), by channel and ts (a ts is only
+ * unique in its channel). When several people ask at once, another person's reply landing below
+ * this one's progress doesn't push its answer out of it.
+ */
+const replyPosts = new Set<string>()
+const MAX_REPLY_POSTS = 2_000
+const postKey = (channel: string, ts: string) => `${channel}:${ts}`
+function tracked<T extends { ts?: string }>(channel: string, posted: T) {
+	if (posted.ts) {
+		replyPosts.add(postKey(channel, posted.ts))
+		if (replyPosts.size > MAX_REPLY_POSTS)
+			replyPosts.delete(replyPosts.values().next().value!)
+	}
+	return posted
+}
+const post = async (
+	client: WebClient,
+	args: Parameters<WebClient["chat"]["postMessage"]>[0],
+) => tracked(args.channel, await client.chat.postMessage(args))
+const stream = async (
+	client: WebClient,
+	args: Parameters<WebClient["chat"]["startStream"]>[0],
+) => tracked(args.channel, await client.chat.startStream(args))
+
+/**
+ * Whether the thread has moved on since this message: anyone posted, or (`people`) a person did.
+ * Other replies don't count, so it reads on past them.
+ */
 async function buried(
 	client: WebClient,
 	target: ReplyTarget,
@@ -314,16 +342,27 @@ async function buried(
 	people = false,
 ) {
 	try {
-		const page = await client.conversations.replies({
-			channel: target.channel,
-			ts: target.threadTs,
-			oldest: ts,
-			limit: 20,
-		})
-		return !!page.messages?.some(
-			message =>
-				Number(message.ts) > Number(ts) && !(people && message.bot_id),
-		)
+		let cursor: string | undefined
+		do {
+			const page = await client.conversations.replies({
+				channel: target.channel,
+				ts: target.threadTs,
+				oldest: ts,
+				limit: 20,
+				cursor,
+			})
+			if (
+				page.messages?.some(
+					message =>
+						Number(message.ts) > Number(ts) &&
+						!replyPosts.has(postKey(target.channel, message.ts!)) &&
+						!(people && message.bot_id),
+				)
+			)
+				return true
+			cursor = page.response_metadata?.next_cursor || undefined
+		} while (cursor)
+		return false
 	} catch {
 		return false
 	}
@@ -374,7 +413,7 @@ function todoBoard(
 		)
 			return
 		const old = ts
-		const posted = await client.chat.postMessage({
+		const posted = await post(client, {
 			channel,
 			thread_ts: target.threadTs,
 			...message,
@@ -429,7 +468,7 @@ async function openStream(
 	const { channel } = target
 	let title = first.title
 	const begin = async (tasks: Step[]) => {
-		const { ts } = await client.chat.startStream({
+		const { ts } = await stream(client, {
 			channel,
 			thread_ts: target.threadTs,
 			recipient_user_id: target.userId,
@@ -619,7 +658,7 @@ async function openStream(
 				if (inline) rest.unshift(inline)
 			}
 			for (const part of rest)
-				await client.chat.postMessage({
+				await post(client, {
 					channel,
 					thread_ts: target.threadTs,
 					markdown_text: part,
@@ -654,7 +693,7 @@ async function openStream(
 					],
 				})
 				.catch(() =>
-					client.chat.postMessage({
+					post(client, {
 						channel,
 						thread_ts: target.threadTs,
 						markdown_text: "_Stopped._",
@@ -681,7 +720,7 @@ async function openPlaceholder(
 	first: Step,
 ): Promise<PostedReply> {
 	const { channel, threadTs } = target
-	const placeholder = await client.chat.postMessage({
+	const placeholder = await post(client, {
 		channel,
 		thread_ts: threadTs,
 		markdown_text: first.title,
@@ -748,7 +787,7 @@ async function openPlaceholder(
 				.catch(async error => {
 					// Slack won't edit a message into different block types (e.g. a Markdown table): post it fresh.
 					if (error?.data?.error !== "block_mismatch") throw error
-					await client.chat.postMessage({
+					await post(client, {
 						channel,
 						thread_ts: threadTs,
 						markdown_text: first!,
@@ -757,7 +796,7 @@ async function openPlaceholder(
 					await client.chat.delete({ channel, ts }).catch(() => {})
 				})
 			for (const part of rest)
-				await client.chat.postMessage({
+				await post(client, {
 					channel,
 					thread_ts: threadTs,
 					markdown_text: part,

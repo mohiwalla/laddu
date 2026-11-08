@@ -1,4 +1,4 @@
-import { expect, mock, spyOn, test } from "bun:test"
+import { expect, mock, test } from "bun:test"
 import type { App } from "@slack/bolt"
 import { AgentSessions } from "./agent-sessions"
 
@@ -108,28 +108,30 @@ test("status transitions are ordered even when requests overlap an API response"
 		apiCall.mock.calls.map(
 			call => ((call as unknown[])[1] as { status: string }).status,
 		),
-	).toEqual(["processing", "active", "processing"])
+		// Each call sends the state when its turn comes: the second request had started by then.
+	).toEqual(["processing", "processing", "processing"])
 	await second.finish()
+	expect(apiCall).toHaveBeenLastCalledWith(
+		"agents.sessions.setStatus",
+		expect.objectContaining({ status: "active" }),
+	)
 })
 
-test("the status wears the look of whoever it's working for, latest first", async () => {
+test("the status wears the look of whoever it's working for, laddu's own for several", async () => {
 	const apiCall = mock(async () => ({ ok: true }))
 	const client = clientWith(apiCall)
 	const sessions = new AgentSessions()
 	const kanha = { username: "kanha", icon_url: "https://x/kanha.png" }
-	const jalebi = { icon_url: "https://x/jalebi.png" }
 	const first = sessions.track(client, target)
 	const second = sessions.track(client, { ...target, userId: "U_TWO" })
 	const third = sessions.track(client, { ...target, userId: "U_THREE" })
-	// All three start within one millisecond: start order still decides.
-	const now = spyOn(Date, "now").mockReturnValue(1_000)
 	await first.start(kanha)
-	// Someone without a look of their own gets the bot's name, which clears the picture too.
-	await second.start()
-	await third.start(jalebi)
-	now.mockRestore()
-	await first.finish()
+	// Slack's Stop reads "Stop <name>" and stops only the clicker's work: one person's name on it
+	// while it works for several would read as theirs alone.
+	await second.start(kanha)
+	await third.start()
 	await third.finish()
+	await first.finish()
 	await second.finish()
 	expect(
 		apiCall.mock.calls.map(call => {
@@ -142,10 +144,99 @@ test("the status wears the look of whoever it's working for, latest first", asyn
 		}),
 	).toEqual([
 		{ status: "processing", ...kanha },
+		// Same look for both: still theirs.
+		{ status: "processing", ...kanha },
+		// A different look joins: laddu's own name, which clears the picture too.
 		{ status: "processing", username: "laddu", icon_url: undefined },
-		{ status: "processing", username: undefined, ...jalebi },
-		{ status: "processing", username: undefined, ...jalebi },
-		{ status: "processing", username: "laddu", icon_url: undefined },
-		{ status: "active", username: "laddu", icon_url: undefined },
+		{ status: "processing", ...kanha },
+		{ status: "processing", ...kanha },
+		{ status: "active", ...kanha },
 	])
 })
+
+test("a Stop that stopped nothing sets the status again, so Slack's Stopping… goes back to working", async () => {
+	const apiCall = mock(async () => ({ ok: true }))
+	const client = clientWith(apiCall)
+	const sessions = new AgentSessions()
+	const run = sessions.track(client, target)
+	await sessions.resume(target.channel, target.threadTs)
+	// Not started yet: no status to set again.
+	expect(apiCall).not.toHaveBeenCalled()
+	await run.start()
+	expect(sessions.stop(target.channel, target.threadTs, "U_OTHER")).toBe(0)
+	await sessions.resume(target.channel, target.threadTs)
+	// Setting processing again isn't a change Slack acts on: active for a moment first.
+	expect(statuses(apiCall)).toEqual(["processing", "active", "processing"])
+	await run.finish()
+	await sessions.resume(target.channel, target.threadTs)
+	expect(statuses(apiCall)).toEqual([
+		"processing",
+		"active",
+		"processing",
+		"active",
+	])
+})
+
+test("someone's Stop while laddu still works for another turns Stopping… back to working", async () => {
+	const apiCall = mock(async () => ({ ok: true }))
+	const client = clientWith(apiCall)
+	const sessions = new AgentSessions()
+	const mine = sessions.track(client, target)
+	const theirs = sessions.track(client, { ...target, userId: "U_TWO" })
+	await mine.start()
+	await theirs.start()
+	expect(sessions.stop(target.channel, target.threadTs, target.userId)).toBe(
+		1,
+	)
+	await sessions.resume(target.channel, target.threadTs)
+	await mine.finish()
+	expect(statuses(apiCall)).toEqual([
+		"processing",
+		"processing",
+		"active",
+		"processing",
+		"processing",
+	])
+	await theirs.finish()
+	expect(statuses(apiCall).at(-1)).toBe("active")
+})
+
+test("a Stop that only withdrew a queued request still turns Stopping… back to working", async () => {
+	const apiCall = mock(async () => ({ ok: true }))
+	const client = clientWith(apiCall)
+	const sessions = new AgentSessions()
+	const running = sessions.track(client, target)
+	const queued = sessions.track(client, { ...target, userId: "U_TWO" })
+	await running.start()
+	expect(sessions.stop(target.channel, target.threadTs, "U_TWO")).toBe(1)
+	await sessions.resume(target.channel, target.threadTs)
+	await queued.finish()
+	expect(statuses(apiCall)).toEqual(["processing", "active", "processing"])
+})
+
+test("work that ends while Stopping… is cleared leaves the status active", async () => {
+	let release!: () => void
+	const gate = new Promise<void>(resolve => (release = resolve))
+	const apiCall = mock(async (_method: string, args: { status: string }) => {
+		if (args.status === "active" && apiCall.mock.calls.length === 2)
+			await gate
+		return { ok: true }
+	})
+	const client = clientWith(apiCall)
+	const sessions = new AgentSessions()
+	const run = sessions.track(client, target)
+	await run.start()
+	const resumed = sessions.resume(target.channel, target.threadTs)
+	// The recovery's active call is slow; the work ends meanwhile.
+	await Bun.sleep(0)
+	const finished = run.finish()
+	release()
+	await Promise.all([resumed, finished])
+	expect(statuses(apiCall)).toEqual(["processing", "active", "active"])
+})
+
+function statuses(apiCall: ReturnType<typeof mock>) {
+	return apiCall.mock.calls.map(
+		call => ((call as unknown[])[1] as { status: string }).status,
+	)
+}

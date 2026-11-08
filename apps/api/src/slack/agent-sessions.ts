@@ -10,12 +10,98 @@ type Run = {
 	as: { username?: string; icon_url?: string }
 	/** When it began running (not while queued behind another). */
 	startedAt?: number
-	/** Order of starting, unlike startedAt never tied: the latest picks the status's look. */
-	startOrder?: number
 }
-type Session = { runs: Set<Run>; updates: Promise<void> }
+type Session = {
+	runs: Set<Run>
+	/** Status calls, one at a time: each works out what to send when its turn comes. */
+	updates: Promise<void>
+	client: App["client"]
+	channel: string
+	threadTs: string
+}
 
-let starts = 0
+/** Started and not stopped: what the status is working on. */
+const working = (session: Session) =>
+	[...session.runs].filter(
+		run => run.started && !run.controller.signal.aborted,
+	)
+
+/**
+ * The status (and Slack's "Stop <name>" on it) wears the look of whoever it's working for, or
+ * laddu's own while that's several people with different looks.
+ */
+function look(runs: Run[], fallback: Run["as"]): Run["as"] {
+	const [first, ...rest] = runs
+	if (!first) return fallback
+	return rest.every(
+		other =>
+			other.as.username === first.as.username &&
+			other.as.icon_url === first.as.icon_url,
+	)
+		? first.as
+		: {}
+}
+
+/** One status call; a failure is only logged. */
+async function setStatus(
+	session: Session,
+	status: "processing" | "active",
+	fallback: Run["as"],
+) {
+	const runs = working(session)
+	const as = look(runs, fallback)
+	const initiator = runs.at(-1)?.userId
+	try {
+		await session.client.apiCall("agents.sessions.setStatus", {
+			channel_id: session.channel,
+			thread_ts: session.threadTs,
+			status,
+			...(status === "processing" && initiator
+				? { initiator_user_id: initiator }
+				: {}),
+			// Slack keeps a name and picture until a call sets another; one that sets any
+			// replaces both, so the bot's own name puts its own picture back too.
+			...(as.username || as.icon_url ? as : { username: systemName() }),
+		})
+	} catch (error) {
+		// Agent surfaces may be unavailable for a workspace; ordinary replies still work.
+		console.warn(
+			"[agent session] status unavailable:",
+			(error as { data?: { error?: string } })?.data?.error ?? error,
+		)
+	}
+}
+
+/**
+ * Sets the status from the runs as they are when this call's turn comes: processing while it works
+ * for anyone (a stopped run still finishing counts), else active.
+ */
+function sync(session: Session, fallback: Run["as"]) {
+	session.updates = session.updates.then(() =>
+		setStatus(
+			session,
+			[...session.runs].some(run => run.started)
+				? "processing"
+				: "active",
+			fallback,
+		),
+	)
+	return session.updates
+}
+
+/**
+ * After a Stop click Slack shows "Stopping…" until the status changes, and processing again isn't
+ * a change: while it still works for someone, it goes active for a moment, then processing (if
+ * that work didn't end meanwhile).
+ */
+function recover(session: Session) {
+	session.updates = session.updates.then(async () => {
+		if (!working(session).length) return
+		await setStatus(session, "active", {})
+		if (working(session).length) await setStatus(session, "processing", {})
+	})
+	return session.updates
+}
 
 /** Slack has one agent status per thread, even when several people ask laddu at once. */
 export class AgentSessions {
@@ -25,7 +111,13 @@ export class AgentSessions {
 		const key = `${target.channel}:${target.threadTs}`
 		let session = this.sessions.get(key)
 		if (!session) {
-			session = { runs: new Set(), updates: Promise.resolve() }
+			session = {
+				runs: new Set(),
+				updates: Promise.resolve(),
+				client,
+				channel: target.channel,
+				threadTs: target.threadTs,
+			}
 			this.sessions.set(key, session)
 		}
 		const current = session
@@ -36,33 +128,6 @@ export class AgentSessions {
 			as: {},
 		}
 		current.runs.add(run)
-		const update = (status: "processing" | "active", as: Run["as"]) => {
-			current.updates = current.updates.then(async () => {
-				try {
-					await client.apiCall("agents.sessions.setStatus", {
-						channel_id: target.channel,
-						thread_ts: target.threadTs,
-						status,
-						...(status === "processing"
-							? { initiator_user_id: target.userId }
-							: {}),
-						// Slack keeps a name and picture until a call sets another; one that sets any
-						// replaces both, so the bot's own name puts its own picture back too.
-						...(as.username || as.icon_url
-							? as
-							: { username: systemName() }),
-					})
-				} catch (error) {
-					// Agent surfaces may be unavailable for a workspace; ordinary replies still work.
-					console.warn(
-						"[agent session] status unavailable:",
-						(error as { data?: { error?: string } })?.data?.error ??
-							error,
-					)
-				}
-			})
-			return current.updates
-		}
 		return {
 			signal: run.controller.signal,
 			/** `as`: the name and picture they gave laddu, for the status while it works for them. */
@@ -71,26 +136,26 @@ export class AgentSessions {
 				run.as = as
 				run.started = true
 				run.startedAt = Date.now()
-				run.startOrder = ++starts
-				await update("processing", run.as)
+				await sync(current, run.as)
 				run.controller.signal.throwIfAborted()
 			},
 			finish: async () => {
 				if (!current.runs.delete(run)) return
-				if (run.started) {
-					// Still working for someone else here: the status wears the latest one's look.
-					const other = [...current.runs]
-						.filter(other => other.started)
-						.sort((a, b) => b.startOrder! - a.startOrder!)[0]
-					await update(
-						other ? "processing" : "active",
-						(other ?? run).as,
-					)
-				} else await current.updates
+				if (run.started) await sync(current, run.as)
+				else await current.updates
 				if (!current.runs.size && this.sessions.get(key) === current)
 					this.sessions.delete(key)
 			},
 		}
+	}
+
+	/**
+	 * After a Stop click: Slack shows "Stopping…" until the status changes, so while it still works
+	 * for someone (the click stopped nothing, or only the clicker's own) it goes back to working.
+	 */
+	async resume(channel: string, threadTs: string) {
+		const session = this.sessions.get(`${channel}:${threadTs}`)
+		if (session) await recover(session)
 	}
 
 	/** One person's requests running now, oldest first, by thread. */

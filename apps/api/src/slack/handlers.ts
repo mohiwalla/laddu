@@ -634,12 +634,21 @@ export function registerHandlers(
 	})
 
 	// Slack's Stop button: anyone in the thread sees it, so it only stops the clicker's own work.
-	// Slack ends the progress message on any click; a click that stops nothing gets it back (on its
-	// next update) and tells the clicker whose work it is.
+	// Slack ends the progress message on any click (a reply carries on in a new one on its next
+	// update) and shows "Stopping…" until the status changes: it goes back to working for anyone
+	// else's, and a click that stopped nothing tells the clicker whose work it is.
 	app.event("agent_session_stopped", async ({ event, client }) => {
 		if (!isAllowed(event.user)) return
-		if (agentSessions.stop(event.channel, event.thread_ts, event.user))
-			return
+		const stopped = agentSessions.stop(
+			event.channel,
+			event.thread_ts,
+			event.user,
+		)
+		console.log(
+			`[agent session] Stop from ${event.user} in ${event.channel}:${event.thread_ts}: stopped ${stopped}`,
+		)
+		await agentSessions.resume(event.channel, event.thread_ts)
+		if (stopped) return
 		const askers = agentSessions.askers(event.channel, event.thread_ts)
 		if (!askers.length) return
 		await client.chat

@@ -462,6 +462,87 @@ test("the answer goes below parts posted while it worked", async () => {
 	})
 })
 
+test("another person's reply posted meanwhile doesn't push the answer out of its steps", async () => {
+	const thread = { ...target, threadTs: "1.002" }
+	const mine = streamingClient()
+	;(mine.client as unknown as { conversations: unknown }).conversations = {
+		replies: mock(async () => ({
+			messages: [{ ts: thread.threadTs }, { ts: "2.004", bot_id: "B1" }],
+		})),
+	}
+	const theirs = streamingClient()
+	theirs.postMessage.mockResolvedValue({ ok: true, ts: "2.004" })
+	const reply = await openReply(mine.client, thread)
+	reply.step({ id: "read", title: "Reading the file", status: "complete" })
+	// They asked at the same time; their answer (no steps) lands below these steps.
+	const other = await openReply(theirs.client, { ...thread, userId: "U_TWO" })
+	await other.finish("Hi!")
+	await reply.finish("It says hello.")
+	const chunks = mine.stopStream.mock.calls[0]![0].chunks ?? []
+	expect(chunks).toContainEqual({
+		type: "markdown_text",
+		text: "It says hello.",
+	})
+	expect(mine.postMessage).not.toHaveBeenCalled()
+})
+
+test("a part it posted on a later page of the thread still puts the answer below", async () => {
+	const thread = { ...target, threadTs: "1.003" }
+	const theirs = streamingClient()
+	theirs.postMessage.mockResolvedValue({ ok: true, ts: "2.005" })
+	await (
+		await openReply(theirs.client, { ...thread, userId: "U_TWO" })
+	).finish("Hi!")
+	const mine = streamingClient()
+	const replies = mock(async (args: { cursor?: string }) =>
+		args.cursor
+			? { messages: [{ ts: "2.006", bot_id: "B1" }] }
+			: {
+					// The first page holds only another person's reply.
+					messages: [
+						{ ts: thread.threadTs },
+						{ ts: "2.005", bot_id: "B1" },
+					],
+					response_metadata: { next_cursor: "next" },
+				},
+	)
+	;(mine.client as unknown as { conversations: unknown }).conversations = {
+		replies,
+	}
+	const reply = await openReply(mine.client, thread)
+	reply.step({ id: "post", title: "Posting the haiku", status: "complete" })
+	await reply.finish("All three are up.")
+	expect(replies).toHaveBeenCalledTimes(2)
+	expect(mine.postMessage).toHaveBeenCalledWith(
+		expect.objectContaining({ markdown_text: "All three are up." }),
+	)
+})
+
+test("a reply's message in another channel with the same ts doesn't hide one here", async () => {
+	const thread = { ...target, threadTs: "1.004" }
+	const elsewhere = streamingClient()
+	elsewhere.postMessage.mockResolvedValue({ ok: true, ts: "2.007" })
+	await (
+		await openReply(elsewhere.client, {
+			...thread,
+			channel: "C_TWO",
+			userId: "U_TWO",
+		})
+	).finish("Hi!")
+	const mine = streamingClient()
+	;(mine.client as unknown as { conversations: unknown }).conversations = {
+		replies: mock(async () => ({
+			messages: [{ ts: thread.threadTs }, { ts: "2.007", user: "U_TWO" }],
+		})),
+	}
+	const reply = await openReply(mine.client, thread)
+	reply.step({ id: "read", title: "Reading the file", status: "complete" })
+	await reply.finish("It says hello.")
+	expect(mine.postMessage).toHaveBeenCalledWith(
+		expect.objectContaining({ markdown_text: "It says hello." }),
+	)
+})
+
 test("`slack todo` reaches the reply in progress for that person and thread", async () => {
 	const { client, postMessage } = streamingClient()
 	const thread = { ...target, threadTs: "7.001" }
