@@ -83,7 +83,7 @@ enable it without overwriting its OAuth URLs, scopes or other deployment setting
 
 ```sh
 bun run scripts/slack-sync-events.ts --app <APP_ID> --team <WORKSPACE> --agent-view
-systemctl --user restart laddu-srafis.service
+systemctl --user restart laddu@<name>.service
 ```
 
 Laddu reports native working status while answering. The `agent_session_stopped` subscription
@@ -250,7 +250,7 @@ Enable the saved event-rule subscriptions on an existing app without overwriting
 ```sh
 cd apps/api
 bun run scripts/slack-sync-events.ts --app <APP_ID> --team <WORKSPACE>
-systemctl --user restart laddu-srafis.service
+systemctl --user restart laddu@<name>.service
 ```
 
 The operator must already be signed in through `slack-cli auth`. Invite laddu to channels where
