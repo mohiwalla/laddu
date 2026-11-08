@@ -254,6 +254,7 @@ test.each(["success", "failure", "stop"] as const)(
 					channel_id: "D_AGENT",
 					thread_ts: ts,
 					status: "active",
+					username: "laddu",
 				},
 			)
 			expect(run).toHaveBeenCalledTimes(1)

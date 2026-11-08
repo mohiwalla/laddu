@@ -173,6 +173,7 @@ async function handle(
 					channel: trigger.channel,
 					thread_ts: threadTs,
 					markdown_text: "_Nothing to stop._",
+					...(await postAs(trigger)),
 				})
 				.catch(() => {})
 		return
@@ -200,8 +201,9 @@ async function handle(
 		let started = false
 		const user = { teamId: trigger.teamId, userId: trigger.userId }
 		try {
+			const as = await postAs(user)
 			if (!quiet) {
-				await agent.start()
+				await agent.start(as)
 				started = true
 			}
 			reply = await openReply(
@@ -210,7 +212,7 @@ async function handle(
 					channel: trigger.channel,
 					threadTs,
 					...user,
-					as: await postAs(user),
+					as,
 				},
 				message => markReply(inflightKey, message).catch(() => {}),
 			)
@@ -220,7 +222,7 @@ async function handle(
 			const onStep = (step: Step) => {
 				if (!started) {
 					started = true
-					agent.start().catch(() => {})
+					agent.start(as).catch(() => {})
 				}
 				reply!.step(step)
 				if (!step.computer || linkSent) return
@@ -372,6 +374,7 @@ async function handle(
 				trigger.channel,
 				threadTs,
 				result.files,
+				as,
 			).catch(error => {
 				console.error(`[${key}] upload failed`, error)
 				problems.push(
@@ -768,6 +771,10 @@ export function registerHandlers(
 			.postMessage({
 				channel: command.channel_id,
 				markdown_text: `<@${command.user_id}> asked: ${request}`,
+				...(await postAs({
+					teamId: context.teamId!,
+					userId: command.user_id,
+				})),
 			})
 			.catch(() => null)
 		if (!echo?.ts) {
@@ -935,6 +942,7 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 				target.channel,
 				target.threadTs,
 				result.files,
+				await postAs(user),
 			).catch(error =>
 				console.error(`[scheduler] ${job.id} upload failed`, error),
 			)

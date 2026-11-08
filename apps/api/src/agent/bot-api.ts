@@ -677,6 +677,7 @@ async function handlePost(
 				name: file.name,
 				data: Uint8Array.fromBase64(file.data),
 			})),
+			as,
 		)
 		return reply(
 			200,

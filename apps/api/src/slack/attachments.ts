@@ -52,12 +52,16 @@ export async function downloadAttachments(
 	return results.filter(file => file !== null)
 }
 
-/** Uploads files as one message, in a thread or (no `threadTs`) the channel (needs `files:write`). */
+/**
+ * Uploads files as one message, in a thread or (no `threadTs`) the channel (needs `files:write`),
+ * wearing the name and picture the person gave laddu (`as`, appearance.ts).
+ */
 export async function uploadFiles(
 	client: WebClient,
 	channel: string,
 	threadTs: string | undefined,
 	files: { name: string; data: Uint8Array }[],
+	as: { username?: string; icon_url?: string } = {},
 ): Promise<void> {
 	if (!files.length) return
 	const uploaded = await Promise.all(
@@ -82,5 +86,7 @@ export async function uploadFiles(
 		files: uploaded as [(typeof uploaded)[number], ...typeof uploaded],
 		channel_id: channel,
 		...(threadTs ? { thread_ts: threadTs } : {}),
+		// Slack takes these (chat:write.customize); the SDK's types don't list them yet.
+		...(as as object),
 	})
 }

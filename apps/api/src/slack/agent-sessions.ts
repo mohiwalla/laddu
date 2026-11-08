@@ -1,14 +1,21 @@
 import type { App } from "@slack/bolt"
 import type { ReplyTarget } from "./reply"
+import { systemName } from "./system"
 
 type Run = {
 	controller: AbortController
 	started: boolean
 	userId: string
+	/** The name and picture they gave laddu (appearance.ts), shown on the status. */
+	as: { username?: string; icon_url?: string }
 	/** When it began running (not while queued behind another). */
 	startedAt?: number
+	/** Order of starting, unlike startedAt never tied: the latest picks the status's look. */
+	startOrder?: number
 }
 type Session = { runs: Set<Run>; updates: Promise<void> }
+
+let starts = 0
 
 /** Slack has one agent status per thread, even when several people ask laddu at once. */
 export class AgentSessions {
@@ -26,9 +33,10 @@ export class AgentSessions {
 			controller: new AbortController(),
 			started: false,
 			userId: target.userId,
+			as: {},
 		}
 		current.runs.add(run)
-		const update = (status: "processing" | "active") => {
+		const update = (status: "processing" | "active", as: Run["as"]) => {
 			current.updates = current.updates.then(async () => {
 				try {
 					await client.apiCall("agents.sessions.setStatus", {
@@ -38,6 +46,11 @@ export class AgentSessions {
 						...(status === "processing"
 							? { initiator_user_id: target.userId }
 							: {}),
+						// Slack keeps a name and picture until a call sets another; one that sets any
+						// replaces both, so the bot's own name puts its own picture back too.
+						...(as.username || as.icon_url
+							? as
+							: { username: systemName() }),
 					})
 				} catch (error) {
 					// Agent surfaces may be unavailable for a workspace; ordinary replies still work.
@@ -52,22 +65,28 @@ export class AgentSessions {
 		}
 		return {
 			signal: run.controller.signal,
-			async start() {
+			/** `as`: the name and picture they gave laddu, for the status while it works for them. */
+			async start(as: Run["as"] = {}) {
 				run.controller.signal.throwIfAborted()
+				run.as = as
 				run.started = true
 				run.startedAt = Date.now()
-				await update("processing")
+				run.startOrder = ++starts
+				await update("processing", run.as)
 				run.controller.signal.throwIfAborted()
 			},
 			finish: async () => {
 				if (!current.runs.delete(run)) return
-				if (run.started)
+				if (run.started) {
+					// Still working for someone else here: the status wears the latest one's look.
+					const other = [...current.runs]
+						.filter(other => other.started)
+						.sort((a, b) => b.startOrder! - a.startOrder!)[0]
 					await update(
-						[...current.runs].some(other => other.started)
-							? "processing"
-							: "active",
+						other ? "processing" : "active",
+						(other ?? run).as,
 					)
-				else await current.updates
+				} else await current.updates
 				if (!current.runs.size && this.sessions.get(key) === current)
 					this.sessions.delete(key)
 			},

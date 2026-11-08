@@ -3,6 +3,7 @@
  * person, with their own Slack sign-in (user-tokens.ts), when they've connected; otherwise from
  * laddu (bot token), saying who it's from.
  */
+import { postAs } from "../appearance"
 import { systemName } from "./system"
 import type { App } from "@slack/bolt"
 import { forget, userToken } from "./user-tokens"
@@ -209,6 +210,7 @@ export async function sendOnBehalf(
 	const { channel } = await client.conversations.open({ users: found.id })
 	await client.chat.postMessage({
 		channel: channel!.id!,
+		...(await postAs(from)),
 		markdown_text: `<@${from.userId}> asked ${systemName()} to send you this:\n\n${message}\n\n_Sent by ${systemName()} for <@${from.userId}>. To answer, message them directly._`,
 	})
 	console.info(

@@ -2,8 +2,9 @@
  * What each person calls laddu, and the picture it wears for them: set on the Home tab or by asking
  * laddu (`appearance`). Every message laddu posts for that person carries them (Slack's
  * chat:write.customize), so everyone in the conversation sees them; laddu's @handle, profile and
- * Home tab stay its own. Pictures are served from the gateway's public HTTPS address, where Slack
- * fetches them once per message; without one, only names work.
+ * Home tab stay its own, as do its reactions (Slack can't dress those up) and system notices
+ * (slack/system.ts), which are the bot's own. Pictures are served from the gateway's public HTTPS address, where Slack fetches them once per
+ * message; without one, only names work.
  */
 import type { App } from "@slack/bolt"
 import { paths } from "./config"

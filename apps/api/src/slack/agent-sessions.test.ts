@@ -1,4 +1,4 @@
-import { expect, mock, test } from "bun:test"
+import { expect, mock, spyOn, test } from "bun:test"
 import type { App } from "@slack/bolt"
 import { AgentSessions } from "./agent-sessions"
 
@@ -36,6 +36,7 @@ test("native status stays processing until everyone's work in the thread ends", 
 		channel_id: target.channel,
 		thread_ts: target.threadTs,
 		status: "active",
+		username: "laddu",
 	})
 })
 
@@ -48,13 +49,17 @@ test("Stop cancels one person's active and queued requests, only in the selected
 	const someoneElse = sessions.track(client, { ...target, userId: "U_TWO" })
 	const other = sessions.track(client, { ...target, threadTs: "2.002" })
 	await running.start()
-	expect(sessions.stop(target.channel, target.threadTs, target.userId)).toBe(2)
+	expect(sessions.stop(target.channel, target.threadTs, target.userId)).toBe(
+		2,
+	)
 	expect(running.signal.aborted).toBe(true)
 	expect(queued.signal.aborted).toBe(true)
 	expect(someoneElse.signal.aborted).toBe(false)
 	expect(other.signal.aborted).toBe(false)
 	// Nothing left of theirs to stop.
-	expect(sessions.stop(target.channel, target.threadTs, target.userId)).toBe(0)
+	expect(sessions.stop(target.channel, target.threadTs, target.userId)).toBe(
+		0,
+	)
 	await expect(queued.start()).rejects.toThrow()
 	await queued.finish()
 	await running.finish()
@@ -105,4 +110,42 @@ test("status transitions are ordered even when requests overlap an API response"
 		),
 	).toEqual(["processing", "active", "processing"])
 	await second.finish()
+})
+
+test("the status wears the look of whoever it's working for, latest first", async () => {
+	const apiCall = mock(async () => ({ ok: true }))
+	const client = clientWith(apiCall)
+	const sessions = new AgentSessions()
+	const kanha = { username: "kanha", icon_url: "https://x/kanha.png" }
+	const jalebi = { icon_url: "https://x/jalebi.png" }
+	const first = sessions.track(client, target)
+	const second = sessions.track(client, { ...target, userId: "U_TWO" })
+	const third = sessions.track(client, { ...target, userId: "U_THREE" })
+	// All three start within one millisecond: start order still decides.
+	const now = spyOn(Date, "now").mockReturnValue(1_000)
+	await first.start(kanha)
+	// Someone without a look of their own gets the bot's name, which clears the picture too.
+	await second.start()
+	await third.start(jalebi)
+	now.mockRestore()
+	await first.finish()
+	await third.finish()
+	await second.finish()
+	expect(
+		apiCall.mock.calls.map(call => {
+			const { status, username, icon_url } = (call as unknown[])[1] as {
+				status: string
+				username?: string
+				icon_url?: string
+			}
+			return { status, username, icon_url }
+		}),
+	).toEqual([
+		{ status: "processing", ...kanha },
+		{ status: "processing", username: "laddu", icon_url: undefined },
+		{ status: "processing", username: undefined, ...jalebi },
+		{ status: "processing", username: undefined, ...jalebi },
+		{ status: "processing", username: "laddu", icon_url: undefined },
+		{ status: "active", username: "laddu", icon_url: undefined },
+	])
 })

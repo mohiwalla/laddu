@@ -1,5 +1,6 @@
 /** Slack Free tools. Tokens stay on the host; the caller cannot select another person's identity. */
 import type { App } from "@slack/bolt"
+import { postAs } from "../appearance"
 import { connection, forget } from "./user-tokens"
 
 export type SlackClient = App["client"]
@@ -170,6 +171,8 @@ add("dnd.teamInfo", "either", "dnd:read", "", "users")
 add("dnd.setSnooze", "user", "dnd:write", "num_minutes", "", true)
 for (const verb of ["endSnooze", "endDnd"])
 	add(`dnd.${verb}`, "user", "dnd:write", "", "", true)
+/** Methods that post a message and can carry a name and picture (chat.scheduleMessage can't). */
+const POSTS = new Set(["chat.postMessage", "chat.postEphemeral"])
 add(
 	"chat.postMessage",
 	"either",
@@ -483,6 +486,9 @@ export async function callSlack(
 					await requireMember(client, person, options[key] as string)
 			}
 		if (input.method === "chat.postEphemeral") options.user = person.userId
+		// As laddu, its posts wear the name and picture this person gave it (appearance.ts).
+		if (!token && POSTS.has(input.method))
+			Object.assign(options, await postAs(person))
 		if (input.method === "users.profile.get" && !options.user)
 			options.user = person.userId
 		// Bot tokens cannot read channel threads with conversations.replies; use the person's token.

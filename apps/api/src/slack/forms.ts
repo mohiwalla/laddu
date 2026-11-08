@@ -308,6 +308,7 @@ export class SlackForms {
 				const message = await client.chat.postMessage({
 					channel: form.channel,
 					...(form.threadTs ? { thread_ts: form.threadTs } : {}),
+					...(await postAs(person)),
 					text: `<@${person.userId}> submitted ${form.title}.\n${JSON.stringify(answers).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}`,
 					unfurl_links: false,
 				})
