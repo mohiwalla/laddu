@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { needsOk, outsideAction, type ApiRequest } from "./actions"
+import {
+	askedFor,
+	needsOk,
+	outsideAction,
+	targetsOf,
+	type ApiRequest,
+} from "./actions"
 
 const request = (overrides: Partial<ApiRequest>): ApiRequest => ({
 	resource: "slack",
@@ -144,6 +150,190 @@ describe("OK requests read plainly", () => {
 		)!.detail
 		expect(detail).toBe(
 			'Send an email *as you* to ana@example.com, subject "Lunch":\n> Pizza at 1?',
+		)
+	})
+})
+
+describe("asked for exactly this", () => {
+	const dmAs = (to: string, text = "hi") =>
+		request({ action: "dm", asPerson: true, body: { to, text } })
+	// The names the bot found, for the first target (the recipient).
+	const known = (target: ApiRequest, names: string[] = []) =>
+		targetsOf(target)?.map((found, index) => ({
+			target: found,
+			names: index ? [] : names,
+		})) ?? null
+	const vikash = ["U0VIKASH1", "vikash@example.com", "vikash", "vikash kumar"]
+	const invite = (channel: string) =>
+		request({
+			action: "api",
+			asPerson: true,
+			slackWrite: true,
+			body: {
+				method: "conversations.invite",
+				args: { channel, users: "U0VIKASH1" },
+			},
+		})
+	const email = (message: Record<string, unknown>) =>
+		request({
+			resource: "ms",
+			action: "request",
+			body: { method: "POST", path: "me/sendMail", body: { message } },
+		})
+	const to = (address: string) => [{ emailAddress: { address } }]
+	const removeItem = (number: number) =>
+		request({
+			resource: "ado",
+			action: "write",
+			body: {
+				method: "DELETE",
+				path: `Proj/_apis/wit/workitems/${number}`,
+			},
+		})
+
+	test("the exact ask goes through", () => {
+		expect(
+			askedFor(
+				["<@U0LADDU1> DM <@U0VIKASH1> a story about crocodiles"],
+				known(dmAs("U0VIKASH1")),
+				"C0HERE001",
+			),
+		).toBe(true)
+		// By a name the bot found for them, in any case.
+		expect(
+			askedFor(
+				["dm Vikash a story about crocodiles"],
+				known(dmAs("U0VIKASH1"), vikash),
+				"C0HERE001",
+			),
+		).toBe(true)
+		expect(
+			askedFor(
+				["add <@U0VIKASH1> to this channel"],
+				known(invite("C0HERE001")),
+				"C0HERE001",
+			),
+		).toBe(true)
+		expect(
+			askedFor(
+				["email <mailto:ana@example.com|ana@example.com> the notes"],
+				known(email({ toRecipients: to("Ana@Example.com") })),
+				"C0HERE001",
+			),
+		).toBe(true)
+		expect(
+			askedFor(
+				["delete work item 123"],
+				known(removeItem(123)),
+				"C0HERE001",
+			),
+		).toBe(true)
+		expect(
+			askedFor(["delete #123"], known(removeItem(123)), "C0HERE001"),
+		).toBe(true)
+	})
+
+	test("a target they didn't name asks", () => {
+		// Their request was about something else: the DM came from a file, page or someone's message.
+		expect(
+			askedFor(
+				["summarize the incident doc"],
+				known(dmAs("U0VIKASH1"), vikash),
+				"C0HERE001",
+			),
+		).toBe(false)
+		// They named Vikash, but the message also pings people they didn't.
+		expect(
+			askedFor(
+				["DM Vikash a story"],
+				known(dmAs("U0VIKASH1", "story <@U0OTHER01>"), vikash),
+				"C0HERE001",
+			),
+		).toBe(false)
+		expect(
+			askedFor(
+				["DM Vikash a story"],
+				known(dmAs("U0VIKASH1", "<!channel> story"), vikash),
+				"C0HERE001",
+			),
+		).toBe(false)
+		// A name inside someone else's email isn't them.
+		expect(
+			askedFor(
+				["forward it to vikash@other.example"],
+				known(dmAs("U0VIKASH1"), vikash),
+				"C0HERE001",
+			),
+		).toBe(false)
+		// "this channel" only means the conversation they're writing in.
+		expect(
+			askedFor(
+				["add <@U0VIKASH1> to this channel"],
+				known(invite("C0ELSE001")),
+				"C0HERE001",
+			),
+		).toBe(false)
+		// A number in passing isn't a work item.
+		expect(
+			askedFor(
+				["in 5 minutes, tidy up the board"],
+				known(removeItem(5)),
+				"C0HERE001",
+			),
+		).toBe(false)
+		// Every recipient, Bcc too.
+		expect(
+			askedFor(
+				["email ana@example.com the notes"],
+				known(
+					email({
+						toRecipients: to("ana@example.com"),
+						bccRecipients: to("eve@example.com"),
+					}),
+				),
+				"C0HERE001",
+			),
+		).toBe(false)
+	})
+
+	test("what nobody can name in words always asks", () => {
+		const graph = (method: string, path: string) =>
+			targetsOf(
+				request({
+					resource: "ms",
+					action: "request",
+					body: { method, path },
+				}),
+			)
+		expect(graph("DELETE", "me/events/AAMk1")).toBeNull()
+		expect(graph("POST", "me/messages/AAMk1/reply")).toBeNull()
+		expect(graph("POST", "chats/19:abc/messages")).toBeNull()
+		expect(
+			targetsOf(
+				request({
+					action: "api",
+					asPerson: true,
+					slackWrite: true,
+					body: { method: "files.delete", args: { file: "F123" } },
+				}),
+			),
+		).toBeNull()
+		expect(
+			targetsOf(
+				request({
+					resource: "ado",
+					action: "write",
+					body: { method: "DELETE", path: "Proj/_apis/git/refs" },
+				}),
+			),
+		).toBeNull()
+		expect(askedFor(["delete that event"], null, "C0HERE001")).toBe(false)
+	})
+
+	test("no words of theirs this turn (a scheduled run, an answer) asks", () => {
+		expect(askedFor([], known(dmAs("U0VIKASH1")), "C0HERE001")).toBe(false)
+		expect(askedFor([" "], known(dmAs("U0VIKASH1")), "C0HERE001")).toBe(
+			false,
 		)
 	})
 })

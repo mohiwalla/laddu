@@ -31,6 +31,10 @@ Coding tasks (a fresh checkout per task; Microsoft tokens stay on the bot):
 --org picks the organization (default: theirs from `ado use`, or their only one). Paths are under
 https://dev.azure.com/<org>/; api-version 7.1 is added unless given. Full URLs on other Azure
 DevOps hosts (vssps, vsrm, almsearch) work too.
+
+Deleting and completing (merging) a pull request wait for their OK. --asked: their own message
+asked for exactly this; it goes straight through only when that message names the work item or PR
+number ("delete work item 123", "merge PR 7"), otherwise it still waits.
 """
 import argparse
 import html
@@ -45,8 +49,9 @@ import urllib.request
 
 API = os.environ.get("LADDU_API")
 CALLER = os.environ.get("LADDU_CALLER")
-# --asked (anywhere): the person asked for exactly this in their own words, so it doesn't wait for
-# their OK. The bot otherwise asks before risky actions as them.
+# --asked (anywhere): the person asked for exactly this in their own words. Only a hint: the bot
+# skips their OK for a risky action as them only when their own message this turn names everyone
+# and everything it acts on (people, channels, emails, work item numbers); otherwise it asks.
 ASKED = "--asked" in sys.argv
 while "--asked" in sys.argv:
     sys.argv.remove("--asked")

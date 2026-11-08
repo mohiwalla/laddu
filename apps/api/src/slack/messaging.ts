@@ -58,6 +58,36 @@ async function people(client: WebClient, teamId: string): Promise<Person[]> {
 	return found
 }
 
+/**
+ * What someone could be called in a message: their Slack ID, email, and each of their names and
+ * first names that nobody else in the workspace goes by. Empty when they aren't in the workspace.
+ */
+export async function namesFor(
+	client: WebClient,
+	teamId: string,
+	who: { id?: string; email?: string },
+): Promise<string[]> {
+	const everyone = await people(client, teamId)
+	const email = who.email?.toLowerCase()
+	const them = everyone.find(
+		person =>
+			person.id === who.id ||
+			(email !== undefined && person.email.toLowerCase() === email),
+	)
+	if (!them) return []
+	const called = (person: Person) => {
+		const full = [person.name, person.realName]
+			.map(name => name.trim().toLowerCase())
+			.filter(Boolean)
+		return new Set([...full, ...full.map(name => name.split(/\s+/)[0]!)])
+	}
+	const others = everyone.filter(person => person.id !== them.id).map(called)
+	const unique = [...called(them)].filter(
+		name => !others.some(names => names.has(name)),
+	)
+	return [them.id, them.email, ...unique].filter(Boolean)
+}
+
 /** People whose name, display name or email contains every word of the query. */
 export async function findPeople(
 	client: WebClient,

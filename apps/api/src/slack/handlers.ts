@@ -55,7 +55,12 @@ import {
 	markStarted,
 	takeInterrupted,
 } from "../inflight"
-import { registerApprovals, withdrawApprovals } from "./approvals"
+import {
+	forgetWords,
+	hearWords,
+	registerApprovals,
+	withdrawApprovals,
+} from "./approvals"
 import { chunkMarkdown } from "./reply"
 import {
 	describeWhen,
@@ -140,6 +145,17 @@ const ownWords = (trigger: Trigger) =>
 		? ""
 		: (trigger.text ?? "").replace(/<@[A-Z0-9]+(?:\|[^>]*)?>/g, "").trim()
 
+/**
+ * What they wrote themselves to ask for this turn: their message, or what they typed with /laddu or
+ * the shortcut. Not the emoji of a reaction, nor an answer to a question laddu asked.
+ */
+const typedRequest = (trigger: Trigger) =>
+	!trigger.via
+		? trigger.text
+		: trigger.via === "command" || trigger.via === "shortcut"
+			? trigger.request
+			: undefined
+
 /** "STOP" on its own, in capitals (a mention of laddu around it is fine). */
 const isStop = (trigger: Trigger) => ownWords(trigger) === "STOP"
 
@@ -216,6 +232,9 @@ async function handle(
 
 	await serialize(key, async () => {
 		await markRunning(inflightKey).catch(() => {})
+		// Only this turn's own words count when a risky request says they asked for it (approvals.ts).
+		forgetWords(key)
+		hearWords(key, typedRequest(trigger))
 		let reply: Reply | undefined
 		let started = false
 		const user = { teamId: trigger.teamId, userId: trigger.userId }
@@ -469,6 +488,7 @@ async function handle(
 			else await notifyDirectly(client, trigger, message)
 			await react(client, trigger.channel, trigger.ts, "x")
 		} finally {
+			forgetWords(key)
 			if (agent.signal.aborted) {
 				withdrawQuestions(client, key)
 				withdrawApprovals(client, key)
@@ -506,6 +526,7 @@ async function steerInto(
 		)
 			return false
 		running.steered.seen = trigger.ts
+		hearWords(key, trigger.text)
 		running.steered.lines.push(input.line)
 		await react(client, trigger.channel, trigger.ts, "eyes")
 		return true

@@ -428,10 +428,22 @@ STOP withdraws open questions. Questions live in memory, for 24 hours.
 machine), but the container can't protect the accounts the person connected. So a few bot API
 requests aren't sent straight away (src/agent/actions.ts): a Slack DM or Slack change others see
 as them, sending, replying, sharing or deleting in Microsoft 365, and deleting or merging in Azure
-DevOps. Not when the person asked for exactly that themselves: the command's `--asked` sends it
-straight through, so only laddu's own steps towards a broader goal (or ideas from files, pages and
-other people) wait. The bot posts what would happen in plain words with real names, never the API
-call behind it, in the thread with Allow / Don't allow, for that person only
+DevOps. Not when the person asked for exactly that themselves, and the bot decides that, not the
+container: anything in it (a prompt-injected agent, generated code) can send the command's
+`--asked` (header `x-laddu-asked`), so that's only laddu's hint. While a turn runs the bot keeps
+the person's own words for it, by the session the `LADDU_CALLER` credential names: the message,
+`/laddu` or shortcut text that started it and messages they add meanwhile, never thread context,
+linked messages, files, pages, reactions or answers to questions. A request with `--asked` skips
+the OK only when those words name every target of the action (actions.ts `targetsOf` and
+`askedFor`): each person it messages, pings or adds, by mention, ID, email or a name of theirs
+nobody else in the workspace has; each channel by mention, ID, `#name` or "this channel" for the
+one they're writing in; each email recipient; each work item or PR number ("work item 123", "PR
+#7"). Targets nobody can name in words (an email, event or file by its ID, a Teams chat, a reply)
+always ask, and so do scheduled runs and automations, which have no live words. Both are needed:
+without `--asked` it's laddu's own step towards a broader goal (or an idea from files, pages and
+other people) and waits even if the target was named. Only targets are checked, not the wording
+of what's sent. Otherwise the bot posts what would happen in plain words with real names, never
+the API call behind it, in the thread with Allow / Don't allow, for that person only
 (src/slack/approvals.ts), and the command gets 428 "Not done yet". On Allow the bot sends the
 stored request itself, once; the decision and result come back like an answer to `slack ask`.
 STOP withdraws open requests; they live in memory, for 24 hours.

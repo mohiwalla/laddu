@@ -236,7 +236,29 @@ export function registerApprovals(app: App, onDecision: Decided) {
 	})
 }
 
+/**
+ * What the person wrote themselves in their running turn, by session: the message (or /laddu or
+ * shortcut request) that started it, and messages added while it runs. Never thread context,
+ * linked messages, files, pages or answers to questions. A risky request skips their OK only when
+ * these name everyone and everything it acts on (actions.ts askedFor); scheduled runs have none.
+ */
+const turnWords = new Map<string, string[]>()
+
+/** Their own words for the turn running in this session (handlers.ts: as it starts, steered). */
+export function hearWords(key: string, words: string | undefined) {
+	if (!words?.trim()) return
+	turnWords.set(key, [...(turnWords.get(key) ?? []), words])
+}
+
+/** The turn in this session ended (or a new one starts): its words no longer count. */
+export function forgetWords(key: string) {
+	turnWords.delete(key)
+}
+
+export const wordsFor = (key: string): string[] => turnWords.get(key) ?? []
+
 /** For tests. */
 export function clearApprovals() {
 	approvals.clear()
+	turnWords.clear()
 }
