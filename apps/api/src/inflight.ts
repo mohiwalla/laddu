@@ -5,6 +5,7 @@
  */
 import { paths } from "./config"
 import { readJson, writeJsonPrivate } from "./files"
+import { sessionKey } from "./sessions"
 import type { Trigger } from "./slack/context"
 
 export type Inflight = {
@@ -14,6 +15,10 @@ export type Inflight = {
 	reply?: { ts: string; streaming: boolean }
 	/** Its to-do list message, if it wrote one. */
 	list?: string
+	/** Set once it's this session's running turn (queued ones wait for it). */
+	running?: boolean
+	/** What it already changed outside the conversation: a restart won't start it over. */
+	actions?: string[]
 }
 
 const file = `${paths.dataDir}/inflight.json`
@@ -45,6 +50,22 @@ export const markReply = (
 		if (!entry) return
 		if (list) entry.list = ts
 		else entry.reply = { ts, streaming }
+	})
+
+export const markRunning = (key: string) =>
+	change(all => void (all[key] && (all[key].running = true)))
+
+/** Notes what the running turn of this session (channel:thread:user) just did outside it. */
+export const markAction = (session: string, action: string) =>
+	change(all => {
+		for (const entry of Object.values(all)) {
+			const { channel, threadTs, ts, userId } = entry.trigger
+			if (
+				entry.running &&
+				sessionKey(channel, threadTs ?? ts, userId) === session
+			)
+				(entry.actions ??= []).push(action)
+		}
 	})
 
 export const markDone = (key: string) => change(all => void delete all[key])

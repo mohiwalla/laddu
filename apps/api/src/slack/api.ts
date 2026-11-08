@@ -418,6 +418,17 @@ export function slackFailure(error: unknown): SlackToolError {
 	)
 }
 
+/** Whom a call goes out as: `as` when given, else the person when they're connected (or must be). */
+export function identityFor(
+	spec: Pick<Method, "identity">,
+	as: string | undefined,
+	connected: boolean,
+): "user" | "laddu" {
+	if (as === "laddu" || as === "user") return as
+	if (spec.identity === "laddu") return "laddu"
+	return connected || spec.identity === "user" ? "user" : "laddu"
+}
+
 export async function callSlack(
 	client: SlackClient,
 	person: Person,
@@ -442,18 +453,7 @@ export async function callSlack(
 		if (args[key] === undefined || args[key] === null || args[key] === "")
 			throw new SlackToolError(`Missing ${key} for ${input.method}.`)
 	const saved = await connection(person)
-	const identity =
-		input.as === "laddu"
-			? "laddu"
-			: input.as === "user"
-				? "user"
-				: spec.identity === "laddu"
-					? "laddu"
-					: saved
-						? "user"
-						: spec.identity === "user"
-							? "user"
-							: "laddu"
+	const identity = identityFor(spec, input.as, Boolean(saved))
 	if (
 		(spec.identity === "user" && identity !== "user") ||
 		(spec.identity === "laddu" && identity !== "laddu")

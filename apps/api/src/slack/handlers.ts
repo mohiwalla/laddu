@@ -48,7 +48,14 @@ import { computerInUse } from "../agent/desktop"
 import { registerHome } from "./home"
 import { askedForKey, registerKeys } from "./keys"
 import type { Step } from "../agent/steps"
-import { markDone, markReply, markStarted, takeInterrupted } from "../inflight"
+import {
+	markDone,
+	markReply,
+	markRunning,
+	markStarted,
+	takeInterrupted,
+} from "../inflight"
+import { registerApprovals, withdrawApprovals } from "./approvals"
 import { chunkMarkdown } from "./reply"
 import {
 	describeWhen,
@@ -166,7 +173,17 @@ async function handle(
 	// STOP ends this person's work in this thread (running and queued), nobody else's; their reply
 	// there says Stopped.
 	if (isStop(trigger)) {
-		if (agentSessions.stop(trigger.channel, threadTs, trigger.userId))
+		const stopped = agentSessions.stop(
+			trigger.channel,
+			threadTs,
+			trigger.userId,
+		)
+		// Also what's waiting on them here: requests for their OK, and questions.
+		const withdrawn = [
+			withdrawApprovals(client, key),
+			withdrawQuestions(client, key),
+		].some(Boolean)
+		if (stopped || withdrawn)
 			await react(client, trigger.channel, trigger.ts, "white_check_mark")
 		else
 			await client.chat
@@ -198,6 +215,7 @@ async function handle(
 	await markStarted(inflightKey, trigger).catch(() => {})
 
 	await serialize(key, async () => {
+		await markRunning(inflightKey).catch(() => {})
 		let reply: Reply | undefined
 		let started = false
 		const user = { teamId: trigger.teamId, userId: trigger.userId }
@@ -451,7 +469,10 @@ async function handle(
 			else await notifyDirectly(client, trigger, message)
 			await react(client, trigger.channel, trigger.ts, "x")
 		} finally {
-			if (agent.signal.aborted) withdrawQuestions(client, key)
+			if (agent.signal.aborted) {
+				withdrawQuestions(client, key)
+				withdrawApprovals(client, key)
+			}
 			await agent.finish()
 			await markDone(inflightKey).catch(() => {})
 		}
@@ -524,11 +545,21 @@ export async function resumeInterrupted(
 	config: BotConfig,
 	botUserId: string,
 ): Promise<void> {
-	for (const { trigger, startedAt, reply, list } of await takeInterrupted()) {
-		const retry = Date.now() - startedAt < RESUME_WITHIN_MS
-		const note = retry
-			? `_${systemName()} restarted mid-answer; starting over below._`
-			: `_${systemName()} restarted mid-answer. Send your message again._`
+	for (const {
+		trigger,
+		startedAt,
+		reply,
+		list,
+		actions,
+	} of await takeInterrupted()) {
+		// Starting over would do these again (a second DM, a second PR…), so it's left to them.
+		const retry =
+			Date.now() - startedAt < RESUME_WITHIN_MS && !actions?.length
+		const note = actions?.length
+			? `_${systemName()} restarted mid-answer, after it had already:_\n${actions.map(action => `• ${action}`).join("\n")}\n_It didn't start over, so none of that happens twice. Send your message again for the rest._`
+			: retry
+				? `_${systemName()} restarted mid-answer; starting over below._`
+				: `_${systemName()} restarted mid-answer. Send your message again._`
 		if (reply)
 			await closeInterrupted(
 				client,
@@ -569,8 +600,12 @@ export function registerHandlers(
 		userId !== botUserId &&
 		(config.allowedUsers === "*" || config.allowedUsers.has(userId))
 
-	// Answers to `slack ask`: a turn of their own, or into theirs if one is running here.
-	registerQuestions(app, (question, request) => {
+	// Answers to `slack ask`, and decisions on risky actions: a turn of their own, or into theirs if
+	// one is running here.
+	const answer = (
+		question: Parameters<Parameters<typeof registerQuestions>[1]>[0],
+		request: string,
+	) =>
 		void handle(app.client, config, botUserId, {
 			teamId: question.teamId,
 			userId: question.userId,
@@ -581,7 +616,8 @@ export function registerHandlers(
 			via: "answer",
 			request,
 		})
-	})
+	registerQuestions(app, answer)
+	registerApprovals(app, answer)
 
 	// Keys they add when asked (`connections key request`): carry on like an answer.
 	registerKeys(app, { config, isAllowed }, (request, message) => {

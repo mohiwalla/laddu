@@ -184,16 +184,20 @@ test("after sign-in, the DM uses the sender's token and their conversation", asy
 		exchange.mockRestore()
 	}
 	posts.length = 0
+	// Sent as them, so it waits for their OK: buttons in their thread, nothing sent yet.
 	const response = await dm()
-	expect(response.status).toBe(200)
-	expect(opens).toEqual([{ token: "test-user-token", users: "U00000002" }])
-	expect(posts).toEqual([
-		{
-			token: "test-user-token",
-			channel: "D00000002",
-			markdown_text: "Please send a status update.",
-		},
-	])
+	expect(response.status).toBe(428)
+	expect(((await response.json()) as { text: string }).text).toContain(
+		"needs their OK",
+	)
+	expect(opens).toHaveLength(0)
+	expect(posts).toHaveLength(1)
+	expect(posts[0]).toMatchObject({
+		channel: caller.channel,
+		thread_ts: caller.threadTs,
+		text: "Needs your OK: send a Slack DM as them to U00000002",
+	})
+	expect(JSON.stringify(posts[0]?.blocks)).toContain("laddu_ok_allow")
 })
 
 test("expanded Slack CLI commands reach signed API tools and persisted rules", async () => {

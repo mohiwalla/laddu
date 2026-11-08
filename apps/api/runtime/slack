@@ -7,9 +7,9 @@ send you this:".
 
   slack status | connect | disconnect      their Slack connection (connect DMs them a link)
   slack find "<name or email>"             people in the workspace: Slack ID, name, title, email
-  slack dm <@U123 | U123 | email> "text" [--from-laddu]
+  slack dm <@U123 | U123 | email> "text" [--from-laddu] [--asked]
   slack methods [method] | capabilities
-  slack api <method> '<JSON arguments>' [--as auto|user|laddu]
+  slack api <method> '<JSON arguments>' [--as auto|user|laddu] [--asked]
   slack search "in:general decision" [--files] [--page 1]
   slack channels | history <channel> | thread <channel> <ts>
   slack send <channel> "text" [--thread <ts>] [--as auto|user|laddu]
@@ -65,6 +65,11 @@ import urllib.parse
 
 API = os.environ.get("LADDU_API")
 CALLER = os.environ.get("LADDU_CALLER")
+# --asked (anywhere): the person asked for exactly this in their own words, so it doesn't wait for
+# their OK. The bot otherwise asks before risky actions as them.
+ASKED = "--asked" in sys.argv
+while "--asked" in sys.argv:
+    sys.argv.remove("--asked")
 
 
 def call(path, body=None, method="POST"):
@@ -74,7 +79,7 @@ def call(path, body=None, method="POST"):
         f"{API}{path}",
         method=method,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"x-laddu-caller": CALLER, "content-type": "application/json"},
+        headers={"x-laddu-caller": CALLER, **({"x-laddu-asked": "1"} if ASKED else {}), "content-type": "application/json"},
     )
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
@@ -127,7 +132,7 @@ def todo(entries, title):
 def ask(body):
     if not API or not CALLER:
         sys.exit("error: Slack isn't available here (no connection to the bot in this turn).")
-    headers = {"x-laddu-caller": CALLER, "content-type": "application/json"}
+    headers = {"x-laddu-caller": CALLER, **({"x-laddu-asked": "1"} if ASKED else {}), "content-type": "application/json"}
 
     def send(request):
         try:
@@ -169,7 +174,7 @@ def file_transfer(path, destination=None, upload=None):
         except OSError as error:
             sys.exit(f"error: {error}")
     request = urllib.request.Request(f"{API}{path}", method="PUT" if upload else "GET", data=data,
-                                     headers={"x-laddu-caller": CALLER, "content-type": "application/octet-stream"})
+                                     headers={"x-laddu-caller": CALLER, **({"x-laddu-asked": "1"} if ASKED else {}), "content-type": "application/octet-stream"})
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
             if destination:

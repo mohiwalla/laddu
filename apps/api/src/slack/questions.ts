@@ -297,13 +297,16 @@ export function closeWithMessage(client: WebClient, key: string): boolean {
 	return open.length > 0
 }
 
-/** They stopped laddu's work in this thread: its questions there are withdrawn. */
-export function withdrawQuestions(client: WebClient, key: string) {
+/** They stopped laddu's work in this thread: its questions there are withdrawn. Whether any were open. */
+export function withdrawQuestions(client: WebClient, key: string): boolean {
+	let any = false
 	for (const question of questions.values()) {
 		if (question.key !== key) continue
 		questions.delete(question.id)
 		void close(client, question, "_No longer needed._")
+		any = true
 	}
+	return any
 }
 
 export function registerQuestions(app: App, onAnswer: Answered) {

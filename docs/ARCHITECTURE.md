@@ -28,7 +28,7 @@ apps/
       preferences.ts   each person's picks from the Home tab (agent, model, effort, speed)
       appearance.ts    the name and picture each person gives laddu (Home tab or `appearance`),
                        on every message it posts for them; pictures served by the gateway
-      inflight.ts      turns in progress, so a restart can resume them
+      inflight.ts      turns in progress, so a restart can resume them, and what each already did outside
       agent/agents.ts  the agents a person can pick, and the one entry point for a turn
       agent/turn.ts    what every agent shares: turn inputs/result, env, workspace, outbox, memory
       agent/codex.ts   runs Codex turns on the person's own ChatGPT plan (in their container)
@@ -59,6 +59,8 @@ apps/
       slack/transfers.ts user-authorized file downloads and external uploads
       slack/automations.ts persisted event rules, delivery queue, retries and history
       slack/forms.ts    persistent button/modal forms; submissions run as their submitter
+      slack/approvals.ts the person's Allow / Don't allow before risky actions as them
+      agent/actions.ts which bot API requests need that OK, and which changed something outside
       slack/keys.ts     keys people give laddu through a private Slack form (Home tab, or laddu's
                        `connections key request`), saved in their own container, never in chat
       slack/user-tokens.ts each person's Slack sign-in (user token), so DMs can go out as them
@@ -422,6 +424,18 @@ with just a reaction; the answer comes back as a turn of its own (`via: "answer"
 theirs if one is running. A reply typed in the thread is their next message and closes the question.
 STOP withdraws open questions. Questions live in memory, for 24 hours.
 
+**Their OK first.** Tools are approved automatically (the container is the boundary for the
+machine), but the container can't protect the accounts the person connected. So a few bot API
+requests aren't sent straight away (src/agent/actions.ts): a Slack DM or Slack change others see
+as them, sending, replying, sharing or deleting in Microsoft 365, and deleting or merging in Azure
+DevOps. Not when the person asked for exactly that themselves: the command's `--asked` sends it
+straight through, so only laddu's own steps towards a broader goal (or ideas from files, pages and
+other people) wait. The bot posts what would happen in plain words with real names, never the API
+call behind it, in the thread with Allow / Don't allow, for that person only
+(src/slack/approvals.ts), and the command gets 428 "Not done yet". On Allow the bot sends the
+stored request itself, once; the decision and result come back like an answer to `slack ask`.
+STOP withdraws open requests; they live in memory, for 24 hours.
+
 ## Ways in
 
 - **@mention** in channels (`app_mention`) and group DMs (`message.mpim` containing the mention;
@@ -487,6 +501,9 @@ Adapted from [Hermes Agent](https://github.com/nousresearch/hermes-agent) (MIT, 
 - **Restarts mid-answer.** Every turn is recorded in `.data/inflight.json` until it ends. On startup
   (after stopping orphaned Codex runs) the bot closes replies it left open, marking spinning steps
   failed, and answers turns younger than 30 minutes again; older ones get "please ask again".
+  A turn that already changed something outside (a DM, a post, a push, a scheduled task: each
+  successful bot API request that does, per src/agent/actions.ts) isn't started over, so nothing
+  happens twice; its reply lists what it did and asks them to send the message again.
 
 ## The brain: Codex on each person's ChatGPT plan
 

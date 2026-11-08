@@ -104,7 +104,7 @@ function allowance(senderId: string): boolean {
 }
 
 /** `<@U123>`, `U123` or an email → a Slack user ID, or a reason it can't be messaged. */
-async function recipient(
+export async function recipient(
 	client: WebClient,
 	teamId: string,
 	to: string,
@@ -129,6 +129,34 @@ async function recipient(
 	if (user.team_id && user.team_id !== teamId)
 		return { problem: `${to} isn't in this workspace.` }
 	return { id: user.id! }
+}
+
+/** "DM me": laddu DMs them, as itself; a DM as them to themselves would just be a note to self. */
+async function dmThemselves(
+	client: WebClient,
+	person: { teamId: string; userId: string },
+	message: string,
+): Promise<{ ok: boolean; text: string }> {
+	if (!allowance(person.userId))
+		return {
+			ok: false,
+			text: `They've sent ${HOURLY_LIMIT} DMs through laddu in the last hour, the limit. Try again later.`,
+		}
+	const { channel } = await client.conversations.open({
+		users: person.userId,
+	})
+	await client.chat.postMessage({
+		channel: channel!.id!,
+		...(await postAs(person)),
+		markdown_text: message,
+	})
+	console.info(
+		`[slack dm] ${person.userId} → themselves from laddu (${message.length} chars)`,
+	)
+	return {
+		ok: true,
+		text: `Sent to them, in their DM with ${systemName()}.`,
+	}
 }
 
 /** Slack's errors for a user token it no longer accepts. */
@@ -163,11 +191,7 @@ export async function sendOnBehalf(
 		}
 	const found = await recipient(client, from.teamId, to)
 	if ("problem" in found) return { ok: false, text: found.problem }
-	if (found.id === from.userId)
-		return {
-			ok: false,
-			text: "That's the person you're working for; answer them here instead.",
-		}
+	if (found.id === from.userId) return dmThemselves(client, from, message)
 	const token = fromLaddu ? null : await userToken(from)
 	if (!fromLaddu && !token)
 		return {

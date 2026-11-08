@@ -27,9 +27,20 @@ import * as azureDevOps from "../integrations/azure-devops"
 import * as graph from "../integrations/graph"
 import * as codecommit from "../integrations/codecommit"
 import * as microsoft from "../integrations/microsoft"
-import { findPeople, sendOnBehalf } from "../slack/messaging"
+import { findPeople, recipient, sendOnBehalf } from "../slack/messaging"
 import * as slackSignIn from "../slack/user-tokens"
-import { callSlack, capabilities, object, slackFailure } from "../slack/api"
+import {
+	callSlack,
+	capabilities,
+	identityFor,
+	methods,
+	object,
+	slackFailure,
+} from "../slack/api"
+import { requestOk } from "../slack/approvals"
+import { markAction } from "../inflight"
+import { sessionKey } from "../sessions"
+import { needsOk, outsideAction, type ApiRequest } from "./actions"
 import { transfer } from "../slack/transfers"
 import * as questions from "../slack/questions"
 import * as keys from "../slack/keys"
@@ -830,6 +841,159 @@ async function handleCodeCommit(
 	}
 }
 
+function dispatch(
+	request: Request,
+	caller: Caller,
+	deps: Deps,
+): Promise<Response> | Response {
+	const [, resource, id] = new URL(request.url).pathname.split("/")
+	if (resource === "schedule") return handleSchedule(request, caller, id)
+	if (resource === "ado") return handleAzureDevOps(request, caller, id, deps)
+	if (resource === "ms") return handleGraph(request, caller, id, deps)
+	if (resource === "codecommit")
+		return handleCodeCommit(request, caller, id, deps)
+	if (resource === "slack") return handleSlack(request, caller, id, deps)
+	if (resource === "appearance")
+		return handleAppearance(request, caller, id, deps)
+	if (resource === "keys" && id === "request")
+		return handleKeyRequest(request, caller, deps)
+	if (resource === "desktop" && id === "link")
+		return handleDesktopLink(request, caller, deps)
+	return reply(404, "Unknown endpoint.")
+}
+
+/** Requests whose rules in actions.ts read the JSON body (small ones; uploads aren't read twice). */
+const READS_BODY = new Set([
+	"slack/dm",
+	"slack/api",
+	"slack/automate",
+	"ms/request",
+	"ado/write",
+])
+
+/**
+ * Every request goes through here: a risky one waits for the person's OK (approvals.ts) instead of
+ * being sent, and one that changed something outside the conversation is noted on the turn, so a
+ * restart won't start that turn over and do it again (inflight.ts).
+ */
+async function guarded(
+	request: Request,
+	caller: Caller,
+	deps: Deps,
+): Promise<Response> {
+	const url = new URL(request.url)
+	const [, resource = "", action] = url.pathname.split("/")
+	const raw = READS_BODY.has(`${resource}/${action}`)
+		? await request.text()
+		: undefined
+	let body: Record<string, unknown> | null = null
+	try {
+		const parsed: unknown = raw ? JSON.parse(raw) : null
+		if (object(parsed)) body = parsed
+	} catch {
+		/* The handler reports the bad body. */
+	}
+	const person = { teamId: caller.teamId, userId: caller.userId }
+	const described: ApiRequest = {
+		resource,
+		action,
+		method: request.method,
+		path: url.pathname,
+		body,
+		asPerson: await goesOutAsPerson(resource, action, body, person, deps),
+		slackWrite:
+			resource === "slack" &&
+			action === "api" &&
+			Boolean(methods[String(body?.method)]?.write),
+	}
+	// The body was read above, so the handler gets a fresh copy of the request.
+	const fresh = () =>
+		raw === undefined
+			? request
+			: new Request(request.url, {
+					method: request.method,
+					headers: request.headers,
+					body: raw,
+				})
+	// They asked for exactly this themselves (the command's --asked): no need to ask again.
+	const asked = request.headers.get("x-laddu-asked") === "1"
+	const risky = needsOk(described)
+	if (risky && asked)
+		console.log(
+			`[approval] ${caller.teamId}-${caller.userId}: asked directly, so no OK needed to ${risky.label}`,
+		)
+	if (risky && !asked)
+		try {
+			const waiting = await requestOk(
+				deps.client,
+				caller,
+				risky,
+				async () => {
+					const response = await dispatch(fresh(), caller, deps)
+					const { text } = (await response
+						.json()
+						.catch(() => ({}))) as {
+						text?: string
+					}
+					return {
+						ok: response.ok,
+						text: text ?? `HTTP ${response.status}`,
+					}
+				},
+			)
+			return reply(428, waiting)
+		} catch (error) {
+			return failed(error, "Slack (asking for their OK)")
+		}
+	const response = await dispatch(fresh(), caller, deps)
+	const done = response.ok ? outsideAction(described) : null
+	if (done && !caller.scheduled)
+		await markAction(
+			sessionKey(caller.channel, caller.threadTs, caller.userId),
+			done,
+		).catch(() => {})
+	return response
+}
+
+/** Whether a DM or Slack call would go out as the person rather than as laddu. */
+async function goesOutAsPerson(
+	resource: string,
+	action: string | undefined,
+	body: Record<string, unknown> | null,
+	person: { teamId: string; userId: string },
+	deps: Deps,
+): Promise<boolean> {
+	if (resource !== "slack") return false
+	if (action === "dm") {
+		if (
+			!deps.config.slackSignIn ||
+			body?.fromLaddu === true ||
+			!(await slackSignIn.userToken(person))
+		)
+			return false
+		// To themselves ("DM me") laddu sends it as itself; an unknown recipient is just an error.
+		const found = await recipient(
+			deps.client,
+			person.teamId,
+			String(body?.to ?? ""),
+		)
+		return "id" in found && found.id !== person.userId
+	}
+	if (action === "api") {
+		const spec = methods[String(body?.method)]
+		if (!spec) return false
+		const as = typeof body?.as === "string" ? body.as : undefined
+		return (
+			identityFor(
+				spec,
+				as,
+				Boolean(await slackSignIn.userToken(person)),
+			) === "user"
+		)
+	}
+	return false
+}
+
 export type BotApi = { url: string }
 let api: BotApi | null = null
 
@@ -851,23 +1015,7 @@ export function startBotApi(hostname: string, deps: Deps): BotApi {
 					401,
 					"Not signed by this bot (the credential is per turn).",
 				)
-			const [, resource, id] = new URL(request.url).pathname.split("/")
-			if (resource === "schedule")
-				return handleSchedule(request, caller, id)
-			if (resource === "ado")
-				return handleAzureDevOps(request, caller, id, deps)
-			if (resource === "ms") return handleGraph(request, caller, id, deps)
-			if (resource === "codecommit")
-				return handleCodeCommit(request, caller, id, deps)
-			if (resource === "slack")
-				return handleSlack(request, caller, id, deps)
-			if (resource === "appearance")
-				return handleAppearance(request, caller, id, deps)
-			if (resource === "keys" && id === "request")
-				return handleKeyRequest(request, caller, deps)
-			if (resource === "desktop" && id === "link")
-				return handleDesktopLink(request, caller, deps)
-			return reply(404, "Unknown endpoint.")
+			return guarded(request, caller, deps)
 		},
 	})
 	api = { url: `http://${hostname}:${server.port}` }
