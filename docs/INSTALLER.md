@@ -106,7 +106,4 @@ The default name is `laddu`. Each instance directory holds `.env`, `.data/`, `AG
 - **Bot changes:** `CODEX_LOCAL_DIR` (where `AGENTS.local.md` and `skills.local/` live) and
   `LADDU_INSTANCE` (labels containers and volumes, so bots never touch each other's). With neither
   set, existing deployments behave as before.
-
-## Open questions
-
-- **Licence:** the package is published as `UNLICENSED` until we pick one.
+- **Licence:** the package is published as MIT, with the repo's `LICENSE`.

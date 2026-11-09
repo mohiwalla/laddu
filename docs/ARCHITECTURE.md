@@ -2,12 +2,31 @@
 
 A personal Slack assistant. You tag it in a channel (or DM it); it reads the conversation around the
 tag, hands the job to an agent, and replies in the thread. The agent is the brain for every request:
-Codex on the person's own ChatGPT plan, Claude Code on their own Claude plan, or OpenCode's free
-models, each person's pick on laddu's Home tab.
+Codex on the person's own ChatGPT plan, Claude Code on their own Claude plan (either can use the
+person's own API key instead), or OpenCode's free models, each person's pick on laddu's Home tab.
 The bot itself only moves messages between Slack and the agent.
 
 Status: **V0**, with per-person integrations, computer use and Azure Repos coding tasks.
 See [Roadmap](#roadmap).
+
+## Decisions that shape it
+
+- **Open source and free.** MIT licensed. laddu never charges anyone: each person brings their
+  own AI subscription or API key and pays their provider directly.
+- **One agent per person.** Everything done for someone (their turns, scheduled runs, background
+  reviews) runs on the agent they picked.
+- **Everyone gets their own computer.** A private container per person, internet only, with
+  their files, memory and logins in it. Being the owner brings no special treatment.
+- **Integrations are per person.** Everyone connects their own accounts; laddu sees only what
+  they can and acts only as the person asking.
+- **One Slack app over Socket Mode.** The machine holds an outgoing connection; nothing is exposed
+  or tunnelled for Slack. The manifest asks for every scope a non-Enterprise workspace can grant,
+  so features never wait on a reinstall, and integrations live in this backend rather than as
+  more Slack apps.
+- **Nobody should have to say "remember this".** laddu saves what it learns on its own, and a
+  background review catches what it missed.
+- **A generic repo.** Nothing in it is tied to one person, workspace or machine. Deployment
+  settings live in git-ignored files: `.env`, `AGENTS.local.md`, `skills.local/`.
 
 ## Repository layout
 
@@ -31,8 +50,9 @@ apps/
       inflight.ts      turns in progress, so a restart can resume them, and what each already did outside
       agent/agents.ts  the agents a person can pick, and the one entry point for a turn
       agent/turn.ts    what every agent shares: turn inputs/result, env, workspace, outbox, memory
-      agent/codex.ts   runs Codex turns on the person's own ChatGPT plan (in their container)
-      agent/account.ts each person's ChatGPT sign-in (device code via Codex's app-server)
+      agent/codex.ts   runs Codex turns on the person's own ChatGPT plan or OpenAI key (in their container)
+      agent/app-server.ts one Codex app-server per turn: JSON-RPC over stdio (steer, interrupt)
+      agent/account.ts each person's ChatGPT sign-in (device code via Codex's app-server), or their key
       agent/acp.ts     runs a turn on any Agent Client Protocol agent (steps, steering, Stop)
       agent/opencode.ts OpenCode's free models over ACP (in the user's container)
       agent/claude.ts  Claude Code on the person's own Claude plan: sign-in, models, headless turns
@@ -51,9 +71,12 @@ apps/
       integrations/codecommit.ts CodeCommit Git + PRs using each person's assigned host AWS profile
       integrations/git-http.ts shared Git smart HTTP relay and task branch validation
       integrations/graph.ts Microsoft 365 (Graph) requests, downloads and uploads as the person
-      slack/context.ts Slack messages → transcript for Codex
+      slack/context.ts Slack messages → transcript for the agent
       slack/attachments.ts Slack files in (downloads) and out (outbox uploads)
       slack/handlers.ts mention/DM handling
+      slack/home.ts    the Home tab: Overview, Skills, Memory and Settings, each person's own page
+      slack/system.ts  the bot's own notices (sign-ins, failures), never in a person's look for laddu
+      slack/questions.ts `slack ask`: questions in the thread; question-fields.ts the form fields
       slack/messaging.ts `slack find` / `slack dm`: laddu DMs people for the person
       slack/api.ts      Slack Free method catalog + bot/user identity and channel access checks
       slack/transfers.ts user-authorized file downloads and external uploads
@@ -87,8 +110,7 @@ packages/
   typescript-config/   shared tsconfig
 ```
 
-Expected later: `packages/integrations-*` (MCP servers), a dashboard app for running tasks, and a
-marketing site if this becomes something teammates can run.
+Expected later: `packages/integrations-*` (MCP servers) and a dashboard app for running tasks.
 
 ## Request flow (V0)
 
@@ -103,9 +125,10 @@ marketing site if this becomes something teammates can run.
         in a thread  → thread replies (conversations.replies)
         top-level    → last N channel messages up to the tag (conversations.history)
         follow-up    → only messages newer than the last turn
-   4. Codex turn in the requester's container: new thread, or resume theirs for this Slack thread
+   4. a turn on the requester's agent, in their container: new conversation, or resume theirs
+      for this Slack thread (Codex shown here; Claude Code and OpenCode work the same way, below)
         • a `codex app-server` per turn, through scripts/codex-docker.sh
-        • on the requester's own ChatGPT plan, signed in once from Slack (not signed in: they get a DM)
+        • on the requester's own ChatGPT plan or OpenAI key (not signed in: they're sent a sign-in)
         • the first action opens a detailed progress accordion; later actions update it
         • once the agent writes a to-do list (`slack todo`, or a plan tool), it goes above the accordion: one message (✔️ 🔄 ⚪),
           edited as it changes and posted again at the bottom once the thread has moved on, with the
@@ -116,15 +139,17 @@ marketing site if this becomes something teammates can run.
       • clear native working status after the turn
 ```
 
-One (Slack thread, user) = one Codex thread, so two people in the same thread each have their own
-conversation with the bot. Turns for the same key are queued. Codex stores conversations in the
-user's container volume; the bot stores only `{key → codex thread id, last seen ts}` in
-`.data/sessions.json`.
+One (Slack thread, user) = one agent conversation, so two people in the same thread each have their
+own conversation with the bot. Turns for the same key are queued. The agent stores conversations in
+the user's container volume; the bot stores only `{key → agent, conversation id, last seen ts}` in
+`.data/sessions.json`. Switching agents starts the thread over.
 
 The Slack app declares `agent_view`. Interactive turns set `agents.sessions.setStatus` to
 `processing`, then `active` after success, failure or cancellation. The status remains processing
 while another person still has work running in that thread. Slack's native Stop button
-sends `agent_session_stopped`; it cancels only the clicker's own runs in that thread.
+sends `agent_session_stopped`; it cancels only the clicker's own runs in that thread. The status
+wears the name and picture the person gave laddu (`appearance.ts`), or laddu's own while it works
+for several people with different looks, so Stop never reads as one person's.
 These native surfaces supplement streamed task cards; unavailable agent APIs don't prevent replies.
 The native working indicator is the only progress UI until Codex executes its first action. That
 action opens the streamed accordion, titled with the current action and containing actual tools,
@@ -180,12 +205,11 @@ computer-use plugin of a Linux build of Codex Desktop) and Bytebot.
   browser UI, extensions and native dialogs work like anything else; `launch`, `windows`, `focus`,
   `clipboard`, `wait`. Every action returns the new controls and screenshot, saving a call per step.
   Consecutive actions show as one "Using my computer" row in Slack, with a count.
-- **Watching and taking over** (`agent/desktop.ts`): each person's link lives in laddu's **Home tab**
-  in Slack (private to them): a banner, the computer's status (on / asleep / not set up), an
-  **Open laddu's computer** button and how taking over works. It's redrawn with a fresh signed link
-  (valid 12 hours) whenever they open the tab (`app_home_opened`) and whenever laddu starts using the
-  computer for them. Threads stay clean: only the first time someone's laddu uses its computer
-  does the thread get a note, visible only to them, saying where to find it
+- **Watching and taking over** (`agent/desktop.ts`): each person's link is the **Open computer**
+  button at the top of laddu's **Home tab** in Slack (private to them). It's redrawn with a fresh
+  signed link (valid 12 hours) whenever they open the tab (`app_home_opened`) and whenever laddu
+  starts using the computer for them. Threads stay clean: only the first time someone's laddu uses
+  its computer does the thread get a note, visible only to them, saying where to find it
   (`.data/…/desktop-introduced.json`). `desktop link "<why>"` still sends the link privately on
   request (e.g. to sign in to a site, so passwords never go through Slack). The link opens a
   gateway in the bot (`DESKTOP_VIEWER_HOST`/`PORT`, local by default; `DESKTOP_PUBLIC_URL` is what
@@ -505,11 +529,13 @@ Adapted from [Hermes Agent](https://github.com/nousresearch/hermes-agent) (MIT, 
   `docker cp laddu-<team>-<user>:/home/laddu/.codex/skills/<name> agent-home/skills.local/`.
 - **Duplicate events.** Slack can redeliver an event (e.g. after a socket reconnect); each message
   is answered once (in-memory, 10 minutes).
-- **Failures.** `agent/errors.ts` sorts them: usage limit (message with the reset time; Codex is
-  skipped for 10 minutes, reviews too), context window full or a capability the plan rejects
-  (fresh Codex thread, one retry), dropped model connection (one retry after 15 s; Codex already
-  retried), Docker trouble (one retry), auth (log in again), anything else (the error's first line).
-  Retries show as a failed step in the reply.
+- **Failures.** `agent/errors.ts` sorts them: usage limit (message with the reset time; Codex
+  would retry it for minutes in silence, so the turn ends at once, and Codex is skipped for that
+  person for 10 minutes, reviews too; Claude's and OpenCode's free-model limits get their own
+  message), context window full or a lost conversation (fresh thread, one retry), dropped model
+  connection (one retry after 15 s; Codex already retried), Docker trouble (one retry), not signed
+  in (connect it under Settings on the Home tab), anything else (the error's first line). Retries
+  show as a failed step in the reply.
 - **Restarts mid-answer.** Every turn is recorded in `.data/inflight.json` until it ends. On startup
   (after stopping orphaned Codex runs) the bot closes replies it left open, marking spinning steps
   failed, and answers turns younger than 30 minutes again; older ones get "please ask again".
@@ -520,13 +546,15 @@ Adapted from [Hermes Agent](https://github.com/nousresearch/hermes-agent) (MIT, 
 ## The brain: Codex on each person's ChatGPT plan
 
 Everyone signs in with their own ChatGPT account, the way the Codex CLI does (`codex login
---device-auth`), so each person's turns bill their own plan and nobody shares one.
+--device-auth`), so each person's turns bill their own plan and nobody shares one. **Use an API
+key** (on the Home tab, and in the sign-in message) runs Codex on their own OpenAI key instead:
+Codex's own API-key login (`account/login/start` with `apiKey`), kept in the same `auth.json`.
 
-- **Sign-in** (`agent/account.ts`): *Sign in* under Settings on the Home tab, or the first Codex
+- **Sign-in** (`agent/account.ts`): _Sign in_ under Settings on the Home tab, or the first Codex
   turn of someone who isn't signed in, starts a `codex app-server` in their container and calls
   `account/login/start` with `chatgptDeviceCode`. laddu DMs them the link and code, keeps that
   app-server waiting for `account/login/completed` (15 minutes), then confirms in the DM and
-  redraws their Home tab. A newer sign-in replaces a waiting one; *Sign out* calls `account/logout`.
+  redraws their Home tab. A newer sign-in replaces a waiting one; _Sign out_ calls `account/logout`.
 - **The login** is Codex's own `auth.json` in their `CODEX_HOME` (`~/.codex`, on their volume),
   forced to a file (`cli_auth_credentials_store = "file"`) and to ChatGPT accounts
   (`forced_login_method = "chatgpt"`). Codex refreshes it itself; the bot never reads it.
@@ -548,10 +576,12 @@ plan shared through a proxy) rejected sub-agent items with `subscription_sharing
 - **Slack history rate limits.** The 2025 limits on `conversations.history/replies` (1 req/min, 15
   messages) apply to commercially distributed apps. Internal, workspace-built apps like this one keep
   Tier 3 limits.
-- **Own plans.** Each person's Codex turns run on their own ChatGPT account. Whoever runs the
-  machine can read every container's volume, logins included, so people are trusting them with it.
-- **Integrations vs. multi-user.** Anything private wired in later (email, repos) would be reachable
-  by every allowed user unless scoped per user.
+- **Own plans.** Each person's turns run on their own ChatGPT or Claude account, or their own key.
+  Whoever runs the machine can read every container's volume, logins included, so people are
+  trusting them with it.
+- **Untrusted input.** Other people's messages, linked threads, files and fetched pages can carry
+  prompt injection. Memory refuses entries that look like it, containers limit the damage, and
+  actions as the person on laddu's own initiative wait for their OK (above).
 
 ## The other brains: OpenCode over ACP, and Claude Code
 
@@ -612,8 +642,9 @@ Code's own memory is off, since laddu keeps its own.
 
 ## Roadmap
 
-**V0 (now).** Slack context, per-person Azure DevOps and Microsoft 365, computer use, scheduled
-tasks, Slack DMs and coding tasks in isolated checkouts ending in a draft Azure Repos PR.
+**V0 (now).** Three agents (Codex, Claude Code, OpenCode) on each person's own plan or key, Slack
+context, per-person Azure DevOps and Microsoft 365, computer use, scheduled tasks, Slack DMs and
+tools, approvals, and coding tasks in isolated checkouts ending in a draft Azure Repos PR.
 
 **V1.**
 
@@ -627,12 +658,16 @@ tasks, Slack DMs and coding tasks in isolated checkouts ending in a draft Azure 
   a success rate on a subset of OSWorld tasks.
 - A dashboard app for running tasks.
 - Guardrails: per-task sandboxes, an audit log of changes.
-- More agents over ACP: Claude, Antigravity, DeepSeek (through OpenCode) with each person's sign-in.
-- Per-user billing (each user signs in with their own ChatGPT) and per-user usage caps.
+- More agents over ACP: Antigravity, DeepSeek (through OpenCode) with each person's sign-in.
+- Per-user usage caps.
+
+**Not planned for now.** GitHub and Google Workspace integrations, and an App Store Connect /
+TestFlight one (laddu's computer covers the occasional look at TestFlight).
 
 ## Known V0 limitations
 
-- In channels the bot only responds when tagged, including in threads it's already in.
+- In channels, laddu answers when tagged, and untagged replies only in threads it's part of
+  (see [Ways in](#ways-in)). Other channel messages are left alone.
 - In DMs every message is handled, and each top-level DM starts its own thread.
 - Files attached to messages new this turn (up to 100 MB each, 20 per turn) are saved in the user's
   workspace under `slack-files/`; PNG, JPEG,
@@ -645,9 +680,9 @@ tasks, Slack DMs and coding tasks in isolated checkouts ending in a draft Azure 
   threads. If laddu isn't in the channel, the prompt says to invite it. Not logged to history.
 - Each turn gets an outbox, `slack-outbox/<turn>/`. Files Codex saves there (up to 10, 50 MB each)
   are uploaded to the thread after the reply.
-- Containers share Docker's default bridge: they can reach services on the host bound to
-  `0.0.0.0`/the bridge, and each other's IPs.
-- A running answer can't be cancelled from Slack. (`runTurn` takes an `AbortSignal` that also ends
-  the run inside the container, but no Slack control uses it: a Stop button can only be shared,
-  where everyone sees it, or private, where Slack can't remove it afterwards.)
+- Containers share Docker's default bridge. With `ISOLATE_NETWORK="false"` they can reach services
+  on the host bound to `0.0.0.0`/the bridge, and each other's IPs.
+- Slack shows one status and one Stop button per thread, to everyone in it. A click stops only the
+  clicker's own work; anyone else's carries on.
+- laddu won't identify people from photos (the models refuse).
 - State is in local JSON files; one process only.

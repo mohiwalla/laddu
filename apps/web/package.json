@@ -2,6 +2,7 @@
 	"name": "@repo/web",
 	"version": "0.0.0",
 	"private": true,
+	"license": "MIT",
 	"type": "module",
 	"description": "laddu.wtf, the marketing site",
 	"scripts": {

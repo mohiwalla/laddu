@@ -46,7 +46,12 @@ await Bun.write(
 			version: cli.version,
 			description: cli.description,
 			type: "module",
-			license: "UNLICENSED",
+			license: "MIT",
+			repository: {
+				type: "git",
+				url: "git+https://github.com/mohiwalla/laddu.git",
+			},
+			homepage: "https://laddu.wtf",
 			bin: { laddu: "cli/index.ts", "create-laddu": "cli/create.ts" },
 			engines: { bun: ">=1.4" },
 			os: ["linux"],
@@ -57,5 +62,6 @@ await Bun.write(
 	)}\n`,
 )
 await Bun.$`cp ${root}README.md ${dist}/README.md`
+await Bun.$`cp ${root}../../LICENSE ${dist}/LICENSE`
 await Bun.$`chmod 755 ${dist}/cli/index.ts ${dist}/cli/create.ts`
 console.log(`Built laddu ${cli.version} in ${dist}`)
