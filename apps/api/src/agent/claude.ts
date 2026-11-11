@@ -198,7 +198,7 @@ export function claudeSignIn(
 	const started = (async (): Promise<SignIn> => {
 		const turnId = `signin-${crypto.randomUUID().slice(0, 8)}`
 		// No browser to open (LADDU_BROWSER): Claude Code prints its paste-code link instead.
-		const { proc, container } = await startClaude(
+		const { proc, container, stderr } = await startClaude(
 			config,
 			user,
 			["auth", "login", "--claudeai"],
@@ -227,6 +227,10 @@ export function claudeSignIn(
 					])
 					await stop()
 					forgetClaude(user)
+					if (exit !== 0)
+						console.warn(
+							`[claude] sign-in ${exit === null ? "didn't finish in time" : `ended with exit ${exit}`}: ${stderr().trim().slice(-300)}`,
+						)
 					return exit === 0
 				},
 				stop: async () => {
@@ -277,25 +281,34 @@ export async function signInClaude(
 	})
 }
 
-/** The paste-code sign-in link `claude auth login` prints (Anthropic's page shows the code). */
-async function signInLink(
+/**
+ * The paste-code sign-in link `claude auth login` prints (Anthropic's page shows the code). Stdout
+ * is read to its end, not just to the link: once nobody reads it, Claude Code's "Login successful."
+ * ends `docker exec` with SIGPIPE, and a sign-in that worked looks like one that failed.
+ */
+export async function signInLink(
 	stdout: Bun.Subprocess<"pipe", "pipe", "pipe">["stdout"],
 ): Promise<string> {
-	let text = ""
-	const reading = (async () => {
+	const { promise, resolve, reject } = Promise.withResolvers<string>()
+	void (async () => {
+		let text = ""
+		let found = false
 		for await (const chunk of stdout.pipeThrough(new TextDecoderStream())) {
+			if (found) continue
 			text += chunk
 			const link = text.match(
 				/https:\/\/\S*oauth\/authorize\S*code=true\S*/,
 			)?.[0]
-			if (link) return link
+			if (!link) continue
+			found = true
+			resolve(link)
 		}
 		throw new Error(
 			`Claude Code didn't give a sign-in link: ${text.trim().slice(-300)}`,
 		)
-	})()
+	})().catch(reject)
 	return Promise.race([
-		reading,
+		promise,
 		Bun.sleep(30_000).then(() => {
 			throw new Error("Claude Code didn't give a sign-in link in time")
 		}),
