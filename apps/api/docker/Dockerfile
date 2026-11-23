@@ -1,6 +1,6 @@
 # Per-user runtime for laddu: every Slack user gets their own container from this image.
-# Their agent (Codex, Claude Code or OpenCode) runs inside it, so whatever it executes only sees this
-# container, never the host.
+# Their agent (Codex, Claude Code, Antigravity or OpenCode) runs inside it, so whatever it executes
+# only sees this container, never the host.
 # Built by src/agent/containers.ts; the build context also holds `codex/`, the platform
 # folder of the @openai/codex npm package (same version the SDK expects), layout intact.
 FROM debian:trixie
@@ -18,7 +18,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --uid 1000 --shell /bin/bash laddu \
- && mkdir -p /home/laddu/workspace /home/laddu/.codex /home/laddu/.claude \
+ && mkdir -p /home/laddu/workspace /home/laddu/.codex /home/laddu/.claude /home/laddu/.gemini \
  && chown -R laddu:laddu /home/laddu
 
 COPY codex /opt/codex
@@ -170,6 +170,15 @@ RUN case "$(dpkg --print-architecture)" in amd64) platform=x64 ;; arm64) platfor
  && mkdir -p /etc/claude-code \
  && printf '%s\n' '{"permissions":{"defaultMode":"bypassPermissions"},"promptSuggestionEnabled":false,"env":{"DISABLE_AUTOUPDATER":"1","CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION":"false"}}' \
       > /etc/claude-code/managed-settings.json
+
+# Antigravity CLI, the fourth agent (src/agent/agy.ts): Google's own build, run over ACP. People
+# sign in with their own Google account (paste-code flow), or bring a Gemini API key.
+ARG AGY=1.5.15-5514532022517760
+RUN case "$(dpkg --print-architecture)" in amd64) dir=linux-x64 file=cli_linux_x64.tar.gz ;; arm64) dir=linux-arm file=cli_linux_arm64.tar.gz ;; esac \
+ && curl -fsSL "https://storage.googleapis.com/antigravity-public/antigravity-cli/${AGY}/${dir}/${file}" \
+      | tar -xz -C /tmp \
+ && install -m 755 /tmp/antigravity /usr/local/bin/agy \
+ && rm -f /tmp/antigravity
 
 # The person's own computers (runtime/desktop with `machine`): an SSH client, and Tailscale to
 # reach them on their tailnet. It runs in userspace (state on the user's volume), since the

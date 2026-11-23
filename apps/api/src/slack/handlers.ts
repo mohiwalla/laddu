@@ -8,6 +8,7 @@ import type { BotConfig } from "../config"
 import { runTurn } from "../agent/agents"
 import type { Steer, TurnResult } from "../agent/turn"
 import { signIn } from "../agent/account"
+import { signInAgy } from "../agent/agy"
 import { signInClaude } from "../agent/claude"
 import { systemName } from "./system"
 import {
@@ -237,6 +238,7 @@ async function handle(
 		hearWords(key, typedRequest(trigger))
 		let reply: Reply | undefined
 		let started = false
+		let agentName: BotConfig["agent"] | undefined
 		const user = { teamId: trigger.teamId, userId: trigger.userId }
 		try {
 			const as = await postAs(user)
@@ -277,6 +279,7 @@ async function handle(
 				)
 			}
 			const personal = await configFor(config, user)
+			agentName = personal.agent
 			// Their ChatGPT plan's usage limit only holds up Codex.
 			const paused = personal.agent === "codex" && usagePause(user)
 			if (paused)
@@ -446,17 +449,23 @@ async function handle(
 			const failure =
 				error instanceof TurnFailed ? error.failure : classify(error)
 			if (!(error instanceof TurnFailed)) console.error(`[${key}]`, error)
-			if (failure.kind === "usage_limit")
+			if (failure.kind === "usage_limit" && agentName === "codex")
 				pauseForUsageLimit(user, failure)
 			// Nobody asked laddu, so it doesn't post a failure about it.
 			if (quiet && !started) return
-			// Not signed in to ChatGPT or Claude: the sign-in comes to them, privately, where they asked.
-			if (failure.kind === "auth" || failure.kind === "claude_auth") {
+			// Not signed in to ChatGPT, Claude or Antigravity: the sign-in comes to them, privately, where they asked.
+			if (
+				failure.kind === "auth" ||
+				failure.kind === "claude_auth" ||
+				failure.kind === "agy_auth"
+			) {
 				const where = { channel: trigger.channel, threadTs }
 				const sent = await (
 					failure.kind === "auth"
 						? signIn(config, client, user, where)
-						: signInClaude(client, user, where)
+						: failure.kind === "claude_auth"
+							? signInClaude(client, user, where)
+							: signInAgy(client, user, where)
 				).then(
 					() => true,
 					error => {
@@ -987,8 +996,10 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 			"",
 			`Do it now. Your reply is posted ${where} as-is${job.post === "dm" ? "" : `; mention <@${job.userId}> if it's a reminder or needs their attention`}. If there's nothing worth posting this time (e.g. nothing changed), reply exactly [SILENT].`,
 		].join("\n")
+		let agentName: BotConfig["agent"] | undefined
 		try {
 			const personal = await configFor(config, user)
+			agentName = personal.agent
 			const usage = personal.agent === "codex" && usagePause(user)
 			if (usage)
 				throw new TurnFailed({
@@ -1038,7 +1049,7 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 				`[scheduler] ${job.id} "${job.name}" failed (${failure.kind}):`,
 				error,
 			)
-			if (failure.kind === "usage_limit")
+			if (failure.kind === "usage_limit" && agentName === "codex")
 				pauseForUsageLimit(user, failure)
 			if (!willRetry(job))
 				await postTo(

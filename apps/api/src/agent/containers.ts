@@ -30,6 +30,8 @@ export const CODEX_DOCKER_WRAPPER = `${appRoot}scripts/codex-docker.sh`
 export const OPENCODE_DOCKER_WRAPPER = `${appRoot}scripts/opencode-docker.sh`
 /** The same for Claude Code (`claude`, headless). */
 export const CLAUDE_DOCKER_WRAPPER = `${appRoot}scripts/claude-docker.sh`
+/** The same for Antigravity CLI (`agy`, over ACP). */
+export const AGY_DOCKER_WRAPPER = `${appRoot}scripts/agy-docker.sh`
 
 const runtimeDir = `${paths.dataDir}/runtime`
 const hostConfigToml = `${runtimeDir}/config.toml`
@@ -100,9 +102,10 @@ export async function ensureImage(): Promise<string> {
 /** The Docker bridge's address on this machine, where containers reach the bot API. */
 let gateway: Promise<string> | null = null
 export const bridgeGateway = () =>
-	(gateway ??= Bun.$`docker network inspect bridge --format ${"{{(index .IPAM.Config 0).Gateway}}"}`
-		.text()
-		.then(text => text.trim()))
+	(gateway ??=
+		Bun.$`docker network inspect bridge --format ${"{{(index .IPAM.Config 0).Gateway}}"}`
+			.text()
+			.then(text => text.trim()))
 
 /** Builds the runtime image and writes what every container mounts; returns the image tag. */
 export async function prepareDocker(config: BotConfig): Promise<string> {
@@ -342,7 +345,9 @@ async function isolate(name: string): Promise<void> {
 		":OUTPUT ACCEPT [0:0]",
 		"-A OUTPUT -o lo -j ACCEPT",
 		...(api
-			? [`-A OUTPUT -d ${host} -p tcp --dport ${new URL(api).port} -j ACCEPT`]
+			? [
+					`-A OUTPUT -d ${host} -p tcp --dport ${new URL(api).port} -j ACCEPT`,
+				]
 			: []),
 		// Replies from the desktop's web viewer to the bot's gateway (see agent/desktop.ts).
 		`-A OUTPUT -d ${host} -p tcp --sport ${DESKTOP_VIEWER_PORT} -j ACCEPT`,
@@ -409,17 +414,17 @@ export async function stopRun(
 }
 
 /**
- * Stops agent runs (Codex, Claude Code, OpenCode) left in this workspace's containers by a previous bot
- * process. Killing the bot only ends `docker exec` on the host; the run inside keeps going and
- * holds its thread's lock ("already has an active writer"). Call at startup, before this process
- * starts any turn.
+ * Stops agent runs (Codex, Claude Code, Antigravity, OpenCode) left in this workspace's containers
+ * by a previous bot process. Killing the bot only ends `docker exec` on the host; the run inside
+ * keeps going and holds its thread's lock ("already has an active writer"). Call at startup,
+ * before this process starts any turn.
  */
 export async function stopOrphanedRuns(teamId: string): Promise<void> {
 	const listing =
 		await Bun.$`docker ps ${ownContainers} --filter ${`label=laddu.team=${teamId}`} --format ${"{{.Names}}"}`.text()
 	for (const name of listing.split("\n").filter(Boolean)) {
 		const killed =
-			await Bun.$`docker exec ${name} pkill -f ${"^(codex(\\[turn=[^]]*\\])? (exec|app-server)|opencode\\[turn=[^]]*\\] acp|claude\\[turn=[^]]*\\] )"}`
+			await Bun.$`docker exec ${name} pkill -f ${"^(codex(\\[turn=[^]]*\\])? (exec|app-server)|opencode\\[turn=[^]]*\\] acp|claude\\[turn=[^]]*\\] |agy\\[turn=[^]]*\\] )"}`
 				.quiet()
 				.nothrow()
 		if (killed.exitCode === 0)

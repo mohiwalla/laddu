@@ -69,11 +69,13 @@ export function effective(
 	const fallback = {
 		codex: config.model,
 		claude: config.claudeModel,
+		agy: config.agyModel,
 		opencode: config.opencodeModel,
 	}[agent]
 	const fallbackEffort = {
 		codex: config.reasoningEffort,
 		claude: config.claudeEffort,
+		agy: config.agyEffort,
 		opencode: config.opencodeEffort,
 	}[agent]
 	const find = (id?: string) => models.find(model => model.id === id)

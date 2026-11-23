@@ -11,6 +11,9 @@ import * as acp from "@agentclientprotocol/sdk"
 import type { ThreadItem } from "@openai/codex-sdk"
 import type { AgentItem } from "./steps"
 
+export type AcpContentBlock = acp.ContentBlock
+export type AcpMcpServer = acp.McpServer
+
 export type AcpProcess = {
 	/** Starts the agent with ACP on stdin and stdout (wherever it runs). */
 	command: string[]
@@ -18,6 +21,8 @@ export type AcpProcess = {
 	/** The session's working directory, as the agent sees it. */
 	cwd: string
 	mcpServers: acp.McpServer[]
+	/** ACP auth method to invoke before opening a session (e.g. "gemini-api-key"). */
+	authMethod?: string
 	/** A value of the session's model option; left as it is when the agent doesn't offer it. */
 	model?: string
 	/** A value of the model's reasoning option (thought_level); left as it is when not offered. */
@@ -26,8 +31,36 @@ export type AcpProcess = {
 	stop: () => Promise<void>
 }
 
+export type AcpSessionInfo = {
+	sessionId: string
+	configOptions?: acp.SessionConfigOption[] | null
+	models?: {
+		availableModels?: {
+			modelId: string
+			name?: string
+			description?: string | null
+		}[]
+		currentModelId?: string
+	} | null
+	/** Whether the agent accepts inline image content blocks. */
+	images: boolean
+}
+
 /** The agent doesn't have the conversation any more (errors.ts starts a fresh one). */
 export class LostSessionError extends Error {}
+
+/** The agent refused the session because the person isn't signed in (JSON-RPC -32000). */
+export class AuthRequiredError extends Error {}
+
+const isAuthRequired = (error: unknown): boolean => {
+	if (!error || typeof error !== "object") return false
+	const code = (error as { code?: unknown }).code
+	const message = error instanceof Error ? error.message : String(error)
+	return (
+		code === -32000 ||
+		/authentication required|not authenticated/i.test(message)
+	)
+}
 
 export async function runAcpTurn(
 	agent: AcpProcess,
@@ -165,11 +198,25 @@ export async function runAcpTurn(
 				clientInfo: { name: "laddu", version: "1" },
 			}),
 		)
+		if (agent.authMethod)
+			await call(
+				peer.request("authenticate", { methodId: agent.authMethod }),
+			).catch(error => {
+				if (isAuthRequired(error))
+					throw new AuthRequiredError(
+						error instanceof Error ? error.message : String(error),
+					)
+				throw error
+			})
 		const session = { cwd: agent.cwd, mcpServers: agent.mcpServers }
 		let configOptions: acp.SessionConfigOption[] | null | undefined
 		if (sessionId) {
 			const resumed = sessionId
 			const lost = (error: unknown) => {
+				if (isAuthRequired(error))
+					throw new AuthRequiredError(
+						error instanceof Error ? error.message : String(error),
+					)
 				throw new LostSessionError(
 					`The agent no longer has this conversation (${error instanceof Error ? error.message : String(error)})`,
 				)
@@ -195,7 +242,13 @@ export async function runAcpTurn(
 		} else {
 			const created = await call(
 				peer.request<acp.NewSessionResponse>("session/new", session),
-			)
+			).catch(error => {
+				if (isAuthRequired(error))
+					throw new AuthRequiredError(
+						error instanceof Error ? error.message : String(error),
+					)
+				throw error
+			})
 			sessionId = created.sessionId
 			configOptions = created.configOptions
 		}
@@ -225,6 +278,7 @@ export async function runAcpTurn(
 				))
 		}
 
+		options.signal?.throwIfAborted()
 		// Steering: what to send once the running prompt has been cancelled.
 		let queued: acp.ContentBlock[] = []
 		let cancelling = false
@@ -241,6 +295,7 @@ export async function runAcpTurn(
 		})
 		let prompt = options.prompt
 		for (;;) {
+			options.signal?.throwIfAborted()
 			const request = call(
 				peer.request("session/prompt", { sessionId: id, prompt }),
 			)
@@ -268,6 +323,134 @@ export async function runAcpTurn(
 		options.onSteerable?.(null)
 		options.signal?.removeEventListener("abort", onAbort)
 		await stopping
+		connection.close()
+		proc.kill()
+		await agent.stop().catch(() => {})
+	}
+}
+
+/**
+ * Starts an ACP agent briefly to open a fresh session (for listing models and checking sign-in)
+ * without running a prompt. Throws AuthRequiredError if the agent refuses the session for auth.
+ */
+export async function probeAcpSession(
+	agent: Pick<AcpProcess, "command" | "env" | "cwd" | "authMethod" | "stop">,
+): Promise<AcpSessionInfo> {
+	const proc = Bun.spawn(agent.command, {
+		env: agent.env,
+		stdin: "pipe",
+		stdout: "pipe",
+		stderr: "pipe",
+	})
+	let stderr = ""
+	void (async () => {
+		for await (const chunk of proc.stderr.pipeThrough(
+			new TextDecoderStream(),
+		))
+			stderr = (stderr + chunk).slice(-4000)
+	})().catch(() => {})
+	const exited = proc.exited.then(code => {
+		const detail = stderr.trim().split("\n").at(-1)
+		throw new Error(
+			`The agent stopped (exit ${code})${detail ? `: ${detail}` : ""}`,
+		)
+	})
+	exited.catch(() => {})
+	const connection = acp
+		.client({ name: "laddu" })
+		.onNotification("session/update", async () => {})
+		.connect(
+			acp.ndJsonStream(
+				new WritableStream<Uint8Array>({
+					write: async chunk => {
+						proc.stdin.write(chunk)
+						await proc.stdin.flush()
+					},
+					close: () => {
+						proc.stdin.end()
+					},
+				}),
+				proc.stdout as ReadableStream<Uint8Array>,
+			),
+		)
+	const call = <T>(request: Promise<T>) => Promise.race([request, exited])
+	const peer = connection.agent
+	try {
+		const init = await call(
+			peer.request("initialize", {
+				protocolVersion: acp.PROTOCOL_VERSION,
+				clientCapabilities: {},
+				clientInfo: { name: "laddu", version: "1" },
+			}),
+		)
+		if (agent.authMethod)
+			await call(
+				peer.request("authenticate", { methodId: agent.authMethod }),
+			).catch(error => {
+				if (isAuthRequired(error))
+					throw new AuthRequiredError(
+						error instanceof Error ? error.message : String(error),
+					)
+				throw error
+			})
+		const created = (await call(
+			peer.request<acp.NewSessionResponse>("session/new", {
+				cwd: agent.cwd,
+				mcpServers: [],
+			}),
+		).catch(error => {
+			if (isAuthRequired(error))
+				throw new AuthRequiredError(
+					error instanceof Error ? error.message : String(error),
+				)
+			throw error
+		})) as acp.NewSessionResponse & { models?: AcpSessionInfo["models"] }
+		return {
+			sessionId: created.sessionId,
+			configOptions: created.configOptions,
+			models: created.models,
+			images: init.agentCapabilities?.promptCapabilities?.image === true,
+		}
+	} finally {
+		connection.close()
+		proc.kill()
+		await agent.stop().catch(() => {})
+	}
+}
+
+/** Signs out an ACP agent that supports the `logout` method (e.g. Antigravity). */
+export async function logoutAcp(
+	agent: Pick<AcpProcess, "command" | "env" | "stop">,
+): Promise<void> {
+	const proc = Bun.spawn(agent.command, {
+		env: agent.env,
+		stdin: "pipe",
+		stdout: "pipe",
+		stderr: "pipe",
+	})
+	const connection = acp.client({ name: "laddu" }).connect(
+		acp.ndJsonStream(
+			new WritableStream<Uint8Array>({
+				write: async chunk => {
+					proc.stdin.write(chunk)
+					await proc.stdin.flush()
+				},
+				close: () => {
+					proc.stdin.end()
+				},
+			}),
+			proc.stdout as ReadableStream<Uint8Array>,
+		),
+	)
+	const peer = connection.agent
+	try {
+		await peer.request("initialize", {
+			protocolVersion: acp.PROTOCOL_VERSION,
+			clientCapabilities: {},
+			clientInfo: { name: "laddu", version: "1" },
+		})
+		await peer.request("logout", {})
+	} finally {
 		connection.close()
 		proc.kill()
 		await agent.stop().catch(() => {})
@@ -312,6 +495,11 @@ const withoutNulls = (update: object) =>
 
 const basename = (path: string) => path.replace(/\/+$/, "").replace(/^.*\//, "")
 
+const stringOf = (...values: unknown[]): string | undefined =>
+	values.find((value): value is string => typeof value === "string")
+
+const WEB_SEARCH = /(?:web[ _]?search|search[ _]?web)/i
+
 /**
  * An ACP tool call as one of the items steps.ts knows. Held back until its input is known: the
  * first title it shows is the one kept.
@@ -319,17 +507,20 @@ const basename = (path: string) => path.replace(/\/+$/, "").replace(/^.*\//, "")
 export function toItem(tool: acp.ToolCallUpdate): AgentItem | null {
 	const input = (tool.rawInput ?? {}) as Record<string, unknown>
 	const done = tool.status === "completed" || tool.status === "failed"
+	const title = tool.title ?? ""
 	// What makes its title: a command's command, a search's query, a fetch's URL.
-	const key =
+	const command = stringOf(input.command, input.CommandLine, input.cmd)
+	const url = stringOf(input.url, input.Url, input.uri)
+	const query = stringOf(input.query, input.Query)
+	const missing =
 		tool.kind === "execute"
-			? "command"
+			? command === undefined
 			: tool.kind === "fetch"
-				? "url"
-				: /web ?search/i.test(tool.title ?? "")
-					? "query"
-					: null
-	if (!done && (key ? input[key] === undefined : !Object.keys(input).length))
-		return null
+				? url === undefined
+				: WEB_SEARCH.test(title)
+					? query === undefined
+					: !Object.keys(input).length && !tool.locations?.length
+	if (!done && missing) return null
 	const id = tool.toolCallId
 	const status =
 		tool.status === "failed"
@@ -337,14 +528,18 @@ export function toItem(tool: acp.ToolCallUpdate): AgentItem | null {
 			: tool.status === "completed"
 				? "completed"
 				: "in_progress"
-	const title = tool.title ?? ""
 	const paths = [
 		...(tool.locations ?? []).map(location => location.path),
-		...[input.filePath, input.path].filter(
-			(path): path is string => typeof path === "string",
-		),
+		...[
+			input.filePath,
+			input.file_path,
+			input.path,
+			input.Path,
+			input.TargetFile,
+			input.AbsolutePath,
+		].filter((path): path is string => typeof path === "string"),
 	]
-	const desktop = title.match(/^desktop[_.]([a-z_]+)$/)
+	const desktop = title.match(/^(?:mcp__?desktop__?|desktop[_.:/])([a-z_]+)$/)
 	if (desktop)
 		return {
 			id,
@@ -354,11 +549,11 @@ export function toItem(tool: acp.ToolCallUpdate): AgentItem | null {
 			arguments: input,
 			status,
 		} as ThreadItem
-	if (/web ?search/i.test(title))
+	if (WEB_SEARCH.test(title))
 		return {
 			id,
 			type: "web_search",
-			query: String(input.query ?? ""),
+			query: query ?? "",
 		} as ThreadItem
 	switch (tool.kind) {
 		case "execute": {
@@ -368,7 +563,7 @@ export function toItem(tool: acp.ToolCallUpdate): AgentItem | null {
 			return {
 				id,
 				type: "command_execution",
-				command: String(input.command ?? title),
+				command: command ?? title,
 				aggregated_output: "",
 				...(typeof metadata?.exit === "number"
 					? { exit_code: metadata.exit }
@@ -380,7 +575,7 @@ export function toItem(tool: acp.ToolCallUpdate): AgentItem | null {
 			return {
 				id,
 				type: "command_execution",
-				command: `webfetch ${String(input.url ?? title)}`,
+				command: `webfetch ${url ?? title}`,
 				aggregated_output: "",
 				status,
 			} as ThreadItem
