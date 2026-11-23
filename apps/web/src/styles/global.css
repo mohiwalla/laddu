@@ -4516,6 +4516,10 @@ body {
 		animation: none;
 	}
 
+	.tile:hover {
+		transform: none;
+	}
+
 	[data-slot="dialog-content"].install-dialog,
 	[data-slot="dialog-content"].install-dialog:is(
 			[data-starting-style],

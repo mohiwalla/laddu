@@ -7,6 +7,31 @@ export interface CopyButtonProps {
 	onCopied: (text: string) => void
 }
 
+async function copyText(text: string): Promise<boolean> {
+	try {
+		if (navigator.clipboard?.writeText) {
+			await navigator.clipboard.writeText(text)
+			return true
+		}
+	} catch {
+		// Fall through to legacy selection copy fallback
+	}
+	try {
+		const ta = document.createElement("textarea")
+		ta.value = text
+		ta.setAttribute("readonly", "")
+		ta.style.position = "fixed"
+		ta.style.opacity = "0"
+		document.body.appendChild(ta)
+		ta.select()
+		const ok = document.execCommand("copy")
+		ta.remove()
+		return ok
+	} catch {
+		return false
+	}
+}
+
 export function CopyButton({ text, onCopied }: CopyButtonProps) {
 	const [copied, setCopied] = useState(false)
 	const timerRef = useRef<number | null>(null)
@@ -18,8 +43,9 @@ export function CopyButton({ text, onCopied }: CopyButtonProps) {
 		[],
 	)
 
-	function handleCopy() {
-		navigator.clipboard?.writeText(text).catch(() => {})
+	async function handleCopy() {
+		const ok = await copyText(text)
+		if (!ok) return
 		onCopied(text)
 		if (timerRef.current !== null) window.clearTimeout(timerRef.current)
 
@@ -36,7 +62,7 @@ export function CopyButton({ text, onCopied }: CopyButtonProps) {
 			data-copied={copied ? "true" : "false"}
 			onClick={e => {
 				e.stopPropagation()
-				handleCopy()
+				void handleCopy()
 			}}
 		>
 			<span className="copy-label">

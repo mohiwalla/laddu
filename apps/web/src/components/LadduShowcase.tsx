@@ -12,6 +12,8 @@ import {
 	createToaster,
 } from "@ui-sdk/react/toast"
 import {
+	Component,
+	type ReactNode,
 	Suspense,
 	lazy,
 	startTransition,
@@ -36,6 +38,25 @@ import { ShowcaseCard } from "./ShowcaseCards"
 
 const loadInstallDialog = () => import("./InstallDialog")
 const LazyInstallDialog = lazy(loadInstallDialog)
+
+class DialogErrorBoundary extends Component<
+	{ children: ReactNode; onError: () => void },
+	{ failed: boolean }
+> {
+	state = { failed: false }
+
+	static getDerivedStateFromError() {
+		return { failed: true }
+	}
+
+	componentDidCatch() {
+		this.props.onError()
+	}
+
+	render() {
+		return this.state.failed ? null : this.props.children
+	}
+}
 
 const INITIAL_DELAYS = [0, 45, 80, 108, 130, 148]
 const SPRING_K = 165
@@ -187,6 +208,7 @@ export function LadduShowcase() {
 	// Camera coordinates are in world units; zoom scales cards on smaller screens
 	const cam = useRef({ x: -275, y: 302, vx: 0, vy: 0, scale: 1 })
 	const springTarget = useRef<{ x: number; y: number } | null>(null)
+	const springCardIdRef = useRef<CardId | null>(null)
 	const rafId = useRef(0)
 	const wheelRafId = useRef(0)
 	const wheelDeltaRef = useRef({ dx: 0, dy: 0 })
@@ -310,12 +332,19 @@ export function LadduShowcase() {
 
 	const stopMotion = useCallback(() => {
 		springTarget.current = null
+		springCardIdRef.current = null
 		cam.current.vx = 0
 		cam.current.vy = 0
 		if (rafId.current) {
 			cancelAnimationFrame(rafId.current)
 			rafId.current = 0
 		}
+		if (wheelRafId.current) {
+			cancelAnimationFrame(wheelRafId.current)
+			wheelRafId.current = 0
+		}
+		wheelDeltaRef.current.dx = 0
+		wheelDeltaRef.current.dy = 0
 	}, [])
 
 	const ensureLoop = useCallback(() => {
@@ -354,6 +383,7 @@ export function LadduShowcase() {
 					c.vx = 0
 					c.vy = 0
 					springTarget.current = null
+					springCardIdRef.current = null
 					syncGrid(true)
 					updateDockFromCamera()
 				} else {
@@ -383,49 +413,58 @@ export function LadduShowcase() {
 		rafId.current = requestAnimationFrame(tick)
 	}, [syncGrid, updateDockFromCamera])
 
+	const computeTargetForCard = useCallback((targetId: CardId) => {
+		const spec = MASONRY_LAYOUT.find(item => item.id === targetId)
+		if (!spec) return null
+
+		const safe = safeRectRef.current
+		const scale = cam.current.scale
+		const centerX = cam.current.x + (safe.left + safe.width / 2) / scale
+		const centerY = cam.current.y + (safe.top + safe.height / 2) / scale
+		const tx0 = Math.floor(centerX / MACRO_W)
+		const ty0 = Math.floor(centerY / MACRO_H)
+
+		let bestX = cam.current.x
+		let bestY = cam.current.y
+		let bestDist = Infinity
+
+		for (let ty = ty0 - 1; ty <= ty0 + 1; ty++) {
+			for (let tx = tx0 - 1; tx <= tx0 + 1; tx++) {
+				const wx = tx * MACRO_W + spec.x + spec.w / 2
+				const wy = ty * MACRO_H + spec.y + spec.h / 2
+				const d = Math.hypot(wx - centerX, wy - centerY)
+				if (d < bestDist) {
+					bestDist = d
+					bestX = wx - (safe.left + safe.width / 2) / scale
+					bestY = wy - (safe.top + safe.height / 2) / scale
+				}
+			}
+		}
+
+		return { x: bestX, y: bestY }
+	}, [])
+
 	const jumpToCard = useCallback(
 		(targetId: CardId) => {
 			activeDockRef.current = targetId
 			setActiveDock(targetId)
-			const spec = MASONRY_LAYOUT.find(item => item.id === targetId)
-			if (!spec) return
-
-			const safe = safeRectRef.current
-			const scale = cam.current.scale
-			const centerX = cam.current.x + (safe.left + safe.width / 2) / scale
-			const centerY = cam.current.y + (safe.top + safe.height / 2) / scale
-			const tx0 = Math.floor(centerX / MACRO_W)
-			const ty0 = Math.floor(centerY / MACRO_H)
-
-			let bestX = cam.current.x
-			let bestY = cam.current.y
-			let bestDist = Infinity
-
-			for (let ty = ty0 - 1; ty <= ty0 + 1; ty++) {
-				for (let tx = tx0 - 1; tx <= tx0 + 1; tx++) {
-					const wx = tx * MACRO_W + spec.x + spec.w / 2
-					const wy = ty * MACRO_H + spec.y + spec.h / 2
-					const d = Math.hypot(wx - centerX, wy - centerY)
-					if (d < bestDist) {
-						bestDist = d
-						bestX = wx - (safe.left + safe.width / 2) / scale
-						bestY = wy - (safe.top + safe.height / 2) / scale
-					}
-				}
-			}
+			const target = computeTargetForCard(targetId)
+			if (!target) return
 
 			if (prefersReduced()) {
 				stopMotion()
-				cam.current.x = bestX
-				cam.current.y = bestY
+				cam.current.x = target.x
+				cam.current.y = target.y
 				syncGrid(true)
 				return
 			}
 
-			springTarget.current = { x: bestX, y: bestY }
+			stopMotion()
+			springCardIdRef.current = targetId
+			springTarget.current = target
 			ensureLoop()
 		},
-		[ensureLoop, stopMotion, syncGrid],
+		[computeTargetForCard, ensureLoop, stopMotion, syncGrid],
 	)
 
 	// Place hero composition identically to pre-paint inline script (zero layout shift on refresh)
@@ -441,6 +480,9 @@ export function LadduShowcase() {
 				cam.current.x = init.x
 				cam.current.y = init.y
 				cam.current.scale = init.scale
+			} else if (springTarget.current && springCardIdRef.current) {
+				const recomputed = computeTargetForCard(springCardIdRef.current)
+				if (recomputed) springTarget.current = recomputed
 			}
 			syncGrid(true)
 		}
@@ -450,7 +492,7 @@ export function LadduShowcase() {
 			window.removeEventListener("resize", updateLayout)
 			stopMotion()
 		}
-	}, [measureLayout, stopMotion, syncGrid])
+	}, [computeTargetForCard, measureLayout, stopMotion, syncGrid])
 
 	// Coalesce high-frequency trackpad wheel events into 1 transform write per rAF + debounced dock sync
 	useEffect(() => {
@@ -470,10 +512,18 @@ export function LadduShowcase() {
 		}
 
 		const onWheel = (e: WheelEvent) => {
+			// Preserve native browser pinch/Ctrl+wheel zoom gestures
+			if (e.ctrlKey || e.metaKey) return
 			e.preventDefault()
 			stopMotion()
-			wheelDeltaRef.current.dx += e.deltaX
-			wheelDeltaRef.current.dy += e.deltaY
+			const unit =
+				e.deltaMode === WheelEvent.DOM_DELTA_LINE
+					? 16
+					: e.deltaMode === WheelEvent.DOM_DELTA_PAGE
+						? viewportRef.current.vh || window.innerHeight
+						: 1
+			wheelDeltaRef.current.dx += e.deltaX * unit
+			wheelDeltaRef.current.dy += e.deltaY * unit
 			if (!wheelRafId.current) {
 				wheelRafId.current = requestAnimationFrame(flushWheel)
 			}
@@ -548,6 +598,42 @@ export function LadduShowcase() {
 		ensureLoop()
 	}
 
+	const handlePointerCancel = (e: React.PointerEvent<HTMLElement>) => {
+		const d = dragRef.current
+		if (!d.active || e.pointerId !== d.pointerId) return
+		d.active = false
+		d.pointerId = -1
+		stageRef.current?.classList.remove("dragging")
+		cam.current.vx = 0
+		cam.current.vy = 0
+		updateDockFromCamera()
+	}
+
+	const handleStageKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
+		const target = e.target as HTMLElement | null
+		if (target?.closest("button, a, input, [role='radiogroup']")) return
+		const step = e.shiftKey ? 360 : 180
+		let dx = 0
+		let dy = 0
+		if (e.key === "ArrowLeft") dx = -step
+		else if (e.key === "ArrowRight") dx = step
+		else if (e.key === "ArrowUp") dy = -step
+		else if (e.key === "ArrowDown") dy = step
+		else if (e.key === "Home") {
+			e.preventDefault()
+			jumpToCard("skins")
+			return
+		} else {
+			return
+		}
+		e.preventDefault()
+		stopMotion()
+		cam.current.x += dx
+		cam.current.y += dy
+		syncGrid(true)
+		updateDockFromCamera()
+	}
+
 	const handleSelectMascot = useCallback((id: string) => {
 		setMascotId(id)
 		if (!prefersReduced()) {
@@ -577,8 +663,19 @@ export function LadduShowcase() {
 	const handlePrefetchInstall = useCallback(() => {
 		if (prefetchedDialogRef.current) return
 		prefetchedDialogRef.current = true
-		void loadInstallDialog()
+		loadInstallDialog().catch(() => {
+			prefetchedDialogRef.current = false
+		})
 	}, [])
+
+	const handleDialogLoadError = useCallback(() => {
+		setInstallOpen(false)
+		setInstallMounted(false)
+		prefetchedDialogRef.current = false
+		toaster.info("Run in your Linux terminal", {
+			description: "curl -fsSL https://laddu.wtf/install.sh | sh",
+		})
+	}, [toaster])
 
 	const handleOpenInstall = useCallback(() => {
 		setInstallMounted(true)
@@ -598,7 +695,8 @@ export function LadduShowcase() {
 					onPointerDown={handlePointerDown}
 					onPointerMove={handlePointerMove}
 					onPointerUp={handlePointerEnd}
-					onPointerCancel={handlePointerEnd}
+					onPointerCancel={handlePointerCancel}
+					onKeyDown={handleStageKeyDown}
 					onDragStart={e => e.preventDefault()}
 				>
 					<div className="canvas-world" ref={worldRef}>
@@ -811,13 +909,15 @@ export function LadduShowcase() {
 			</main>
 
 			{installMounted && (
-				<Suspense fallback={null}>
-					<LazyInstallDialog
-						open={installOpen}
-						onOpenChange={setInstallOpen}
-						onCopySuccess={handleCopySuccess}
-					/>
-				</Suspense>
+				<DialogErrorBoundary onError={handleDialogLoadError}>
+					<Suspense fallback={null}>
+						<LazyInstallDialog
+							open={installOpen}
+							onOpenChange={setInstallOpen}
+							onCopySuccess={handleCopySuccess}
+						/>
+					</Suspense>
+				</DialogErrorBoundary>
 			)}
 
 			<ToastRegion toaster={toaster} className="laddu-toasts">
