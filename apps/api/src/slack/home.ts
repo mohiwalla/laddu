@@ -216,58 +216,86 @@ const claudeKeyForm = () => ({
 })
 
 /**
- * Connect Claude (claude.ts claudeSignIn): sign in with the link, paste the code Claude shows. With
- * no link yet, it says it's getting one; `problem` says why they're seeing it again.
+ * Shared two-step paste-code sign-in modal (Claude Code and Antigravity): full-width Step 1 with a
+ * neutral sign-in button, a divider, then Step 2's input so Connect is the sole primary button.
  */
-function claudeConnectView(
+function pasteCodeConnectView(
+	spec: {
+		callbackId: string
+		title: string
+		step1Title: string
+		step1Instruction: string
+		buttonLabel: string
+		placeholder: string
+		targetName: string
+	},
 	link: string | null,
 	problem?: string,
 ): types.ModalView {
 	const steps: types.KnownBlock[] = link
 		? [
+				row(`*Step 1 · ${spec.step1Title}*`),
+				context(spec.step1Instruction),
 				{
-					type: "section",
-					text: md(
-						"*1.  Sign in with Claude*\nApprove in your browser, then copy the code Claude shows you.",
-					),
-					accessory: {
-						type: "button",
-						action_id: "system_link",
-						text: plain("Sign in with Claude"),
-						url: link,
-						style: "primary",
-					},
+					type: "actions",
+					elements: [
+						{
+							type: "button",
+							action_id: "system_link",
+							text: plain(spec.buttonLabel),
+							url: link,
+						},
+					],
 				},
+				divider,
 				{
 					type: "input",
 					block_id: "code",
-					label: plain("2.  Paste the code"),
+					label: plain("Step 2 · Paste the code"),
 					hint: plain(
-						`It goes straight to Claude Code on ${systemName()}'s computer, which finishes signing you in. ${systemName()} doesn't keep it.`,
+						`Sent straight to ${spec.targetName} on ${systemName()}'s computer — ${systemName()} doesn't keep it.`,
 					),
 					element: {
 						type: "plain_text_input",
 						action_id: "value",
 						max_length: 1000,
-						placeholder: plain("Code from Claude"),
+						placeholder: plain(spec.placeholder),
 					},
 				},
 			]
 		: [context(":hourglass_flowing_sand:  Getting your sign-in link…")]
 	return {
 		type: "modal",
-		callback_id: "home_claude_code",
-		title: plain("Connect Claude"),
+		callback_id: spec.callbackId,
+		title: plain(spec.title),
 		...(link ? { submit: plain("Connect") } : {}),
 		close: plain("Cancel"),
-		blocks: [
-			...(problem ? [row(`:warning:  ${problem}`)] : []),
-			context(
-				`${systemName()} runs Claude Code on your own Claude plan. Sign in once; it stays connected.`,
-			),
-			...steps,
-		],
+		blocks: [...(problem ? [row(`:warning:  ${problem}`)] : []), ...steps],
 	}
+}
+
+/**
+ * Connect Claude (claude.ts claudeSignIn): sign in with the link, paste the code Claude shows. With
+ * no link yet, it says it's getting one; `problem` says why they're seeing it again.
+ */
+export function claudeConnectView(
+	link: string | null,
+	problem?: string,
+): types.ModalView {
+	return pasteCodeConnectView(
+		{
+			callbackId: "home_claude_code",
+			title: "Connect Claude",
+			step1Title: "Sign in with Claude",
+			step1Instruction:
+				"Approve in your browser, then copy the code shown at the end.",
+			buttonLabel: "Open Claude sign-in ↗",
+			placeholder: "Code from Claude",
+			targetName: "Claude Code",
+		},
+		link,
+		problem,
+	)
 }
 
 /** The Connect Claude form after Connect: connecting, then the outcome. */
@@ -292,55 +320,24 @@ const agyKeyForm = () => ({
  * Antigravity shows. With no link yet, it says it's getting one; `problem` says why they're seeing
  * it again.
  */
-function agyConnectView(
+export function agyConnectView(
 	link: string | null,
 	problem?: string,
 ): types.ModalView {
-	const steps: types.KnownBlock[] = link
-		? [
-				{
-					type: "section",
-					text: md(
-						"*1.  Sign in with Google*\nApprove in your browser, then copy the authorization code (or the callback URL) Antigravity shows you.",
-					),
-					accessory: {
-						type: "button",
-						action_id: "system_link",
-						text: plain("Sign in with Google"),
-						url: link,
-						style: "primary",
-					},
-				},
-				{
-					type: "input",
-					block_id: "code",
-					label: plain("2.  Paste the code"),
-					hint: plain(
-						`It goes straight to Antigravity on ${systemName()}'s computer, which finishes signing you in. ${systemName()} doesn't keep it.`,
-					),
-					element: {
-						type: "plain_text_input",
-						action_id: "value",
-						max_length: 1000,
-						placeholder: plain("Code or callback URL"),
-					},
-				},
-			]
-		: [context(":hourglass_flowing_sand:  Getting your sign-in link…")]
-	return {
-		type: "modal",
-		callback_id: "home_agy_code",
-		title: plain("Connect Antigravity"),
-		...(link ? { submit: plain("Connect") } : {}),
-		close: plain("Cancel"),
-		blocks: [
-			...(problem ? [row(`:warning:  ${problem}`)] : []),
-			context(
-				`${systemName()} runs Antigravity on your own Google account. Sign in once; it stays connected.`,
-			),
-			...steps,
-		],
-	}
+	return pasteCodeConnectView(
+		{
+			callbackId: "home_agy_code",
+			title: "Connect Antigravity",
+			step1Title: "Sign in with Google",
+			step1Instruction:
+				"Approve in your browser, then copy the code or callback URL shown at the end.",
+			buttonLabel: "Open Google sign-in ↗",
+			placeholder: "Code or callback URL",
+			targetName: "Antigravity",
+		},
+		link,
+		problem,
+	)
 }
 
 /** The Connect Antigravity form after Connect: connecting, then the outcome. */
