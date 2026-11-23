@@ -6,10 +6,25 @@
 	"type": "module",
 	"description": "laddu.wtf, the marketing site",
 	"scripts": {
-		"dev": "bun ./index.html",
-		"build": "bun run build.ts"
+		"dev": "astro dev",
+		"build": "bun run build.ts",
+		"typecheck": "tsc --noEmit",
+		"preview": "astro preview"
 	},
 	"dependencies": {
-		"torph": "0.1.3"
+		"@astrojs/react": "^7.1.9",
+		"@tailwindcss/vite": "^4.3.5",
+		"@ui-sdk/core": "^0.1.0-beta.13",
+		"@ui-sdk/react": "^0.1.0-beta.13",
+		"astro": "^7.4.13",
+		"react": "^19.3.1",
+		"react-dom": "^19.3.1",
+		"tailwindcss": "^4.3.5",
+		"torph": "^0.1.4"
+	},
+	"devDependencies": {
+		"@types/react": "^19.3.0",
+		"@types/react-dom": "^19.3.0",
+		"typescript": "^5.9.0"
 	}
 }

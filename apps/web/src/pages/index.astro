@@ -1,0 +1,80 @@
+---
+import "../styles/global.css"
+import { LadduShowcase } from "../components/LadduShowcase"
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta
+			name="viewport"
+			content="width=device-width, initial-scale=1, viewport-fit=cover"
+		/>
+		<meta name="theme-color" content="#111111" />
+		<title>laddu — your team’s private AI teammate in Slack</title>
+		<meta
+			name="description"
+			content="Self-hosted AI teammate that lives in Slack. Runs on your Linux server with a private sandboxed computer for every teammate."
+		/>
+		<meta property="og:type" content="website" />
+		<meta property="og:url" content="https://laddu.wtf/" />
+		<meta
+			property="og:title"
+			content="laddu — your team’s private AI teammate in Slack"
+		/>
+		<meta
+			property="og:description"
+			content="Runs on your own Linux server. Tag @laddu in any thread—it works inside your own sandboxed computer and replies right there."
+		/>
+		<meta property="og:image" content="https://laddu.wtf/og.png" />
+		<meta property="og:image:width" content="1200" />
+		<meta property="og:image:height" content="630" />
+		<meta name="twitter:card" content="summary_large_image" />
+		<link rel="icon" href="/favicon.png" type="image/png" />
+		<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+		<link
+			rel="preload"
+			as="image"
+			href="/mascots/laddu-512.webp"
+			type="image/webp"
+		/>
+		<link
+			rel="preload"
+			as="image"
+			href="/mascots/laddu-160.webp"
+			type="image/webp"
+		/>
+		<script is:inline>
+			(function () {
+				var vw = window.innerWidth
+				var vh = window.innerHeight
+				var scale = vw < 640 ? 0.66 : vw < 1024 ? 0.84 : 1
+				var camX
+				var camY
+				if (vw >= 1024) {
+					var sidebarW = Math.min(528, Math.max(400, vw * 0.3))
+					camX = 830 - (sidebarW + (vw - sidebarW) / 2)
+					camY = 720 - (vh - 64) / 2
+				} else {
+					camX = 768 - vw / 2 / scale
+					camY = 602 - (56 + Math.max(180, vh - 346) / 2) / scale
+				}
+				document.documentElement.style.setProperty(
+					"--init-transform",
+					"scale(" +
+						scale +
+						") translate3d(" +
+						-camX +
+						"px, " +
+						-camY +
+						"px, 0)",
+				)
+			})()
+		</script>
+	</head>
+	<body>
+		<a class="skip-link" href="#stage">Skip to interactive showcase</a>
+		<LadduShowcase client:load />
+	</body>
+</html>
