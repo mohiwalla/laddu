@@ -27,7 +27,7 @@ exec docker exec -i -e LADDU_CALLER -e LADDU_API -e LADDU_TIMEZONE -e LADDU_TURN
   for key in "$HOME"/.laddu/keys/*; do
     case "${key##*/}" in [A-Z]*) case "${key##*/}" in *[!A-Z0-9_]*) ;; *) export "${key##*/}=$(cat "$key")" ;; esac ;; esac
   done &&
-  { [ -f "$HOME/.laddu/agy-mcp.json" ] || connections sync; } &&
+  connections sync &&
   ln -sfn "$HOME/.laddu/agy-mcp.json" "$config/config/mcp_config.json" &&
   cd "$HOME/workspace" &&
   BROWSER=true exec -a "agy[turn=$LADDU_TURN]" agy "$@"' agy "$@"

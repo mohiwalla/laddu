@@ -23,6 +23,25 @@ test("a sign-in that prints after its link still ends cleanly", async () => {
 	expect(proc.signalCode).toBeNull()
 })
 
+test("a sign-in link split across multiple stdout chunks resolves complete before EOF", async () => {
+	const proc = Bun.spawn(
+		[
+			"sh",
+			"-c",
+			'printf "Open: https://accounts.google.com/o/oauth2/auth?client_id=abc"; sleep 0.05; printf "&redirect_uri=https%%3A%%2F%%2Fantigravity.google%%2Foauth-callback"; sleep 0.05; printf "&state=xyz\\nEnter code: "; read code; echo "ok"',
+		],
+		{ stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+	)
+	expect(await agySignInLink(proc.stdout)).toBe(
+		"https://accounts.google.com/o/oauth2/auth?client_id=abc&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&state=xyz",
+	)
+	proc.stdin.write("code\n")
+	await proc.stdin.flush()
+	proc.stdin.end()
+	expect(await proc.exited).toBe(0)
+	expect(proc.signalCode).toBeNull()
+})
+
 test("no sign-in link is an error that says what was printed instead", async () => {
 	const proc = Bun.spawn(["sh", "-c", "echo 'login cancelled: offline'"], {
 		stdin: "pipe",
@@ -186,6 +205,28 @@ test("connections sync writes 0600 agy-mcp.json with resolved headers and env", 
 			await Bun.$`stat -c %a ${`${home}/.laddu/agy-mcp.json`}`.text()
 		).trim()
 		expect(mode).toBe("600")
+
+		// Direct key-file updates refresh resolved headers and env on sync.
+		await Bun.write(`${home}/.laddu/keys/API_TOKEN`, "rotated-token\n")
+		expect(await run(["sync"]).exited).toBe(0)
+		const refreshed = (await Bun.file(
+			`${home}/.laddu/agy-mcp.json`,
+		).json()) as {
+			mcpServers: Record<string, unknown>
+		}
+		expect(refreshed).toEqual({
+			mcpServers: {
+				docs: {
+					serverUrl: "https://mcp.example.com",
+					headers: { Authorization: "Bearer rotated-token" },
+				},
+				local: {
+					command: "my-mcp",
+					args: ["--flag"],
+					env: { API_TOKEN: "rotated-token" },
+				},
+			},
+		})
 	} finally {
 		await Bun.$`rm -rf ${home}`.quiet().nothrow()
 	}

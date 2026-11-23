@@ -65,7 +65,7 @@ def load():
 
 def write_private(path, text):
     DIR.mkdir(mode=0o700, exist_ok=True)
-    temp = path.with_suffix(path.suffix + ".tmp")
+    temp = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
     temp.touch(mode=0o600)
     temp.write_text(text)
     temp.replace(path)

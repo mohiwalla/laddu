@@ -156,13 +156,30 @@ type SignIn = {
 
 /** Sign-ins waiting for the person, by person. */
 const signingIn = new Map<string, Promise<SignIn>>()
+/** Live sign-in processes (waiting or exchanging a pasted code), so Disconnect can stop them. */
+const activeSignIns = new Map<string, Set<() => Promise<void>>>()
+/** Incremented on sign-out/reconnect so an in-flight sign-in cannot restore credentials. */
+const signInEpoch = new Map<string, number>()
+
+async function cancelAgySignIn(user: TurnUser): Promise<void> {
+	const id = key(user)
+	signInEpoch.set(id, (signInEpoch.get(id) ?? 0) + 1)
+	const waiting = signingIn.get(id)
+	signingIn.delete(id)
+	const active = [...(activeSignIns.get(id) ?? [])]
+	await Promise.all([
+		...active.map(abort => abort().catch(() => {})),
+		waiting?.then(
+			signIn => signIn.stop().catch(() => {}),
+			() => {},
+		),
+	])
+}
 
 /** They connected another way (their Gemini API key): a sign-in still waiting ends quietly. */
 export async function connectedAgy(user: TurnUser): Promise<void> {
-	const waiting = signingIn.get(key(user))
-	signingIn.delete(key(user))
+	await cancelAgySignIn(user)
 	forgetAgy(user)
-	await (await waiting?.catch(() => null))?.stop()
 }
 
 /** How long a sign-in waits for them. */
@@ -178,6 +195,7 @@ export function agySignIn(config: BotConfig, user: TurnUser): Promise<SignIn> {
 	const id = key(user)
 	const waiting = signingIn.get(id)
 	if (waiting) return waiting
+	const epoch = signInEpoch.get(id) ?? 0
 	const started = (async (): Promise<SignIn> => {
 		const turnId = `signin-${crypto.randomUUID().slice(0, 8)}`
 		const container = await ensureContainer(
@@ -185,6 +203,8 @@ export function agySignIn(config: BotConfig, user: TurnUser): Promise<SignIn> {
 			user.teamId,
 			user.userId,
 		)
+		if ((signInEpoch.get(id) ?? 0) !== epoch)
+			throw new Error("Antigravity sign-in was cancelled")
 		const proc = Bun.spawn([AGY_DOCKER_WRAPPER, "acp", "--login"], {
 			env: childEnv({ LADDU_CONTAINER: container, LADDU_TURN: turnId }),
 			stdin: "pipe",
@@ -198,41 +218,81 @@ export function agySignIn(config: BotConfig, user: TurnUser): Promise<SignIn> {
 			))
 				stderr = (stderr + chunk).slice(-4000)
 		})().catch(() => {})
-		const stop = async () => {
-			if (signingIn.get(id) === started) signingIn.delete(id)
-			proc.kill()
-			await stopRun(container, turnId)
+		let cancelled = false
+		let expiry: ReturnType<typeof setTimeout> | undefined
+		let stopPromise: Promise<void> | undefined
+		const stop = () => {
+			stopPromise ??= (async () => {
+				cancelled = true
+				clearTimeout(expiry)
+				if (signingIn.get(id) === started) signingIn.delete(id)
+				proc.kill()
+				await stopRun(container, turnId).catch(() => {})
+				await proc.exited.catch(() => {})
+			})()
+			return stopPromise
 		}
-		const expiry = setTimeout(() => void stop(), SIGN_IN_MINUTES * 60_000)
+		const track = activeSignIns.get(id) ?? new Set()
+		activeSignIns.set(id, track)
+		track.add(stop)
+		const untrack = () => {
+			track.delete(stop)
+			if (track.size === 0 && activeSignIns.get(id) === track)
+				activeSignIns.delete(id)
+		}
+		expiry = setTimeout(() => {
+			void stop().finally(untrack)
+		}, SIGN_IN_MINUTES * 60_000)
 		try {
+			const link = await agySignInLink(proc.stdout)
+			if (cancelled || (signInEpoch.get(id) ?? 0) !== epoch)
+				throw new Error("Antigravity sign-in was cancelled")
 			return {
-				link: await agySignInLink(proc.stdout),
+				link,
 				paste: async code => {
-					signingIn.delete(id)
+					if (signingIn.get(id) === started) signingIn.delete(id)
+					if (cancelled || (signInEpoch.get(id) ?? 0) !== epoch) {
+						await stop()
+						untrack()
+						return false
+					}
 					clearTimeout(expiry)
-					proc.stdin.write(`${code}\n`)
-					await proc.stdin.flush()
-					proc.stdin.end()
-					const exit = await Promise.race([
-						proc.exited,
-						Bun.sleep(30_000).then(() => null),
-					])
-					await stop()
-					forgetAgy(user)
-					if (exit !== 0)
-						console.warn(
-							`[agy] sign-in ${exit === null ? "didn't finish in time" : `ended with exit ${exit}`}: ${stderr.trim().slice(-300)}`,
-						)
-					return exit === 0
+					try {
+						try {
+							proc.stdin.write(`${code}\n`)
+							await proc.stdin.flush()
+							proc.stdin.end()
+						} catch {
+							await stop()
+							forgetAgy(user)
+							return false
+						}
+						const exit = await Promise.race([
+							proc.exited,
+							Bun.sleep(30_000).then(() => null),
+						])
+						const aborted =
+							cancelled || (signInEpoch.get(id) ?? 0) !== epoch
+						await stop()
+						forgetAgy(user)
+						if (aborted) return false
+						if (exit !== 0)
+							console.warn(
+								`[agy] sign-in ${exit === null ? "didn't finish in time" : `ended with exit ${exit}`}: ${stderr.trim().slice(-300)}`,
+							)
+						return exit === 0
+					} finally {
+						untrack()
+					}
 				},
 				stop: async () => {
-					clearTimeout(expiry)
 					await stop()
+					untrack()
 				},
 			}
 		} catch (error) {
-			clearTimeout(expiry)
 			await stop()
+			untrack()
 			throw error
 		}
 	})()
@@ -287,17 +347,27 @@ export async function agySignInLink(
 		for await (const chunk of stdout.pipeThrough(new TextDecoderStream())) {
 			if (found) continue
 			text += chunk
+			// Wait for whitespace after the URL so a chunk split mid-URL never resolves truncated.
 			const link = text.match(
-				/https:\/\/accounts\.google\.com\/o\/oauth2\/auth\S+/,
-			)?.[0]
+				/(https:\/\/accounts\.google\.com\/o\/oauth2\/auth\S+)\s/,
+			)?.[1]
 			if (!link) continue
 			found = true
 			resolve(link)
 		}
-		if (!found)
+		if (!found) {
+			const link = text.match(
+				/https:\/\/accounts\.google\.com\/o\/oauth2\/auth\S+/,
+			)?.[0]
+			if (link) {
+				found = true
+				resolve(link)
+				return
+			}
 			throw new Error(
 				`Antigravity didn't give a sign-in link: ${text.trim().slice(-300)}`,
 			)
+		}
 	})().catch(reject)
 	return Promise.race([
 		promise,
@@ -312,6 +382,7 @@ export async function signOutAgy(
 	config: BotConfig,
 	user: TurnUser,
 ): Promise<void> {
+	await cancelAgySignIn(user)
 	const container = await ensureContainer(config, user.teamId, user.userId)
 	const turnId = `ask-${crypto.randomUUID().slice(0, 8)}`
 	await logoutAcp({

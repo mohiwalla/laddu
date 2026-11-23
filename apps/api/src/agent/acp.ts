@@ -278,6 +278,7 @@ export async function runAcpTurn(
 				))
 		}
 
+		options.signal?.throwIfAborted()
 		// Steering: what to send once the running prompt has been cancelled.
 		let queued: acp.ContentBlock[] = []
 		let cancelling = false
@@ -294,6 +295,7 @@ export async function runAcpTurn(
 		})
 		let prompt = options.prompt
 		for (;;) {
+			options.signal?.throwIfAborted()
 			const request = call(
 				peer.request("session/prompt", { sessionId: id, prompt }),
 			)

@@ -212,3 +212,65 @@ test("ACP -32000 surfaces AuthRequiredError instead of LostSessionError, and aut
 		),
 	).rejects.toBeInstanceOf(LostSessionError)
 })
+
+test("aborting during session/set_config_option does not dispatch session/prompt", async () => {
+	const marker = `/tmp/laddu-acp-prompt-${crypto.randomUUID()}`
+	const script = `
+let buf = "";
+for await (const chunk of Bun.stdin.stream().pipeThrough(new TextDecoderStream())) {
+  buf += chunk;
+  const lines = buf.split("\\n");
+  buf = lines.pop() ?? "";
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const msg = JSON.parse(line);
+    const reply = (result) => Bun.write(Bun.stdout, JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }) + "\\n");
+    if (msg.method === "initialize") {
+      reply({ protocolVersion: 1, agentCapabilities: {} });
+    } else if (msg.method === "session/new") {
+      reply({
+        sessionId: "s-abort",
+        configOptions: [{
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "a",
+          options: [{ value: "a", name: "A" }, { value: "b", name: "B" }],
+        }],
+      });
+    } else if (msg.method === "session/set_config_option") {
+      await Bun.sleep(80);
+      reply({ configOptions: [] });
+    } else if (msg.method === "session/prompt") {
+      await Bun.write(${JSON.stringify(marker)}, "dispatched");
+      reply({ stopReason: "end_turn" });
+    }
+  }
+}
+`
+	const controller = new AbortController()
+	setTimeout(() => controller.abort(new Error("stopped")), 40)
+	try {
+		await expect(
+			runAcpTurn(
+				{
+					command: [Bun.argv[0]!, "-e", script],
+					env: {},
+					cwd: "/tmp",
+					mcpServers: [],
+					model: "b",
+					stop: async () => {},
+				},
+				{
+					prompt: [{ type: "text", text: "hi" }],
+					signal: controller.signal,
+					onItem: () => {},
+				},
+			),
+		).rejects.toThrow()
+		expect(await Bun.file(marker).exists()).toBe(false)
+	} finally {
+		await Bun.$`rm -f ${marker}`.quiet().nothrow()
+	}
+})
