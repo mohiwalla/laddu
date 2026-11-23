@@ -1,372 +1,441 @@
-import { TextMorph } from "torph"
+import gulabJamunImg from "../public/mascots/gulab-jamun-160.webp"
+import jalebiImg from "../public/mascots/jalebi-160.webp"
+import kajuKatliImg from "../public/mascots/kaju-katli-160.webp"
+import ladduImg from "../public/mascots/laddu-160.webp"
+import rasgullaImg from "../public/mascots/rasgulla-160.webp"
 
-const calm = matchMedia("(prefers-reduced-motion: reduce)")
-const sleep = ms => new Promise(resolve => setTimeout(resolve, calm.matches ? 0 : ms))
+const MASCOTS = [
+	{ id: "laddu", name: "laddu", src: ladduImg },
+	{ id: "jalebi", name: "jalebi", src: jalebiImg },
+	{ id: "kaju", name: "kaju", src: kajuKatliImg },
+	{ id: "jamun", name: "jamun", src: gulabJamunImg },
+	{ id: "rasgulla", name: "rasgulla", src: rasgullaImg },
+]
 
-/** Text that morphs between values, in the page's one easing curve. */
-function morph(element, text = element.textContent.trim()) {
-	const instance = new TextMorph({ element, duration: 360, ease: "cubic-bezier(0.22, 1, 0.36, 1)" })
-	instance.update(text)
-	return instance
+const SCENARIOS = [
+	{
+		channel: "product",
+		caption: "Based on a real reply",
+		user: "You",
+		init: "Y",
+		time: "10:14 AM",
+		ask: bot =>
+			`hi <span class="mention">@${bot}</span>, what can you do for me?`,
+		step: bot => `${bot} checked your memory · 1.2s`,
+		trace: [
+			["Loaded personal memory", "0.4s"],
+			["Checked workspace tools", "0.8s"],
+		],
+		reply: "I can help you with:",
+		bullets: [
+			[
+				"Your code:",
+				"build features, fix bugs, review code, and open PRs on Azure Repos or CodeCommit.",
+			],
+			[
+				"Files:",
+				"analyse data and hand back spreadsheets, charts, documents, or slides.",
+			],
+			[
+				"Reminders:",
+				"remind you later, run recurring tasks, or DM teammates for you.",
+			],
+		],
+		file: null,
+	},
+	{
+		channel: "launch",
+		caption: "Real file output",
+		user: "Maya",
+		init: "M",
+		time: "2:08 PM",
+		ask: bot =>
+			`<span class="mention">@${bot}</span> turn this thread’s launch notes into a Q4 tracker spreadsheet`,
+		step: bot => `${bot} read 14 replies &amp; built workbook · 8.6s`,
+		trace: [
+			["Read 14 messages in #launch", "1.1s"],
+			["Generated q4-launch-tracker.xlsx", "5.9s"],
+			["Uploaded attachment to Slack", "1.6s"],
+		],
+		reply: "Grouped every task by owner and target date from the thread:",
+		bullets: [
+			[
+				"Blockers:",
+				"3 items flagged under Billing ahead of Friday’s freeze.",
+			],
+			["Follow-up:", "Want a reminder in #launch tomorrow at 9 AM?"],
+		],
+		file: {
+			name: "q4-launch-tracker.xlsx",
+			meta: "48 KB · Attached in Slack",
+		},
+	},
+	{
+		channel: "eng",
+		caption: "Ships pull requests",
+		user: "Dev",
+		init: "D",
+		time: "4:41 PM",
+		ask: bot =>
+			`<span class="mention">@${bot}</span> fix the flaky webhook retry test and open a PR on Azure Repos`,
+		step: bot => `${bot} ran tests &amp; pushed branch · 21.4s`,
+		trace: [
+			["Cloned repo inside @dev container", "3.2s"],
+			["Ran bun test — 18 passed, 0 failed", "11.8s"],
+			["Opened PR #418 on Azure Repos", "6.4s"],
+		],
+		reply: "Fixed the timer race in retry backoff and opened a pull request as you:",
+		bullets: [
+			[
+				"Change:",
+				"Replaced wall-clock jitter check with deterministic fake timers.",
+			],
+		],
+		file: {
+			name: "PR #418 · fix/webhook-retry-test",
+			meta: "Azure Repos · Ready",
+		},
+	},
+]
+
+let activeMascot = MASCOTS[0]
+let promptIdx = 0
+let showTrace = false
+let isTakenOver = false
+
+const brandMascotEl = document.getElementById("brandMascot")
+const brandNameEl = document.getElementById("brandName")
+const leadMentionEl = document.getElementById("leadMention")
+const slackChanEl = document.getElementById("slackChan")
+const slackCaptionEl = document.getElementById("slackCaption")
+const slackBodyEl = document.getElementById("slackBody")
+const skinRowEl = document.getElementById("skinRow")
+const takeBtn = document.getElementById("takeBtn")
+const controlStateEl = document.getElementById("controlState")
+const browserNoteEl = document.getElementById("browserNote")
+
+function updateTakeoverCopy() {
+	const bot = activeMascot.name
+	takeBtn.setAttribute("aria-pressed", String(isTakenOver))
+	takeBtn.textContent = isTakenOver
+		? `Hand back to ${bot}`
+		: "Take over screen"
+	controlStateEl.textContent = isTakenOver ? "you driving" : `${bot} driving`
+	browserNoteEl.textContent = isTakenOver
+		? "Session paused for you—finish sign-in or MFA, then hand control straight back."
+		: "Clicks and types through portals with no API. Watch live from Slack’s Home tab, take over anytime, and hand back."
 }
 
-/** Runs `start` once, the first time `element` scrolls into view. */
-function onFirstView(element, start) {
-	const observer = new IntersectionObserver(entries => {
-		if (!entries.some(entry => entry.isIntersecting)) return
-		observer.disconnect()
-		start()
-	}, { threshold: 0.4 })
-	observer.observe(element)
+function renderSlack() {
+	const s = SCENARIOS[promptIdx]
+	const bot = activeMascot.name
+	slackChanEl.textContent = s.channel
+	slackCaptionEl.textContent = s.caption
+
+	slackBodyEl.innerHTML = `
+		<div class="s-msg">
+			<div class="s-av" aria-hidden="true">${s.init}</div>
+			<div>
+				<div class="s-head">
+					<span class="s-name">${s.user}</span>
+					<span class="s-time">${s.time}</span>
+				</div>
+				<div class="s-text">${s.ask(bot)}</div>
+			</div>
+		</div>
+		<div class="s-msg">
+			<div class="s-av bot"><img src="${activeMascot.src}" alt="${bot}" width="26" height="26" /></div>
+			<div>
+				<div class="s-head">
+					<span class="s-name">${bot}</span>
+					<span class="s-badge">Agent</span>
+					<span class="s-time">${s.time}</span>
+				</div>
+				<div class="s-status">
+					<span class="s-status-l">
+						<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" style="color:var(--positive);width:13px;height:13px">
+							<path d="M20 6 9 17l-5-5" />
+						</svg>
+						<span>${s.step(bot)}</span>
+					</span>
+					<button type="button" class="s-step-btn" id="toggleTrace" aria-expanded="${showTrace}">
+						${showTrace ? "Hide steps" : "Steps"}
+					</button>
+				</div>
+				${
+					showTrace
+						? `<div class="s-trace">${s.trace
+								.map(
+									([label, dur]) =>
+										`<div class="s-trace-row"><span>${label}</span><span>${dur}</span></div>`,
+								)
+								.join("")}</div>`
+						: ""
+				}
+				<div class="s-text" style="margin-top:8px">${s.reply}</div>
+				<ul class="s-list">
+					${s.bullets
+						.map(
+							([lead, body]) =>
+								`<li><strong>${lead}</strong> ${body}</li>`,
+						)
+						.join("")}
+				</ul>
+				${
+					s.file
+						? `<div class="s-file"><span class="s-file-name">${s.file.name}</span><span class="s-file-meta">${s.file.meta}</span></div>`
+						: ""
+				}
+			</div>
+		</div>
+	`
+
+	const toggleBtn = document.getElementById("toggleTrace")
+	toggleBtn?.addEventListener("click", e => {
+		e.stopPropagation()
+		showTrace = !showTrace
+		renderSlack()
+	})
 }
 
-// Images stay put: no ghost copies when someone drags one.
-document.addEventListener("dragstart", event => {
-	if (event.target instanceof HTMLImageElement) event.preventDefault()
+function renderSkins() {
+	skinRowEl.innerHTML = MASCOTS.map(
+		m => `
+		<button
+			type="button"
+			class="skin-btn"
+			data-skin="${m.id}"
+			aria-pressed="${m.id === activeMascot.id}"
+		>
+			<img src="${m.src}" alt="${m.name}" width="32" height="32" />
+			<span>${m.name}</span>
+		</button>
+	`,
+	).join("")
+
+	for (const btn of skinRowEl.querySelectorAll(".skin-btn")) {
+		btn.addEventListener("click", e => {
+			e.stopPropagation()
+			activeMascot =
+				MASCOTS.find(m => m.id === btn.dataset.skin) ?? MASCOTS[0]
+			brandMascotEl.src = activeMascot.src
+			brandMascotEl.alt = `${activeMascot.name} mascot`
+			brandNameEl.textContent = activeMascot.name
+			leadMentionEl.textContent = `@${activeMascot.name}`
+			renderSkins()
+			renderSlack()
+			updateTakeoverCopy()
+		})
+	}
+}
+
+document.getElementById("cyclePrompt")?.addEventListener("click", e => {
+	e.stopPropagation()
+	promptIdx = (promptIdx + 1) % SCENARIOS.length
+	showTrace = false
+	renderSlack()
 })
 
-// Booping laddu: it squishes and says something small.
-const boop = document.querySelector(".boop")
-const bubble = document.querySelector(".bubble")
-const lines = ["hehe", "that tickles", "boop", "ji?", "oh, hi :)", "*squish*", "again?", "careful, i crumble"]
-let last = -1
-let hush
-
-boop?.addEventListener("click", () => {
-	let next = Math.floor(Math.random() * lines.length)
-	if (next === last) next = (next + 1) % lines.length
-	last = next
-
-	bubble.textContent = lines[next]
-	bubble.classList.add("show")
-	clearTimeout(hush)
-	hush = setTimeout(() => bubble.classList.remove("show"), 1600)
-
-	if (calm.matches) return
-	boop.classList.remove("squish")
-	void boop.offsetWidth
-	boop.classList.add("squish")
+takeBtn?.addEventListener("click", e => {
+	e.stopPropagation()
+	isTakenOver = !isTakenOver
+	updateTakeoverCopy()
 })
 
-// Copy the install command; the icon turns into a check and the label morphs.
-for (const button of document.querySelectorAll("[data-copy]")) {
-	const label = morph(button.querySelector(".copy-label"))
-	let reset
-	button.addEventListener("click", async () => {
-		const text = document.getElementById(button.dataset.copy)?.textContent.trim() ?? ""
-		let copied = true
-		try {
-			await navigator.clipboard.writeText(text)
-		} catch {
-			copied = false
-		}
-		button.dataset.state = copied ? "done" : "failed"
-		label.update(copied ? "Copied" : "Select it")
-		clearTimeout(reset)
-		reset = setTimeout(() => {
-			delete button.dataset.state
-			label.update("Copy")
-		}, 1800)
+// Copy buttons with feedback
+for (const btn of document.querySelectorAll("[data-copy]")) {
+	btn.addEventListener("click", e => {
+		e.stopPropagation()
+		const text = btn.dataset.copy
+		if (text) navigator.clipboard?.writeText(text).catch(() => {})
+		const prev = btn.textContent
+		btn.textContent = "Copied"
+		window.setTimeout(() => {
+			btn.textContent = prev
+		}, 1400)
 	})
 }
 
-// The Slack channel: pick a request and laddu works through it, step by step.
-const slack = document.querySelector(".slack")
-if (slack) {
-	const msgs = slack.querySelector(".msgs")
-	const draft = slack.querySelector(".draft")
-	const placeholder = draft.innerHTML
-	const askButtons = [...slack.querySelectorAll(".ask:not(.ask-reset)")]
-	const reset = slack.querySelector(".ask-reset")
-	const initial = msgs.innerHTML
-	// The bundler rewrites asset paths in the HTML only, so borrow the avatar from the page.
-	const laddu = msgs.querySelector("img.av").src
-	let minute = 4
-	let busy = false
+// Pointer spotlight on primary button
+const openInstallBtn = document.getElementById("openInstall")
+openInstallBtn?.addEventListener("pointermove", e => {
+	const r = openInstallBtn.getBoundingClientRect()
+	openInstallBtn.style.setProperty("--gx", `${e.clientX - r.left}px`)
+	openInstallBtn.style.setProperty("--gy", `${e.clientY - r.top}px`)
+	openInstallBtn.style.setProperty("--glow", "1")
+})
+openInstallBtn?.addEventListener("pointerleave", () => {
+	openInstallBtn.style.setProperty("--glow", "0")
+})
 
-	const file = (icon, name, meta) =>
-		`<div class="attach"><svg class="ic-lg"><use href="#${icon}" /></svg><div><p class="fname">${name}</p><p class="fmeta">${meta}</p></div></div>`
+// Install Sheet dialog with focus restoration
+const sheet = document.getElementById("installSheet")
+const closeSheetBtn = document.getElementById("closeSheet")
+let lastFocused = null
 
-	const asks = {
-		slide: {
-			text: "turn the open items into a slide for standup",
-			steps: [
-				["Reading the thread", "Read the thread"],
-				["Checking 4.2 on Azure Boards", "Checked 4.2 on Azure Boards"],
-				["Making the slide", "Made the slide"],
-			],
-			answer: `<p>One slide for standup: the Thursday plan up top, then the 3 open items with their owners.</p>${file("i-slides", "release-4.2-standup.pptx", "PowerPoint · 1 slide · 212 KB")}`,
-		},
-		assign: {
-			text: "assign #4820 to me",
-			steps: [
-				["Finding #4820 on Azure Boards", "Found #4820 on Azure Boards"],
-				["Assigning it to you", "Assigned it to you"],
-			],
-			answer: "<p>Done. <b>#4820 CSV export drops the last row</b> is yours now, assigned as you on Azure Boards.</p>",
-			after: () => {
-				const owner = document.getElementById("owner-4820")
-				if (owner) morph(owner).update("You")
-			},
-		},
-		remind: {
-			text: "remind us Thursday at 9 to cut 4.2",
-			steps: [["Scheduling the reminder", "Scheduled the reminder"]],
-			answer: "<p>Set. Thursday at 9:00 I’ll post here to cut 4.2, with whatever is still open on Boards by then.</p>",
-		},
-	}
+function openSheet() {
+	lastFocused = document.activeElement
+	sheet.hidden = false
+	closeSheetBtn?.focus()
+}
 
-	const scrollDown = () => msgs.scrollTo({ top: msgs.scrollHeight, behavior: calm.matches ? "auto" : "smooth" })
+function closeSheet() {
+	if (sheet.hidden) return
+	sheet.hidden = true
+	if (lastFocused instanceof HTMLElement) lastFocused.focus()
+}
 
-	function post(html) {
-		const message = document.createElement("div")
-		message.className = "msg enter"
-		message.innerHTML = html
-		msgs.append(message)
-		scrollDown()
-		return message
-	}
+openInstallBtn?.addEventListener("click", openSheet)
+for (const trigger of document.querySelectorAll("[data-open-install]")) {
+	trigger.addEventListener("click", e => {
+		e.stopPropagation()
+		openSheet()
+	})
+}
+closeSheetBtn?.addEventListener("click", closeSheet)
+sheet?.addEventListener("click", e => {
+	if (e.target === sheet) closeSheet()
+})
+window.addEventListener("keydown", e => {
+	if (e.key === "Escape") closeSheet()
+})
 
-	async function run(key) {
-		const ask = asks[key]
-		busy = true
-		for (const button of askButtons) button.disabled = true
+// Draggable + wheel-pannable spatial canvas
+const stage = document.getElementById("stage")
+const world = document.getElementById("world")
+const tiles = new Map()
+for (const el of world.querySelectorAll("[data-tile]")) {
+	tiles.set(el.dataset.tile, el)
+}
 
-		// Type the request into the composer, then send it.
-		draft.textContent = ""
-		const typed = document.createElement("span")
-		typed.innerHTML = '<span class="mention">@laddu</span> '
-		draft.append(typed)
-		const words = document.createTextNode("")
-		draft.append(words)
-		for (const char of ask.text) {
-			words.data += char
-			await sleep(22)
-		}
-		await sleep(240)
-		draft.innerHTML = placeholder
-		const time = `11:${String(minute++).padStart(2, "0")}`
-		post(
-			`<span class="av" aria-hidden="true"><svg class="ic"><use href="#i-user" /></svg></span><div class="body"><p class="who">You <time>${time}</time></p><p><span class="mention">@laddu</span> ${ask.text}</p></div>`,
+const WORLD_W = 1320
+const WORLD_H = 796
+let tx = 0
+let ty = 0
+let dragging = false
+let startX = 0
+let startY = 0
+let baseX = 0
+let baseY = 0
+
+function clampPan(x, y) {
+	const minX = Math.min(0, stage.clientWidth - WORLD_W)
+	const minY = Math.min(0, stage.clientHeight - WORLD_H)
+	return [Math.max(minX, Math.min(24, x)), Math.max(minY, Math.min(24, y))]
+}
+
+function applyPan(smooth = false) {
+	world.style.transition = smooth
+		? "transform 480ms cubic-bezier(0.22, 1, 0.36, 1)"
+		: "none"
+	world.style.transform = `translate3d(${tx}px, ${ty}px, 0)`
+}
+
+function setActiveDock(key) {
+	for (const btn of document.querySelectorAll(".dock-btn")) {
+		btn.setAttribute(
+			"aria-current",
+			btn.dataset.jump === key ? "true" : "false",
 		)
-
-		await sleep(500)
-		const reply = post(
-			`<img class="av" src="${laddu}" width="160" height="160" alt="" /><div class="body"><p class="who">laddu <span class="app">App</span> <time>${time}</time></p><ul class="steps"></ul></div>`,
-		)
-		const steps = reply.querySelector(".steps")
-		for (const [doing, done] of ask.steps) {
-			const step = document.createElement("li")
-			step.className = "doing"
-			step.innerHTML = '<svg class="ic"><use href="#i-spin" /></svg><span></span>'
-			steps.append(step)
-			const label = morph(step.querySelector("span"), doing)
-			scrollDown()
-			await sleep(900)
-			step.className = ""
-			step.querySelector("use").setAttribute("href", "#i-check")
-			label.update(done)
-			await sleep(260)
-		}
-		const answer = document.createElement("div")
-		answer.className = "answer enter"
-		answer.innerHTML = ask.answer
-		reply.querySelector(".body").append(answer)
-		scrollDown()
-		ask.after?.()
-
-		slack.querySelector(`[data-ask="${key}"]`).hidden = true
-		reset.hidden = false
-		for (const button of askButtons) button.disabled = false
-		busy = false
 	}
+}
 
-	for (const button of askButtons) button.addEventListener("click", () => busy || run(button.dataset.ask))
-	reset.addEventListener("click", () => {
-		if (busy) return
-		msgs.innerHTML = initial
-		msgs.scrollTo({ top: 0 })
-		minute = 4
-		for (const button of askButtons) button.hidden = false
-		reset.hidden = true
+function focusTile(key, smooth = true) {
+	const el = tiles.get(key)
+	if (!el) return
+	const targetX =
+		key === "slack"
+			? 0
+			: Math.round(
+					stage.clientWidth / 2 -
+						(el.offsetLeft + el.offsetWidth / 2),
+				)
+	const targetY =
+		key === "slack"
+			? 0
+			: Math.round(
+					(stage.clientHeight - 54) / 2 -
+						(el.offsetTop + el.offsetHeight / 2),
+				)
+	const [nx, ny] = clampPan(targetX, targetY)
+	tx = nx
+	ty = ny
+	applyPan(smooth)
+	setActiveDock(key)
+}
+
+const TEXT_SELECTABLE =
+	".s-text, .s-list, .s-trace, .cmd-str, .term-log, .term-alt, .browser-state, .ledger-v, .skin-desc"
+
+stage.addEventListener("pointerdown", e => {
+	if (window.innerWidth <= 640) return
+	if (e.target.closest("button, a, nav")) return
+	if (e.target.closest(TEXT_SELECTABLE)) return
+	dragging = true
+	startX = e.clientX
+	startY = e.clientY
+	baseX = tx
+	baseY = ty
+	stage.classList.add("dragging")
+	stage.setPointerCapture(e.pointerId)
+})
+
+stage.addEventListener("pointermove", e => {
+	if (!dragging) return
+	const [nx, ny] = clampPan(
+		baseX + (e.clientX - startX),
+		baseY + (e.clientY - startY),
+	)
+	tx = nx
+	ty = ny
+	applyPan(false)
+})
+
+function endDrag() {
+	if (!dragging) return
+	dragging = false
+	stage.classList.remove("dragging")
+}
+
+stage.addEventListener("pointerup", endDrag)
+stage.addEventListener("pointercancel", endDrag)
+
+// Trackpad / mouse wheel panning on the canvas (desktop)
+stage.addEventListener(
+	"wheel",
+	e => {
+		if (window.innerWidth <= 900) return
+		e.preventDefault()
+		const [nx, ny] = clampPan(tx - e.deltaX, ty - e.deltaY)
+		tx = nx
+		ty = ny
+		applyPan(false)
+	},
+	{ passive: false },
+)
+
+for (const btn of document.querySelectorAll(".dock-btn")) {
+	btn.addEventListener("click", e => {
+		e.stopPropagation()
+		focusTile(btn.dataset.jump, true)
 	})
 }
 
-// laddu's computer: it fills the form on its own; take over to type yourself, then hand it back.
-const desk = document.querySelector(".desk")
-if (desk) {
-	const form = desk.querySelector(".form")
-	const fields = [...form.querySelectorAll("[data-fill]")]
-	const status = morph(desk.querySelector(".desk-status"))
-	const take = desk.querySelector(".take")
-	const takeLabel = morph(take.querySelector(".take-label"))
-	const submit = form.querySelector(".submit")
-	const submitLabel = morph(submit.querySelector(".submit-label"))
-	const again = form.querySelector(".again")
-	let mode = "laddu"
-	let run = 0
+document.getElementById("focusSlack")?.addEventListener("click", () => {
+	promptIdx = (promptIdx + 1) % SCENARIOS.length
+	showTrace = false
+	renderSlack()
+	focusTile("slack", true)
+})
 
-	const setMode = next => {
-		mode = next
-		desk.dataset.mode = next
-		const yours = next === "you"
-		for (const field of fields) {
-			if (field.tagName === "SELECT") field.disabled = !yours
-			else field.readOnly = !yours
-		}
-		takeLabel.update(yours ? "Hand back" : "Take over")
-		take.hidden = next === "sent"
-	}
+window.addEventListener("resize", () => {
+	const [nx, ny] = clampPan(tx, ty)
+	tx = nx
+	ty = ny
+	applyPan(false)
+})
 
-	async function drive() {
-		const id = ++run
-		setMode("laddu")
-		status.update("laddu is filling in a form")
-		for (const field of fields) {
-			const target = field.dataset.fill
-			if (field.tagName === "SELECT") {
-				if (field.value) continue
-				field.classList.add("active")
-				await sleep(500)
-				if (id !== run) return
-				field.value = target
-				field.classList.remove("active")
-				continue
-			}
-			// Leave what you typed; only finish what laddu started or hasn't reached.
-			if (!target.startsWith(field.value)) continue
-			field.classList.add("active")
-			while (field.value !== target) {
-				await sleep(45 + Math.random() * 50)
-				if (id !== run) return field.classList.remove("active")
-				field.value = target.slice(0, field.value.length + 1)
-			}
-			field.classList.remove("active")
-			await sleep(200)
-		}
-		if (id !== run) return
-		status.update("Done. Check it and submit")
-		setMode("you")
-		takeLabel.update("Take over")
-		take.hidden = true
-	}
-
-	function clear() {
-		for (const field of fields) field.value = ""
-	}
-
-	take.addEventListener("click", () => {
-		if (mode === "laddu") {
-			run++
-			for (const field of fields) field.classList.remove("active")
-			setMode("you")
-			status.update("You’re in control")
-			form.querySelector(".field input")?.focus()
-		} else {
-			drive()
-		}
-	})
-
-	form.addEventListener("submit", event => {
-		event.preventDefault()
-		if (mode === "sent") return
-		run++
-		setMode("sent")
-		for (const field of fields) {
-			field.classList.remove("active")
-			if (field.tagName === "SELECT") field.disabled = true
-			else field.readOnly = true
-		}
-		submit.disabled = true
-		submit.dataset.state = "done"
-		submitLabel.update("Submitted")
-		status.update("Claim submitted")
-		again.hidden = false
-	})
-
-	again.addEventListener("click", () => {
-		again.hidden = true
-		submit.disabled = false
-		delete submit.dataset.state
-		submitLabel.update("Submit claim")
-		take.hidden = false
-		clear()
-		drive()
-	})
-
-	// Without JS the form shows filled in; with it, laddu fills it in when you get there.
-	clear()
-	onFirstView(desk, drive)
-}
-
-// The Home tab settings: name, face and brain, with a preview of how the thread sees it.
-const home = document.querySelector(".home")
-if (home) {
-	const name = home.querySelector("#laddu-name")
-	const callName = morph(document.querySelector(".call-name"))
-	const previewName = morph(home.querySelector(".preview-name"))
-	const previewFace = home.querySelector(".preview-face")
-	const previewBrain = morph(home.querySelector(".preview-brain"))
-	const model = home.querySelector("[name=model]")
-	const effort = home.querySelector("[name=effort]")
-	const upload = home.querySelector(".upload")
-	const uploadRadio = home.querySelector("[name=face][value=upload]")
-	const presets = [...home.querySelectorAll("[name=face]")].map(radio => radio.value).filter(value => value !== "upload")
-
-	const brains = {
-		codex: { label: "Codex", models: ["gpt-6.1-sol"], efforts: ["low", "medium", "high", "xhigh"] },
-		opencode: { label: "OpenCode", models: ["big-pickle"], efforts: ["low", "medium", "high"] },
-	}
-
-	const fill = (select, values, keep) => {
-		select.replaceChildren(...values.map(value => new Option(value, value)))
-		select.value = values.includes(keep) ? keep : values[Math.min(1, values.length - 1)]
-	}
-
-	const shownName = () => name.value.trim().replace(/\s+/g, " ") || "laddu"
-
-	function render() {
-		callName.update(shownName())
-		previewName.update(shownName())
-		const face = home.querySelector("[name=face]:checked")
-		previewFace.src = face.closest(".face").querySelector(".tile img").src
-		const agent = home.querySelector("[name=agent]:checked").value
-		previewBrain.update(`${brains[agent].label} · ${model.value} · ${effort.value} effort`)
-	}
-
-	function setAgent() {
-		const brain = brains[home.querySelector("[name=agent]:checked").value]
-		fill(model, brain.models, model.value)
-		fill(effort, brain.efforts, effort.value || "medium")
-	}
-
-	home.addEventListener("change", event => {
-		const target = event.target
-		if (target.name === "face" && target.value !== "upload") {
-			// Picking a face renames it too, unless you've typed a name of your own.
-			const current = name.value.trim().toLowerCase()
-			if (!current || presets.some(preset => preset.toLowerCase() === current)) name.value = target.value
-		}
-		if (target.name === "agent") setAgent()
-		render()
-	})
-	name.addEventListener("input", render)
-	home.addEventListener("submit", event => event.preventDefault())
-
-	upload.addEventListener("change", () => {
-		const picked = upload.files?.[0]
-		if (!picked) return
-		const tile = upload.closest(".face")
-		const image = tile.querySelector(".tile img")
-		if (image.src.startsWith("blob:")) URL.revokeObjectURL(image.src)
-		image.src = URL.createObjectURL(picked)
-		image.hidden = false
-		tile.classList.add("has-image")
-		uploadRadio.disabled = false
-		uploadRadio.checked = true
-		render()
-	})
-
-	setAgent()
-	render()
-}
+renderSlack()
+renderSkins()
+updateTakeoverCopy()
+applyPan(false)
