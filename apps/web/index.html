@@ -36,9 +36,9 @@
 
 		<main class="app" id="app">
 			<aside class="sidebar" aria-label="About laddu">
-				<header class="side-top">
+				<header class="side-top intro-fade">
 					<div class="identity">
-						<span class="brand-av">
+						<span class="brand-av" id="brandAvWrap">
 							<img
 								id="brandMascot"
 								src="./public/mascots/laddu-160.webp"
@@ -68,11 +68,11 @@
 				</header>
 
 				<div class="side-hero">
-					<h1>
+					<h1 class="intro-lead">
 						Your team’s private AI teammate in
 						<span class="glow-word">Slack</span>
 					</h1>
-					<p class="side-lead">
+					<p class="side-lead intro-sub">
 						Runs on your own Linux box. Tag
 						<strong class="lead-strong" id="leadMention"
 							>@laddu</strong
@@ -81,7 +81,7 @@
 						computer and replies right there.
 					</p>
 
-					<div class="cta-row">
+					<div class="cta-row intro-cta">
 						<div class="cta-rim">
 							<button
 								type="button"
@@ -93,7 +93,7 @@
 								<span class="spot" aria-hidden="true"></span>
 								<span>Install laddu</span>
 								<svg
-									class="ico ico-bold"
+									class="ico ico-bold btn-arrow"
 									viewBox="0 0 20 20"
 									aria-hidden="true"
 								>
@@ -118,7 +118,7 @@
 					</div>
 				</div>
 
-				<footer class="side-foot">
+				<footer class="side-foot intro-foot">
 					<div class="foot-line">
 						<span class="pulse-dot" aria-hidden="true"></span>
 						<span>MIT open source · Free forever</span>
@@ -134,305 +134,21 @@
 				class="canvas-stage"
 				id="stage"
 				tabindex="-1"
-				aria-label="Interactive product showcase"
+				aria-label="Interactive infinite product canvas"
 			>
-				<div class="canvas-world" id="world">
-					<!-- Tile 1: Live Slack Thread -->
-					<article
-						class="tile"
-						data-tile="slack"
-						style="
-							left: 32px;
-							top: 32px;
-							width: 420px;
-							height: 376px;
-						"
-					>
-						<div class="tile-inner">
-							<div class="tile-bar">
-								<span class="tile-title">
-									<span class="hash" aria-hidden="true"
-										>#</span
-									>
-									<span id="slackChan">product</span>
-								</span>
-								<div class="tile-actions">
-									<span class="tile-note" id="slackCaption">
-										Based on a real reply
-									</span>
-									<button
-										type="button"
-										class="tile-pill"
-										id="cyclePrompt"
-									>
-										Next example
-									</button>
-								</div>
-							</div>
-							<div class="slack-body" id="slackBody"></div>
-						</div>
-					</article>
+				<div class="canvas-world" id="world"></div>
 
-					<!-- Tile 2: One-command Self-Host -->
-					<article
-						class="tile"
-						data-tile="install"
-						style="
-							left: 476px;
-							top: 56px;
-							width: 424px;
-							height: 248px;
-						"
-					>
-						<div class="tile-inner">
-							<div class="tile-bar">
-								<span class="tile-title"
-									>linux-box · systemd</span
-								>
-								<button
-									type="button"
-									class="tile-pill"
-									data-open-install
-								>
-									Full guide
-								</button>
-							</div>
-							<div class="term-body">
-								<div class="cmd-pill">
-									<code class="cmd-str"
-										><span class="cmd-p" aria-hidden="true"
-											>$</span
-										>curl -fsSL https://laddu.wtf/install.sh
-										| sh</code
-									>
-									<button
-										type="button"
-										class="copy-mini"
-										data-copy="curl -fsSL https://laddu.wtf/install.sh | sh"
-									>
-										Copy
-									</button>
-								</div>
-								<div class="term-log">
-									<div>
-										<span class="term-ok" aria-hidden="true"
-											>✓</span
-										>Adds Docker &amp; Bun if missing
-									</div>
-									<div>
-										<span class="term-ok" aria-hidden="true"
-											>✓</span
-										>Creates your Slack app &amp; signs in
-									</div>
-									<div>
-										<span class="term-ok" aria-hidden="true"
-											>✓</span
-										>Starts systemd service &amp; DMs only
-										you first
-									</div>
-								</div>
-								<div class="term-alt">
-									Already have Bun &amp; Docker? Run
-									<code>bun create laddu</code>
-								</div>
-							</div>
-						</div>
-					</article>
-
-					<!-- Tile 3: Per-Person Private Containers -->
-					<article
-						class="tile"
-						data-tile="isolation"
-						style="
-							left: 32px;
-							top: 432px;
-							width: 420px;
-							height: 232px;
-						"
-					>
-						<div class="tile-inner">
-							<div class="tile-bar">
-								<span class="tile-title"
-									>Private containers</span
-								>
-								<span class="tile-note tabular"
-									>1 per person</span
-								>
-							</div>
-							<div class="iso-body">
-								<div class="iso-grid">
-									<div class="ct-cell">
-										<div class="ct-head">
-											<span>@you</span>
-											<span class="ct-state"
-												>isolated</span
-											>
-										</div>
-										<div class="ct-meta">
-											Desktop, browser, files
-										</div>
-										<div class="ct-meta">
-											Own Claude / Codex
-										</div>
-									</div>
-									<div class="ct-cell">
-										<div class="ct-head">
-											<span>@priya</span>
-											<span class="ct-state"
-												>isolated</span
-											>
-										</div>
-										<div class="ct-meta">
-											Desktop, browser, files
-										</div>
-										<div class="ct-meta">
-											Own OpenCode / M365
-										</div>
-									</div>
-								</div>
-								<div class="iso-wall">
-									<span>Internet-only egress</span>
-									<span>Host, LAN &amp; peers blocked</span>
-								</div>
-							</div>
-						</div>
-					</article>
-
-					<!-- Tile 4: Watch, Take Over, Hand Back -->
-					<article
-						class="tile"
-						data-tile="takeover"
-						style="
-							left: 476px;
-							top: 328px;
-							width: 424px;
-							height: 214px;
-						"
-					>
-						<div class="tile-inner">
-							<div class="tile-bar">
-								<span class="tile-title"
-									>Slack Home · Live desktop</span
-								>
-								<span class="ct-state" id="controlState">
-									laddu driving
-								</span>
-							</div>
-							<div class="take-body">
-								<div class="browser-mock">
-									<div class="browser-url">
-										<span
-											class="url-dot"
-											aria-hidden="true"
-										></span>
-										<span
-											>dev.azure.com/team/pullrequest/418</span
-										>
-									</div>
-									<p class="browser-state" id="browserNote">
-										Clicks and types through portals with no
-										API. Watch live from Slack’s Home tab,
-										take over anytime, and hand back.
-									</p>
-								</div>
-								<button
-									type="button"
-									class="take-toggle"
-									id="takeBtn"
-									aria-pressed="false"
-								>
-									Take over screen
-								</button>
-							</div>
-						</div>
-					</article>
-
-					<!-- Tile 5: Brains & Permissions -->
-					<article
-						class="tile"
-						data-tile="models"
-						style="
-							left: 924px;
-							top: 108px;
-							width: 356px;
-							height: 268px;
-						"
-					>
-						<div class="tile-inner">
-							<div class="tile-bar">
-								<span class="tile-title"
-									>Models &amp; access</span
-								>
-								<span class="tile-note">Per-person choice</span>
-							</div>
-							<div class="ledger-body">
-								<div class="ledger-row">
-									<span class="ledger-k">Codex</span>
-									<span class="ledger-v"
-										>Your ChatGPT plan or OpenAI key</span
-									>
-								</div>
-								<div class="ledger-row">
-									<span class="ledger-k">Claude Code</span>
-									<span class="ledger-v"
-										>Your Claude plan or Anthropic key</span
-									>
-								</div>
-								<div class="ledger-row">
-									<span class="ledger-k">OpenCode</span>
-									<span class="ledger-v"
-										>Free models out of the box</span
-									>
-								</div>
-								<div class="ledger-row">
-									<span class="ledger-k"
-										>Azure &amp; M365</span
-									>
-									<span class="ledger-v"
-										>Acts as you—sees only what you
-										can</span
-									>
-								</div>
-							</div>
-						</div>
-					</article>
-
-					<!-- Tile 6: Mithai Customization -->
-					<article
-						class="tile"
-						data-tile="skins"
-						style="
-							left: 476px;
-							top: 566px;
-							width: 424px;
-							height: 170px;
-						"
-					>
-						<div class="tile-inner">
-							<div class="tile-bar">
-								<span class="tile-title">Name &amp; look</span>
-								<span class="tile-note"
-									>Same bot, your mascot</span
-								>
-							</div>
-							<div class="skin-body">
-								<p class="skin-desc">
-									Rename and dress the bot as any mithai—click
-									one to preview it live across the page.
-								</p>
-								<div
-									class="skin-row"
-									id="skinRow"
-									role="group"
-									aria-label="Choose mascot look"
-								></div>
-							</div>
-						</div>
-					</article>
-				</div>
-
-				<!-- Floating quick-focus canvas dock -->
-				<nav class="canvas-dock" aria-label="Focus a product card">
+				<!-- Floating quick-focus canvas dock with sliding indicator -->
+				<nav
+					class="canvas-dock"
+					id="canvasDock"
+					aria-label="Jump to a product card"
+				>
+					<span
+						class="dock-indicator"
+						id="dockIndicator"
+						aria-hidden="true"
+					></span>
 					<span class="drag-hint" aria-hidden="true">
 						<svg class="ico ico-xs" viewBox="0 0 24 24">
 							<path
@@ -462,6 +178,12 @@
 					<button type="button" class="dock-btn" data-jump="takeover">
 						Take over
 					</button>
+					<button type="button" class="dock-btn" data-jump="files">
+						Files
+					</button>
+					<button type="button" class="dock-btn" data-jump="prs">
+						PRs
+					</button>
 					<button type="button" class="dock-btn" data-jump="models">
 						Models
 					</button>
@@ -472,11 +194,12 @@
 			</section>
 		</main>
 
-		<!-- Install Sheet Modal -->
+		<!-- Install Sheet Modal (CSS-transitioned enter & exit) -->
 		<div
 			class="sheet-backdrop"
 			id="installSheet"
-			hidden
+			data-open="false"
+			aria-hidden="true"
 			role="dialog"
 			aria-modal="true"
 			aria-labelledby="sheetTitle"
@@ -513,7 +236,7 @@
 							class="copy-mini"
 							data-copy="curl -fsSL https://laddu.wtf/install.sh | sh"
 						>
-							Copy
+							<span class="copy-label">Copy</span>
 						</button>
 					</div>
 
