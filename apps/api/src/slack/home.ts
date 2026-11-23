@@ -12,6 +12,13 @@ import type { BotConfig } from "../config"
 import { codexAccount, signIn, signOut, useCodexKey } from "../agent/account"
 import { AGENTS, isAgent } from "../agent/agents"
 import {
+	AGY_KEY,
+	agyAccount,
+	agySignIn,
+	connectedAgy,
+	signOutAgy,
+} from "../agent/agy"
+import {
 	CLAUDE_KEY,
 	claudeAccount,
 	connectedClaude,
@@ -274,6 +281,79 @@ function claudeDoneView(text: string, done = true): types.ModalView {
 	}
 }
 
+/** The API key form for Antigravity ("Use an API key"). */
+const agyKeyForm = () => ({
+	name: AGY_KEY,
+	note: "Your Gemini API key, for Antigravity (aistudio.google.com/apikey)",
+})
+
+/**
+ * Connect Antigravity (agy.ts agySignIn): sign in with the link, paste the code or callback URL
+ * Antigravity shows. With no link yet, it says it's getting one; `problem` says why they're seeing
+ * it again.
+ */
+function agyConnectView(
+	link: string | null,
+	problem?: string,
+): types.ModalView {
+	const steps: types.KnownBlock[] = link
+		? [
+				{
+					type: "section",
+					text: md(
+						"*1.  Sign in with Google*\nApprove in your browser, then copy the authorization code (or the callback URL) Antigravity shows you.",
+					),
+					accessory: {
+						type: "button",
+						action_id: "system_link",
+						text: plain("Sign in with Google"),
+						url: link,
+						style: "primary",
+					},
+				},
+				{
+					type: "input",
+					block_id: "code",
+					label: plain("2.  Paste the code"),
+					hint: plain(
+						`It goes straight to Antigravity on ${systemName()}'s computer, which finishes signing you in. ${systemName()} doesn't keep it.`,
+					),
+					element: {
+						type: "plain_text_input",
+						action_id: "value",
+						max_length: 1000,
+						placeholder: plain("Code or callback URL"),
+					},
+				},
+			]
+		: [context(":hourglass_flowing_sand:  Getting your sign-in link…")]
+	return {
+		type: "modal",
+		callback_id: "home_agy_code",
+		title: plain("Connect Antigravity"),
+		...(link ? { submit: plain("Connect") } : {}),
+		close: plain("Cancel"),
+		blocks: [
+			...(problem ? [row(`:warning:  ${problem}`)] : []),
+			context(
+				`${systemName()} runs Antigravity on your own Google account. Sign in once; it stays connected.`,
+			),
+			...steps,
+		],
+	}
+}
+
+/** The Connect Antigravity form after Connect: connecting, then the outcome. */
+function agyDoneView(text: string, done = true): types.ModalView {
+	return {
+		type: "modal",
+		callback_id: "home_agy_done",
+		title: plain("Connect Antigravity"),
+		close: plain(done ? "Done" : "Close"),
+		blocks: [row(text)],
+	}
+}
+
 /** Claude plans as people know them (Claude Code's subscriptionType). */
 const CLAUDE_PLANS: Record<string, string> = {
 	pro: "Pro",
@@ -322,6 +402,17 @@ async function agentSection(
 			...blocks,
 			hint(
 				":key:  Connect Claude under Connections below to pick a model.",
+			),
+		]
+	if (
+		!models.length &&
+		agent === "agy" &&
+		!(await agyAccount(config, person).catch(() => true))
+	)
+		return [
+			...blocks,
+			hint(
+				":key:  Connect Antigravity under Connections below to pick a model.",
 			),
 		]
 	if (!models.length)
@@ -524,6 +615,31 @@ async function connectionsSection(
 				button("Use an API key", "home_claude_key", "key"),
 			],
 		} as Block)
+	const agy = await agyAccount(config, person).catch(() => null)
+	rows.push(
+		row(
+			`*Antigravity*\n${agy ? `${ON}  Connected${agy.email ? ` as ${escape(agy.email)}` : ""}  ·  ${agy.method === "key" ? "API key" : "Google account"}` : `${OFF}  Not connected`}`,
+			agy
+				? button("Disconnect", "home_agy", "signout", {
+						confirm: {
+							title: "Disconnect Antigravity?",
+							text: `${systemName()} won't run on Antigravity for you until you connect it again.`,
+							yes: "Disconnect",
+						},
+					})
+				: undefined,
+		),
+	)
+	if (!agy)
+		rows.push({
+			type: "actions",
+			elements: [
+				button("Sign in with Google", "home_agy", "signin", {
+					style: "primary",
+				}),
+				button("Use an API key", "home_agy_key", "key"),
+			],
+		} as Block)
 	if (config.slackSignIn) {
 		const connection = await slackSignIn.connection(person)
 		rows.push(
@@ -582,7 +698,7 @@ async function connectionsSection(
 		header(":link:  Connections"),
 		...rows,
 		hint(
-			`Connecting sends you a sign-in link in your DM with ${systemName()}. ChatGPT runs Codex on your own plan, Claude runs Claude Code on yours.`,
+			`Connecting sends you a sign-in link in your DM with ${systemName()}. ChatGPT runs Codex on your own plan, Claude runs Claude Code on yours, and Antigravity runs on your Google account.`,
 		),
 	]
 }
@@ -1684,6 +1800,102 @@ export function registerHome(app: App, given: Deps) {
 			await saveKey(config, person, form.name, form.note, form.value)
 			await connectedClaude(person)
 			return `:white_check_mark:  Claude connected with your API key. Send your message again.`
+		})
+	})
+	control(
+		/^home_agy(_key|_connect)?$/,
+		async ({ person, client, value, body }) => {
+			if (value === "signout") return signOutAgy(config, person)
+			if (value === "key")
+				return void (await client.views.open({
+					trigger_id: body.trigger_id,
+					view: keyView("home_agy_key", "", agyKeyForm()),
+				}))
+			// Sign in (Home) or Connect Antigravity (a turn asked): the form opens at once, the link follows.
+			const opened = await client.views.open({
+				trigger_id: body.trigger_id,
+				view: agyConnectView(null),
+			})
+			const viewId = opened.view?.id
+			if (!viewId) return
+			const signIn = await agySignIn(config, person).catch(error => {
+				console.warn(
+					"[home] couldn't start the Antigravity sign-in",
+					error,
+				)
+				return null
+			})
+			await client.views.update({
+				view_id: viewId,
+				view: signIn
+					? agyConnectView(signIn.link)
+					: agyDoneView(
+							":warning:  Couldn't start the sign-in. Close this and try again.",
+						),
+			})
+		},
+	)
+	app.view("home_agy_code", async ({ ack, body, view, client }) => {
+		const person = viewPerson(body)
+		if (!isAllowed(person.userId)) return ack()
+		const code = (view.state.values.code?.value?.value ?? "").trim()
+		if (!code || /\s/.test(code))
+			return ack({
+				response_action: "errors",
+				errors: {
+					code: "Paste the code or callback URL Antigravity showed you.",
+				},
+			})
+		await ack({
+			response_action: "update",
+			view: agyDoneView(":hourglass_flowing_sand:  Connecting…", false),
+		})
+		const update = (next: types.ModalView) =>
+			client.views
+				.update({ view_id: view.id, view: next })
+				.catch(error => console.warn("[home] couldn't update", error))
+		// The sign-in this form showed; a new one if it expired in the meantime.
+		const signIn = await agySignIn(config, person).catch(() => null)
+		const connected = await signIn?.paste(code).catch(() => false)
+		const account = connected
+			? await agyAccount(config, person).catch(() => null)
+			: null
+		if (account) {
+			await update(
+				agyDoneView(
+					`:white_check_mark:  *Antigravity connected*${account.email ? ` as ${escape(account.email)}` : ""}. ${systemName()} runs on it from your next message.`,
+				),
+			)
+			await refreshHome(client, person).catch(() => {})
+			return
+		}
+		// That code is spent either way: a fresh link to try again.
+		const again = await agySignIn(config, person).catch(() => null)
+		await update(
+			again
+				? agyConnectView(
+						again.link,
+						"That code didn't work. Sign in again and paste the new code.",
+					)
+				: agyDoneView(
+						":warning:  That code didn't work, and a new sign-in couldn't start. Close this and try again.",
+					),
+		)
+	})
+	app.view("home_agy_key", async ({ ack, body, view, client }) => {
+		const person = viewPerson(body)
+		if (!isAllowed(person.userId)) return ack()
+		const form = readKeyForm(view, agyKeyForm())
+		if ("problem" in form)
+			return ack({
+				response_action: "errors",
+				errors: { [form.field]: form.problem },
+			})
+		await ack()
+		await saved(client, person, async () => {
+			await saveKey(config, person, form.name, form.note, form.value)
+			await connectedAgy(person)
+			return `:white_check_mark:  Antigravity connected with your Gemini API key. Send your message again.`
 		})
 	})
 	control("home_disconnect", async ({ person, client, value }) => {

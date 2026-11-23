@@ -2,8 +2,9 @@
 
 A personal Slack assistant. You tag it in a channel (or DM it); it reads the conversation around the
 tag, hands the job to an agent, and replies in the thread. The agent is the brain for every request:
-Codex on the person's own ChatGPT plan, Claude Code on their own Claude plan (either can use the
-person's own API key instead), or OpenCode's free models, each person's pick on laddu's Home tab.
+Codex on the person's own ChatGPT plan, Claude Code on their own Claude plan, Antigravity on their
+own Google account (each can use the person's own API key instead), or OpenCode's free models, each
+person's pick on laddu's Home tab.
 The bot itself only moves messages between Slack and the agent.
 
 Status: **V0**, with per-person integrations, computer use and Azure Repos coding tasks.
@@ -56,6 +57,7 @@ apps/
       agent/acp.ts     runs a turn on any Agent Client Protocol agent (steps, steering, Stop)
       agent/opencode.ts OpenCode's free models over ACP (in the user's container)
       agent/claude.ts  Claude Code on the person's own Claude plan: sign-in, models, headless turns
+      agent/agy.ts     Antigravity CLI on the person's Google account or Gemini key, over ACP
       agent/containers.ts runtime image + one Docker container per Slack user
       agent/codex-config.ts the containers' Codex config.toml
       agent/steps.ts   agent items → plain-language progress steps
@@ -640,9 +642,29 @@ the person's MCP servers come from `~/.laddu/claude-mcp.json` (`connections` wri
 permission prompts (the container is the boundary), auto-update and suggested follow-ups; Claude
 Code's own memory is off, since laddu keeps its own.
 
+### Antigravity
+
+[Antigravity CLI](https://antigravity.google) (`agy`, `ARG AGY`) is Google's own build, unmodified,
+run in each person's container over ACP (`agy acp --dangerously-skip-permissions --disable-telemetry`,
+via `scripts/agy-docker.sh` and `agent/agy.ts`). Models and thinking levels come from `agy acp`'s
+own `session/new` response, cached per person for a few hours.
+
+It runs on **each person's own Google account**, or their own Gemini API key (`GEMINI_API_KEY` in
+`connections`, activated through ACP `authenticate` with `gemini-api-key`). **Sign in with Google**
+on the Home tab (or **Connect Antigravity** when a turn isn't signed in) opens a modal and runs
+`agy acp --login` in their container; they approve in their own browser, copy the authorization code
+or callback URL Antigravity shows, and paste it into the modal. `agy` exchanges it and keeps its
+own OAuth token in `~/.gemini/antigravity-cli/` on their volume; laddu keeps nothing.
+
+`scripts/agy-docker.sh` gives it the same persona (as global `~/.gemini/AGENTS.md`), commands,
+skills (built-in, team and personal, linked one by one into `~/.gemini/config/skills`), and desktop
+(passed as an ACP `mcpServers` entry) as Codex; the person's own MCP servers are written by
+`connections` to `~/.laddu/agy-mcp.json` (mode `0600`, keys resolved) and linked to
+`~/.gemini/config/mcp_config.json`.
+
 ## Roadmap
 
-**V0 (now).** Three agents (Codex, Claude Code, OpenCode) on each person's own plan or key, Slack
+**V0 (now).** Four agents (Codex, Claude Code, Antigravity, OpenCode) on each person's own plan or key, Slack
 context, per-person Azure DevOps and Microsoft 365, computer use, scheduled tasks, Slack DMs and
 tools, approvals, and coding tasks in isolated checkouts ending in a draft Azure Repos PR.
 

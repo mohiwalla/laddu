@@ -8,21 +8,31 @@ import { LostSessionError } from "./acp"
 
 /**
  * A turn for someone who hasn't connected their agent yet: ChatGPT for Codex (account.ts), their
- * Claude plan for Claude Code (claude.ts).
+ * Claude plan for Claude Code (claude.ts), or Google / Gemini API key for Antigravity (agy.ts).
  */
 export class NotSignedInError extends Error {
-	constructor(readonly agent: "codex" | "claude" = "codex") {
-		super(agent === "claude" ? "Not signed in to Claude" : "Not signed in to ChatGPT")
+	constructor(readonly agent: "codex" | "claude" | "agy" = "codex") {
+		super(
+			agent === "claude"
+				? "Not signed in to Claude"
+				: agent === "agy"
+					? "Not signed in to Antigravity"
+					: "Not signed in to ChatGPT",
+		)
 	}
 }
 
 /** Their Claude plan hit a usage limit; the message is Claude Code's ("… resets 5pm"). */
 export class ClaudeLimitError extends Error {}
 
+/** Their Antigravity account or Gemini key hit a usage limit. */
+export class AgyLimitError extends Error {}
+
 export type Failure = {
 	kind:
 		| "auth"
 		| "claude_auth"
+		| "agy_auth"
 		| "usage_limit"
 		| "free_limit"
 		| "context_full"
@@ -60,18 +70,35 @@ export function classify(error: unknown): Failure {
 			"claude_auth",
 			`Claude isn't connected. Connect it under Settings on ${systemName()}'s Home tab, then send your message again.`,
 		)
+	if (error instanceof NotSignedInError && error.agent === "agy")
+		return fail(
+			"agy_auth",
+			`Antigravity isn't connected. Connect it under Settings on ${systemName()}'s Home tab, then send your message again.`,
+		)
 	if (error instanceof ClaudeLimitError)
-		return fail("usage_limit", `Your Claude plan hit its usage limit. ${error.message}`)
+		return fail(
+			"usage_limit",
+			`Your Claude plan hit its usage limit. ${error.message}`,
+		)
+	if (error instanceof AgyLimitError)
+		return fail(
+			"usage_limit",
+			`Your Antigravity account hit its usage limit. ${error.message}`,
+		)
 	if (error instanceof NotSignedInError)
 		return fail(
 			"auth",
 			`ChatGPT isn't connected. Connect it under Settings on ${systemName()}'s Home tab, then send your message again.`,
 		)
 	if (error instanceof LostSessionError)
-		return fail("lost_thread", `${systemName()} lost track of this conversation.`, {
-			retry: true,
-			resetThread: true,
-		})
+		return fail(
+			"lost_thread",
+			`${systemName()} lost track of this conversation.`,
+			{
+				retry: true,
+				resetThread: true,
+			},
+		)
 	if (error instanceof Bun.$.ShellError) {
 		// Docker commands (creating the container, copying files in): usually a hiccup worth one retry.
 		const detail = firstLine(error.stderr.toString() || error.message)
@@ -99,21 +126,24 @@ export function classify(error: unknown): Failure {
 		)
 	}
 	if (/ran out of room|context window/i.test(text)) {
-		return fail(
-			"context_full",
-			"This thread got too long.",
-			{ retry: true, resetThread: true },
-		)
+		return fail("context_full", "This thread got too long.", {
+			retry: true,
+			resetThread: true,
+		})
 	}
 	if (
 		/stream disconnected|connection failed|exceeded retry limit|unexpected status (429|5\d\d)|overloaded|rate_limit_error|timed? ?out|ECONNRESET|socket hang up/i.test(
 			text,
 		)
 	) {
-		return fail("transient", "Lost the connection to the model. Send your message again.", {
-			retry: true,
-			retryAfterMs: 15_000,
-		})
+		return fail(
+			"transient",
+			"Lost the connection to the model. Send your message again.",
+			{
+				retry: true,
+				retryAfterMs: 15_000,
+			},
+		)
 	}
 	return fail("unknown", `Something went wrong: ${firstLine(text)}`)
 }

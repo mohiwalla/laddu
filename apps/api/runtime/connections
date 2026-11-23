@@ -38,6 +38,7 @@ STATE = DIR / "connections.json"
 CODEX_MCP = DIR / "mcp.toml"
 OPENCODE_MCP = DIR / "opencode.json"
 CLAUDE_MCP = DIR / "claude-mcp.json"
+AGY_MCP = DIR / "agy-mcp.json"
 KEY_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 MCP_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 # Built in (codex-config.ts, acp-turn.ts).
@@ -70,9 +71,17 @@ def write_private(path, text):
     temp.replace(path)
 
 
+def key_value(name):
+    try:
+        value = (KEYS / name).read_text().strip()
+        return value or None
+    except OSError:
+        return None
+
+
 def save(state):
     write_private(STATE, json.dumps(state, indent=2) + "\n")
-    toml, opencode, claude = [], {}, {}
+    toml, opencode, claude, agy = [], {}, {}, {}
     for name, server in sorted(state["mcp"].items()):
         toml.append(f"\n[mcp_servers.{name}]")
         if "url" in server:
@@ -93,6 +102,14 @@ def save(state):
                 "url": server["url"],
                 **({"headers": {header: value.replace("{env:", "${") for header, value in sent.items()}} if sent else {}),
             }
+            # Antigravity doesn't expand ${KEY} in mcp_config.json, so resolve saved keys into the 0600 file.
+            agy_headers = {header: val for header, key in headers.items() if (val := key_value(key))}
+            if server.get("bearer") and (val := key_value(server["bearer"])):
+                agy_headers["Authorization"] = f"Bearer {val}"
+            agy[name] = {
+                "serverUrl": server["url"],
+                **({"headers": agy_headers} if agy_headers else {}),
+            }
         else:
             command, *args = server["command"]
             toml.append(f"command = {json.dumps(command)}")
@@ -109,10 +126,17 @@ def save(state):
                 "args": args,
                 **({"env": {key: f"${{{key}}}" for key in server["env"]}} if server.get("env") else {}),
             }
-    # Read by scripts/codex-docker.sh and scripts/opencode-docker.sh before each run; Claude Code's by claude.ts.
+            agy_env = {key: val for key in (server.get("env") or []) if (val := key_value(key))}
+            agy[name] = {
+                "command": command,
+                "args": args,
+                **({"env": agy_env} if agy_env else {}),
+            }
+    # Read by scripts/codex-docker.sh, opencode-docker.sh and agy-docker.sh before each run; Claude Code's by claude.ts.
     write_private(CODEX_MCP, ("# Written by `connections`; edits are overwritten.\n" + "\n".join(toml) + "\n") if toml else "")
     write_private(OPENCODE_MCP, json.dumps({"mcp": opencode}, indent=2) + "\n")
     write_private(CLAUDE_MCP, json.dumps({"mcpServers": claude}, indent=2) + "\n")
+    write_private(AGY_MCP, json.dumps({"mcpServers": agy}, indent=2) + "\n")
 
 
 def now():

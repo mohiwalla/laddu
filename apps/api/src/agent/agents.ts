@@ -1,16 +1,18 @@
 /**
  * The agents laddu can run a turn on, one per person (picked on the Home tab, see preferences.ts):
  * Codex on their own ChatGPT plan (native app-server), Claude Code on their own Claude plan
- * (headless `claude`), or OpenCode's free models (over ACP).
+ * (headless `claude`), Antigravity on their own Google account (over ACP), or OpenCode's free
+ * models (over ACP).
  * Everything for a person runs on their pick, background memory reviews included.
  */
+import { listAgyModels, runAgyTurn } from "./agy"
 import { listClaudeModels, runClaudeTurn } from "./claude"
 import { listCodexModels, runCodexTurn } from "./codex"
 import { listOpenCodeModels, runOpenCodeTurn } from "./opencode"
 import type { BotConfig } from "../config"
 import type { ModelOption, TurnOptions, TurnResult, TurnUser } from "./turn"
 
-export type AgentId = "codex" | "claude" | "opencode"
+export type AgentId = "codex" | "claude" | "agy" | "opencode"
 
 export const AGENTS: Record<
 	AgentId,
@@ -37,6 +39,12 @@ export const AGENTS: Record<
 		plan: "Your Claude plan",
 		listModels: listClaudeModels,
 		runTurn: runClaudeTurn,
+	},
+	agy: {
+		name: "Antigravity",
+		plan: "Your Google account",
+		listModels: listAgyModels,
+		runTurn: runAgyTurn,
 	},
 	opencode: {
 		name: "OpenCode",

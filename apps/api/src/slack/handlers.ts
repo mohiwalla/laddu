@@ -8,6 +8,7 @@ import type { BotConfig } from "../config"
 import { runTurn } from "../agent/agents"
 import type { Steer, TurnResult } from "../agent/turn"
 import { signIn } from "../agent/account"
+import { signInAgy } from "../agent/agy"
 import { signInClaude } from "../agent/claude"
 import { systemName } from "./system"
 import {
@@ -450,13 +451,19 @@ async function handle(
 				pauseForUsageLimit(user, failure)
 			// Nobody asked laddu, so it doesn't post a failure about it.
 			if (quiet && !started) return
-			// Not signed in to ChatGPT or Claude: the sign-in comes to them, privately, where they asked.
-			if (failure.kind === "auth" || failure.kind === "claude_auth") {
+			// Not signed in to ChatGPT, Claude or Antigravity: the sign-in comes to them, privately, where they asked.
+			if (
+				failure.kind === "auth" ||
+				failure.kind === "claude_auth" ||
+				failure.kind === "agy_auth"
+			) {
 				const where = { channel: trigger.channel, threadTs }
 				const sent = await (
 					failure.kind === "auth"
 						? signIn(config, client, user, where)
-						: signInClaude(client, user, where)
+						: failure.kind === "claude_auth"
+							? signInClaude(client, user, where)
+							: signInAgy(client, user, where)
 				).then(
 					() => true,
 					error => {
