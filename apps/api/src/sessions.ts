@@ -48,11 +48,24 @@ export async function deleteSession(key: string): Promise<void> {
 }
 
 const queues = new Map<string, Promise<unknown>>()
+const pendingCounts = new Map<string, number>()
+
+/** True when another request is already queued behind the currently running turn for this key. */
+export const hasQueued = (key: string): boolean =>
+	(pendingCounts.get(key) ?? 0) > 1
 
 /** Run `task` after any earlier task for the same key, so one Slack thread never has two turns at once. */
 export function serialize<T>(key: string, task: () => Promise<T>): Promise<T> {
+	pendingCounts.set(key, (pendingCounts.get(key) ?? 0) + 1)
 	const previous = queues.get(key) ?? Promise.resolve()
-	const next = previous.catch(() => {}).then(task)
+	const next = previous
+		.catch(() => {})
+		.then(task)
+		.finally(() => {
+			const remaining = (pendingCounts.get(key) ?? 1) - 1
+			if (remaining > 0) pendingCounts.set(key, remaining)
+			else pendingCounts.delete(key)
+		})
 	queues.set(key, next)
 	next.finally(() => queues.get(key) === next && queues.delete(key)).catch(
 		() => {},

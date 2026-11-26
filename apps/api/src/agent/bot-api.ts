@@ -625,6 +625,11 @@ const TODO_STATUSES = ["pending", "in_progress", "completed"] as const
 /** `slack todo`: the to-do list shown in the thread while the turn works through it. */
 async function handleTodo(request: Request, caller: Caller): Promise<Response> {
 	if (request.method !== "POST") return reply(405, "Use POST.")
+	if (caller.scheduled)
+		return reply(
+			409,
+			"There's no reply in progress here to show a to-do list in (e.g. a scheduled run). Carry on without it.",
+		)
 	const input = await request.json().catch(() => null)
 	if (!object(input) || !Array.isArray(input.items))
 		return reply(400, "Give the list's items.")

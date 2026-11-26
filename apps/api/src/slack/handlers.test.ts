@@ -237,7 +237,9 @@ test.each(["success", "failure", "stop"] as const)(
 					expect.objectContaining({
 						user: "U_OTHER",
 						thread_ts: ts,
-						text: expect.stringContaining(`Only <@${userId}> can stop this.`),
+						text: expect.stringContaining(
+							`Only <@${userId}> can stop this.`,
+						),
 					}),
 				)
 				await onStop({
@@ -408,4 +410,460 @@ test("untagged replies tagging someone else are left alone without reading the t
 	)
 	expect(replies).not.toHaveBeenCalled()
 	expect(started).not.toHaveBeenCalled()
+})
+
+test("auto-continues when an agent ends early with incomplete work or unfinished to-dos", async () => {
+	serialized.mockImplementation(async (_key, task) => task())
+	const extraSpies: { mockRestore(): void }[] = []
+	let finished!: () => void
+	const done = new Promise<void>(resolve => {
+		finished = resolve
+	})
+	let currentTodos:
+		| {
+				items: {
+					text: string
+					status: "pending" | "in_progress" | "completed"
+				}[]
+		  }
+		| undefined
+	const reply = {
+		ts: "4.001",
+		streaming: true,
+		step: mock(() => {}),
+		todos: mock(list => {
+			currentTodos = list
+		}),
+		latestTodos: () => currentTodos,
+		finish: mock(async () => {}),
+		fail: mock(async () => {}),
+		cancel: mock(async () => {}),
+		discard: mock(async () => {}),
+	}
+	const uploaded = spyOn(attachments, "uploadFiles").mockResolvedValue(
+		undefined,
+	)
+	const saved = spyOn(sessions, "saveSession").mockResolvedValue(undefined)
+	let calls = 0
+	const run = spyOn(agents, "runTurn").mockImplementation(
+		async ({ onStep, onTodos, threadId }) => {
+			calls++
+			if (calls === 1) {
+				onStep?.({
+					id: "s1",
+					title: "Researching leads",
+					status: "complete",
+				})
+				onTodos?.({
+					items: [
+						{ text: "Batch 1", status: "completed" },
+						{ text: "Remaining leads", status: "in_progress" },
+					],
+				})
+				return {
+					threadId: "codex-thread-1",
+					text: "The research is incomplete. Another 2,931 leads still need public checks.",
+					files: [
+						{ name: "Partial.xlsx", data: new Uint8Array([1]) },
+					],
+					skipped: [],
+				}
+			}
+			expect(threadId).toBe("codex-thread-1")
+			// Session cursor must not advance before continuation completes (for restart recovery).
+			expect(saved).not.toHaveBeenCalled()
+			onStep?.({ id: "s2", title: "Finishing leads", status: "complete" })
+			onTodos?.({
+				items: [
+					{ text: "Batch 1", status: "completed" },
+					{ text: "Remaining leads", status: "completed" },
+				],
+			})
+			return {
+				threadId: "codex-thread-1",
+				text: "Attached Final.xlsx with all leads researched.",
+				files: [{ name: "Final.xlsx", data: new Uint8Array([2]) }],
+				skipped: [],
+			}
+		},
+	)
+	extraSpies.push(
+		run,
+		uploaded,
+		saved,
+		spyOn(sessions, "getSession").mockResolvedValue(undefined),
+		spyOn(inflight, "markReply").mockResolvedValue(undefined),
+		spyOn(inflight, "markDone").mockImplementation(async () => {
+			finished()
+		}),
+		spyOn(replies, "openReply").mockResolvedValue(reply),
+		spyOn(context, "buildTurnInput").mockResolvedValue({
+			text: "Then proceed.",
+			transcript: "Then proceed.",
+			attachments: [],
+			linked: [],
+			place: "DM",
+		}),
+		spyOn(context, "userTimezone").mockResolvedValue("Asia/Kolkata"),
+		spyOn(attachments, "downloadAttachments").mockResolvedValue([]),
+		spyOn(learning, "afterTurn").mockResolvedValue(undefined),
+	)
+	try {
+		let onMessage!: (args: unknown) => Promise<void>
+		const client = {
+			apiCall: mock(async () => ({ ok: true })),
+			reactions: { add: mock(async () => ({})) },
+		}
+		const app = {
+			event: () => {},
+			message: (handler: typeof onMessage) => {
+				onMessage = handler
+			},
+			action: () => {},
+			command: () => {},
+			shortcut: () => {},
+			view: () => {},
+		} as unknown as App
+		registerHandlers(
+			app,
+			{ allowedUsers: "*", agent: "codex" } as BotConfig,
+			botUserId,
+		)
+		const ts = `1792400000.${String(++sequence).padStart(6, "0")}`
+		await onMessage({
+			message: {
+				channel: "D_CONTINUE",
+				channel_type: "im",
+				user: userId,
+				text: "Then proceed.",
+				ts,
+			},
+			client,
+			context: { teamId: "T_TEAM" },
+		})
+		await done
+		expect(run).toHaveBeenCalledTimes(2)
+		expect(reply.finish).toHaveBeenCalledWith(
+			"Attached Final.xlsx with all leads researched.",
+		)
+		expect(uploaded).toHaveBeenCalledWith(
+			client,
+			"D_CONTINUE",
+			ts,
+			[{ name: "Final.xlsx", data: new Uint8Array([2]) }],
+			expect.anything(),
+		)
+	} finally {
+		for (const spy of extraSpies) spy.mockRestore()
+	}
+})
+
+test("does not auto-continue when the agent reports a genuine run-wide blocker", async () => {
+	serialized.mockImplementation(async (_key, task) => task())
+	const extraSpies: { mockRestore(): void }[] = []
+	let finished!: () => void
+	const done = new Promise<void>(resolve => {
+		finished = resolve
+	})
+	const reply = {
+		ts: "5.001",
+		streaming: true,
+		step: mock(() => {}),
+		todos: mock(() => {}),
+		latestTodos: () => undefined,
+		finish: mock(async () => {}),
+		fail: mock(async () => {}),
+		cancel: mock(async () => {}),
+		discard: mock(async () => {}),
+	}
+	const run = spyOn(agents, "runTurn").mockImplementation(
+		async ({ onStep }) => {
+			onStep?.({ id: "s1", title: "Checking Lusha", status: "complete" })
+			return {
+				threadId: "codex-thread-2",
+				text: "29 of 50 leads verified. Lusha has now hit its monthly search limit and says access will renew next cycle.",
+				files: [],
+				skipped: [],
+			}
+		},
+	)
+	extraSpies.push(
+		run,
+		spyOn(sessions, "getSession").mockResolvedValue(undefined),
+		spyOn(sessions, "saveSession").mockResolvedValue(undefined),
+		spyOn(inflight, "markReply").mockResolvedValue(undefined),
+		spyOn(inflight, "markDone").mockImplementation(async () => {
+			finished()
+		}),
+		spyOn(replies, "openReply").mockResolvedValue(reply),
+		spyOn(context, "buildTurnInput").mockResolvedValue({
+			text: "Verify 50 leads",
+			transcript: "Verify 50 leads",
+			attachments: [],
+			linked: [],
+			place: "DM",
+		}),
+		spyOn(context, "userTimezone").mockResolvedValue("Asia/Kolkata"),
+		spyOn(attachments, "downloadAttachments").mockResolvedValue([]),
+		spyOn(attachments, "uploadFiles").mockResolvedValue(undefined),
+		spyOn(learning, "afterTurn").mockResolvedValue(undefined),
+	)
+	try {
+		let onMessage!: (args: unknown) => Promise<void>
+		const client = {
+			apiCall: mock(async () => ({ ok: true })),
+			reactions: { add: mock(async () => ({})) },
+		}
+		const app = {
+			event: () => {},
+			message: (handler: typeof onMessage) => {
+				onMessage = handler
+			},
+			action: () => {},
+			command: () => {},
+			shortcut: () => {},
+			view: () => {},
+		} as unknown as App
+		registerHandlers(
+			app,
+			{ allowedUsers: "*", agent: "codex" } as BotConfig,
+			botUserId,
+		)
+		const ts = `1792500000.${String(++sequence).padStart(6, "0")}`
+		await onMessage({
+			message: {
+				channel: "D_BLOCKER",
+				channel_type: "im",
+				user: userId,
+				text: "Verify 50 leads",
+				ts,
+			},
+			client,
+			context: { teamId: "T_TEAM" },
+		})
+		await done
+		expect(run).toHaveBeenCalledTimes(1)
+		expect(reply.finish).toHaveBeenCalledTimes(1)
+	} finally {
+		for (const spy of extraSpies) spy.mockRestore()
+	}
+})
+
+test("0-step continuation exits cleanly and preserves earlier outbox files", async () => {
+	serialized.mockImplementation(async (_key, task) => task())
+	const extraSpies: { mockRestore(): void }[] = []
+	let finished!: () => void
+	const done = new Promise<void>(resolve => {
+		finished = resolve
+	})
+	let currentTodos:
+		| {
+				items: {
+					text: string
+					status: "pending" | "in_progress" | "completed"
+				}[]
+		  }
+		| undefined
+	const reply = {
+		ts: "6.001",
+		streaming: true,
+		step: mock(() => {}),
+		todos: mock(list => {
+			currentTodos = list
+		}),
+		latestTodos: () => currentTodos,
+		finish: mock(async () => {}),
+		fail: mock(async () => {}),
+		cancel: mock(async () => {}),
+		discard: mock(async () => {}),
+	}
+	const uploaded = spyOn(attachments, "uploadFiles").mockResolvedValue(
+		undefined,
+	)
+	let calls = 0
+	const run = spyOn(agents, "runTurn").mockImplementation(
+		async ({ onStep, onTodos }) => {
+			calls++
+			if (calls === 1) {
+				onStep?.({
+					id: "s1",
+					title: "Building report",
+					status: "complete",
+				})
+				onTodos?.({
+					items: [{ text: "Build report", status: "in_progress" }],
+				})
+				return {
+					threadId: "codex-thread-3",
+					text: "Report ready.",
+					files: [{ name: "Report.xlsx", data: new Uint8Array([9]) }],
+					skipped: [],
+				}
+			}
+			// Confirms the work was already finished without taking more tool steps.
+			return {
+				threadId: "codex-thread-3",
+				text: "Everything requested is complete; Report.xlsx is the final file.",
+				files: [],
+				skipped: [],
+			}
+		},
+	)
+	extraSpies.push(
+		run,
+		uploaded,
+		spyOn(sessions, "getSession").mockResolvedValue(undefined),
+		spyOn(sessions, "saveSession").mockResolvedValue(undefined),
+		spyOn(inflight, "markReply").mockResolvedValue(undefined),
+		spyOn(inflight, "markDone").mockImplementation(async () => {
+			finished()
+		}),
+		spyOn(replies, "openReply").mockResolvedValue(reply),
+		spyOn(context, "buildTurnInput").mockResolvedValue({
+			text: "Build the report",
+			transcript: "Build the report",
+			attachments: [],
+			linked: [],
+			place: "DM",
+		}),
+		spyOn(context, "userTimezone").mockResolvedValue("Asia/Kolkata"),
+		spyOn(attachments, "downloadAttachments").mockResolvedValue([]),
+		spyOn(learning, "afterTurn").mockResolvedValue(undefined),
+	)
+	try {
+		let onMessage!: (args: unknown) => Promise<void>
+		const client = {
+			apiCall: mock(async () => ({ ok: true })),
+			reactions: { add: mock(async () => ({})) },
+		}
+		const app = {
+			event: () => {},
+			message: (handler: typeof onMessage) => {
+				onMessage = handler
+			},
+			action: () => {},
+			command: () => {},
+			shortcut: () => {},
+			view: () => {},
+		} as unknown as App
+		registerHandlers(
+			app,
+			{ allowedUsers: "*", agent: "codex" } as BotConfig,
+			botUserId,
+		)
+		const ts = `1792600000.${String(++sequence).padStart(6, "0")}`
+		await onMessage({
+			message: {
+				channel: "D_PRESERVE",
+				channel_type: "im",
+				user: userId,
+				text: "Build the report",
+				ts,
+			},
+			client,
+			context: { teamId: "T_TEAM" },
+		})
+		await done
+		expect(run).toHaveBeenCalledTimes(2)
+		expect(uploaded).toHaveBeenCalledWith(
+			client,
+			"D_PRESERVE",
+			ts,
+			[{ name: "Report.xlsx", data: new Uint8Array([9]) }],
+			expect.anything(),
+		)
+	} finally {
+		for (const spy of extraSpies) spy.mockRestore()
+	}
+})
+
+test("yields continuation immediately when a newer human message is queued", async () => {
+	serialized.mockImplementation(async (_key, task) => task())
+	const extraSpies: { mockRestore(): void }[] = []
+	let finished!: () => void
+	const done = new Promise<void>(resolve => {
+		finished = resolve
+	})
+	const reply = {
+		ts: "7.001",
+		streaming: true,
+		step: mock(() => {}),
+		todos: mock(() => {}),
+		latestTodos: () => undefined,
+		finish: mock(async () => {}),
+		fail: mock(async () => {}),
+		cancel: mock(async () => {}),
+		discard: mock(async () => {}),
+	}
+	const run = spyOn(agents, "runTurn").mockImplementation(
+		async ({ onStep }) => {
+			onStep?.({ id: "s1", title: "Checking leads", status: "complete" })
+			return {
+				threadId: "codex-thread-4",
+				text: "The research is incomplete. Remaining leads still need checks.",
+				files: [],
+				skipped: [],
+			}
+		},
+	)
+	extraSpies.push(
+		run,
+		spyOn(sessions, "hasQueued").mockReturnValue(true),
+		spyOn(sessions, "getSession").mockResolvedValue(undefined),
+		spyOn(sessions, "saveSession").mockResolvedValue(undefined),
+		spyOn(inflight, "markReply").mockResolvedValue(undefined),
+		spyOn(inflight, "markDone").mockImplementation(async () => {
+			finished()
+		}),
+		spyOn(replies, "openReply").mockResolvedValue(reply),
+		spyOn(context, "buildTurnInput").mockResolvedValue({
+			text: "Check 500 leads",
+			transcript: "Check 500 leads",
+			attachments: [],
+			linked: [],
+			place: "DM",
+		}),
+		spyOn(context, "userTimezone").mockResolvedValue("Asia/Kolkata"),
+		spyOn(attachments, "downloadAttachments").mockResolvedValue([]),
+		spyOn(attachments, "uploadFiles").mockResolvedValue(undefined),
+		spyOn(learning, "afterTurn").mockResolvedValue(undefined),
+	)
+	try {
+		let onMessage!: (args: unknown) => Promise<void>
+		const client = {
+			apiCall: mock(async () => ({ ok: true })),
+			reactions: { add: mock(async () => ({})) },
+		}
+		const app = {
+			event: () => {},
+			message: (handler: typeof onMessage) => {
+				onMessage = handler
+			},
+			action: () => {},
+			command: () => {},
+			shortcut: () => {},
+			view: () => {},
+		} as unknown as App
+		registerHandlers(
+			app,
+			{ allowedUsers: "*", agent: "codex" } as BotConfig,
+			botUserId,
+		)
+		const ts = `1792700000.${String(++sequence).padStart(6, "0")}`
+		await onMessage({
+			message: {
+				channel: "D_QUEUED",
+				channel_type: "im",
+				user: userId,
+				text: "Check 500 leads",
+				ts,
+			},
+			client,
+			context: { teamId: "T_TEAM" },
+		})
+		await done
+		expect(run).toHaveBeenCalledTimes(1)
+	} finally {
+		for (const spy of extraSpies) spy.mockRestore()
+	}
 })

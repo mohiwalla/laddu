@@ -297,6 +297,19 @@ export function closeWithMessage(client: WebClient, key: string): boolean {
 	return open.length > 0
 }
 
+/** Whether any question opened during or after `since` is still open for this session. */
+export function hasOpenQuestion(key: string, since = 0): boolean {
+	prune()
+	for (const question of questions.values())
+		if (
+			question.key === key &&
+			question.answer === undefined &&
+			question.askedAt >= since
+		)
+			return true
+	return false
+}
+
 /** They stopped laddu's work in this thread: its questions there are withdrawn. Whether any were open. */
 export function withdrawQuestions(client: WebClient, key: string): boolean {
 	let any = false

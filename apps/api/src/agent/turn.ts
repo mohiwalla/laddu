@@ -162,7 +162,7 @@ export async function saveAttachments(
 }
 
 export const outboxNote = (outbox: string) =>
-	`To send files to Slack (CSV, images, documents, code…), save them directly in ${outbox}/. They're uploaded to this thread right after your reply, so refer to them by name, not path.`
+	`To send final files to Slack (CSV, images, documents, code…), save them directly in ${outbox}/. They're uploaded to this thread right after your final reply, so refer to them by name, not path. (For interim milestone files while you keep working, use \`slack post --file\` instead.)`
 
 /** Their saved memory as the first turn of a conversation shows it, or null. */
 export const memoryNote = (memory: string | null) =>

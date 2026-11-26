@@ -23,6 +23,10 @@ import { SlackForms } from "./slack/forms"
 import { setSystemName } from "./slack/system"
 
 const config = loadBotConfig()
+if (config.reasoningEffort === "low")
+	console.warn(
+		'[config] CODEX_REASONING_EFFORT is "low"; multi-step Codex turns may stop early. Prefer "medium" or higher.',
+	)
 
 // Per-user containers from one runtime image.
 const runtime = `docker (${await prepareDocker(config)})`

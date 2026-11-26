@@ -47,6 +47,8 @@ export type Reply = {
 	step(step: Step): void
 	/** The agent's to-do list, shown above the steps. */
 	todos(todos: Todos): void
+	/** Latest to-do list shown for this reply (from `slack todo` or agent plan), if any. */
+	latestTodos?: () => Todos | undefined
 	/** Posts the answer; an empty answer (files only) just closes the progress. */
 	finish(text: string): Promise<void>
 	fail(message: string): Promise<void>
@@ -155,6 +157,7 @@ export async function openReply(
 	const started = Date.now()
 	let posted: Promise<PostedReply> | undefined
 	let board: TodoBoard | undefined
+	let currentTodos: Todos | undefined
 	/** Every step so far, to start the steps again below a newly posted list. */
 	const steps = new Map<string, Step>()
 	let chain: Promise<void> = Promise.resolve()
@@ -224,12 +227,14 @@ export async function openReply(
 	}
 	const todos = (list: Todos) => {
 		if (closed) return
+		currentTodos = list
 		board ??= todoBoard(client, target, remember, restack)
 		board.show(list)
 	}
 	live.set(liveKey(target), todos)
 	return {
 		todos,
+		latestTodos: () => currentTodos,
 		step(step) {
 			steps.set(step.id, step)
 			if (closed) return
