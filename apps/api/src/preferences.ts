@@ -91,7 +91,9 @@ export function effective(
 		? picked.effort!
 		: fallbackEffort && supports(fallbackEffort)
 			? fallbackEffort
-			: (option?.defaultEffort ?? fallbackEffort)
+			: option?.defaultEffort === "low" && supports("medium")
+				? "medium"
+				: (option?.defaultEffort ?? fallbackEffort)
 	const fast =
 		(picked.fast ?? config.fast) &&
 		(option ? option.fast : agent === "codex")

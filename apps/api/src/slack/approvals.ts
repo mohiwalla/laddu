@@ -131,11 +131,11 @@ export async function requestOk(
 	return `Not done yet: this needs their OK, so Allow / Don't allow buttons are in the thread now. Don't retry it or do it another way. End your turn now, replying with just [REACT:hourglass_flowing_sand]: the request in the thread is your message, so don't say it's waiting or repeat it. Their decision (and the result, if they allow it) comes back to you as their next message.`
 }
 
-/** Whether any approval request is currently open for this session (channel:thread:user). */
-export function hasOpenApproval(key: string): boolean {
+/** Whether any approval request opened during or after `since` is still open for this session. */
+export function hasOpenApproval(key: string, since = 0): boolean {
 	prune()
 	for (const approval of approvals.values())
-		if (approval.key === key) return true
+		if (approval.key === key && approval.askedAt >= since) return true
 	return false
 }
 

@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test"
 import {
 	earlyStopContinuation,
+	isExplicitPartialRequest,
 	MAX_CONTINUATIONS,
 	reportsBlocker,
+	resolveContinuationFiles,
 } from "./continuation"
 
 test("catches real Kamal early-stop with unfinished to-dos and partial workbook", () => {
@@ -16,23 +18,41 @@ test("catches real Kamal early-stop with unfinished to-dos and partial workbook"
 				{ text: "Build final workbook", status: "pending" },
 			],
 		},
-		request: "Then proceed.",
+		requests: ["Then proceed."],
 		waitingOnUser: false,
 		continuations: 0,
+		withheldFiles: ["Lusha-Tech-Public-Research-Partial.xlsx"],
 	})
 	expect(result?.reason).toBe("unfinished_todos")
 	expect(result?.prompt).toContain("Research remaining companies")
+	expect(result?.prompt).toContain("Lusha-Tech-Public-Research-Partial.xlsx")
 })
 
 test("catches real Kamal early-stop even without a to-do list", () => {
 	const result = earlyStopContinuation({
 		text: "Attached **Lusha-Tech-Public-Research-Partial.xlsx**. Public sources added company evidence for **61 more leads**, bringing Gray to **101**.\n\nThe research is **incomplete**. Another **2,931 leads** still need public checks. They’re marked **Research pending**, not as failed lookups. No paid enrichment was run.",
 		steps: 7,
-		request: "Then proceed.",
+		requests: ["Then proceed."],
 		waitingOnUser: false,
 		continuations: 0,
 	})
 	expect(result?.reason).toBe("incomplete_reply")
+})
+
+test("catches empty or files-only reply when to-dos remain unfinished", () => {
+	const result = earlyStopContinuation({
+		text: "",
+		steps: 5,
+		todos: {
+			items: [
+				{ text: "Step 1", status: "completed" },
+				{ text: "Step 2", status: "pending" },
+			],
+		},
+		waitingOnUser: false,
+		continuations: 0,
+	})
+	expect(result?.reason).toBe("unfinished_todos")
 })
 
 test.each([
@@ -53,6 +73,10 @@ test.each([
 		"Lusha is set to **11–50 employees only**. The verified total is **4 of 500**, so no CSV batch is ready. RepVue was left out because its official website blocked browser verification. The run ended before the first batch, and no background verification is running.",
 	],
 	[
+		"One optional source 429 while other sources remain available",
+		"One optional source returned HTTP 429; the research is incomplete, but the other sources remain available.",
+	],
+	[
 		"Kamal Nov 4 high-effort incomplete batch",
 		"The batch is still incomplete; I haven’t produced the workbook. I searched for 145 supplied person–company pairs and saved the results for review. The remaining website matches, red flags and signals still need validation.",
 	],
@@ -60,6 +84,9 @@ test.each([
 	const result = earlyStopContinuation({
 		text,
 		steps: 16,
+		requests: [
+			"Check 500 leads, send the first 50 and keep going, never send a partial CSV",
+		],
 		waitingOnUser: false,
 		continuations: 0,
 	})
@@ -83,12 +110,65 @@ test.each([
 		"Candidates exhausted",
 		"Verified 18 of 50 leads; there are no more candidates matching the requested filters.",
 	],
+	[
+		"LinkedIn CAPTCHA across the run",
+		"LinkedIn showed a CAPTCHA after 12 checks and stopped verification.",
+	],
 ])("does not continue on genuine run-wide blocker: %s", (_, text) => {
 	expect(reportsBlocker(text)).toBe(true)
 	expect(
 		earlyStopContinuation({
 			text,
 			steps: 20,
+			waitingOnUser: false,
+			continuations: 0,
+		}),
+	).toBeNull()
+})
+
+test("does not treat full numeric targets or negated partial phrasing as partial requests", () => {
+	expect(isExplicitPartialRequest(["Check 500 leads"])).toBe(false)
+	expect(isExplicitPartialRequest(["Send the first 50 and keep going"])).toBe(
+		false,
+	)
+	expect(isExplicitPartialRequest(["Never send a partial CSV"])).toBe(false)
+	expect(isExplicitPartialRequest(["Don't stop after 50 leads"])).toBe(false)
+})
+
+test("respects explicit partial or sample request even with pending to-dos", () => {
+	expect(
+		earlyStopContinuation({
+			text: "Attached sample workbook with the first 10 rows.",
+			steps: 4,
+			todos: {
+				items: [
+					{ text: "Sample 10 leads", status: "completed" },
+					{ text: "Full batch", status: "pending" },
+				],
+			},
+			requests: ["Send a sample workbook"],
+			waitingOnUser: false,
+			continuations: 0,
+		}),
+	).toBeNull()
+
+	expect(
+		earlyStopContinuation({
+			text: "Stopped at 50 leads as requested. Remaining leads not checked.",
+			steps: 10,
+			requests: ["Verify 500 leads", "use the first 50 only"],
+			waitingOnUser: false,
+			continuations: 0,
+		}),
+	).toBeNull()
+})
+
+test("does not false-positive on an audit describing an uploaded input workbook as incomplete", () => {
+	expect(
+		earlyStopContinuation({
+			text: "Audit finished: the uploaded workbook is incomplete (missing 3 required columns).",
+			steps: 3,
+			requests: ["Audit this spreadsheet"],
 			waitingOnUser: false,
 			continuations: 0,
 		}),
@@ -114,19 +194,6 @@ test("never continues on 0-step replies, special replies, waiting on user, or ma
 	expect(earlyStopContinuation({ ...base, text: "[SKIP]" })).toBeNull()
 })
 
-test("respects explicit user request for a partial or sample batch", () => {
-	expect(
-		earlyStopContinuation({
-			text: "Attached partial workbook with the first 10 rows.",
-			steps: 4,
-			request:
-				"Just check the first 10 leads and send a partial workbook",
-			waitingOnUser: false,
-			continuations: 0,
-		}),
-	).toBeNull()
-})
-
 test("does not continue when work is complete and all to-dos are done", () => {
 	expect(
 		earlyStopContinuation({
@@ -142,4 +209,45 @@ test("does not continue when work is complete and all to-dos are done", () => {
 			continuations: 0,
 		}),
 	).toBeNull()
+})
+
+test("resolveContinuationFiles preserves named deliverables across steps and drops withheld partial files on blocker", () => {
+	const report = { name: "Report.xlsx", data: new Uint8Array([1]) }
+	const partial = { name: "Partial.xlsx", data: new Uint8Array([2]) }
+	const finalFile = { name: "Final.xlsx", data: new Uint8Array([3]) }
+
+	// Continuation updated slack todo (1 step) and referenced Report.xlsx without rewriting it.
+	expect(
+		resolveContinuationFiles(
+			{ files: [report], skipped: [] },
+			{
+				text: "Attached Report.xlsx with all checks done.",
+				files: [],
+				skipped: [],
+			},
+			{ reason: "unfinished_todos", steps: 1 },
+		).files,
+	).toEqual([report])
+
+	// Continuation produced new final file -> replaces earlier partial file.
+	expect(
+		resolveContinuationFiles(
+			{ files: [partial], skipped: [] },
+			{ text: "Attached Final.xlsx.", files: [finalFile], skipped: [] },
+			{ reason: "incomplete_reply", steps: 5 },
+		).files,
+	).toEqual([finalFile])
+
+	// Continuation stopped with a blocker and refused to send a partial file -> drops withheld partial.
+	expect(
+		resolveContinuationFiles(
+			{ files: [partial], skipped: [] },
+			{
+				text: "Lusha hit its monthly search limit. I haven't sent a partial CSV.",
+				files: [],
+				skipped: [],
+			},
+			{ reason: "incomplete_reply", steps: 0 },
+		).files,
+	).toEqual([])
 })

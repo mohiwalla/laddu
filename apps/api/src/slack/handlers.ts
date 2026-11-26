@@ -6,7 +6,11 @@ import { ruleEvents, type SlackAutomations } from "./automations"
 import type { SlackForms } from "./forms"
 import type { BotConfig } from "../config"
 import { runTurn } from "../agent/agents"
-import { earlyStopContinuation, MAX_CONTINUATIONS } from "../agent/continuation"
+import {
+	earlyStopContinuation,
+	MAX_CONTINUATIONS,
+	resolveContinuationFiles,
+} from "../agent/continuation"
 import type { Steer, TurnResult } from "../agent/turn"
 import { signIn } from "../agent/account"
 import { signInAgy } from "../agent/agy"
@@ -22,6 +26,7 @@ import { afterTurn } from "../agent/learning"
 import {
 	deleteSession,
 	getSession,
+	hasQueued,
 	saveSession,
 	serialize,
 	sessionKey,
@@ -64,6 +69,7 @@ import {
 	hearWords,
 	registerApprovals,
 	withdrawApprovals,
+	wordsFor,
 } from "./approvals"
 import { chunkMarkdown } from "./reply"
 import {
@@ -363,33 +369,25 @@ async function handle(
 			// If the agent stopped mid-task with unfinished to-dos or self-reported incomplete work
 			// and no run-wide blocker, resume the same thread before posting a partial reply.
 			for (let continuations = 0; ; continuations++) {
+				// Yield immediately if the person already queued a follow-up message in this thread.
+				if (hasQueued(key)) break
 				const nudge = earlyStopContinuation({
 					text: result.text,
 					steps: subturnSteps,
 					todos: reply.latestTodos?.(),
-					request: typedRequest(trigger),
+					requests: wordsFor(key),
 					waitingOnUser:
-						hasOpenQuestion(key) ||
-						hasOpenApproval(key) ||
+						hasOpenQuestion(key, turnStarted) ||
+						hasOpenApproval(key, turnStarted) ||
 						askedForKey(
 							{ ...user, channel: trigger.channel, threadTs },
 							turnStarted,
 						),
 					continuations,
+					withheldFiles: result.files.map(file => file.name),
 				})
 				if (!nudge) break
 				agent.signal.throwIfAborted()
-				await saveSession(key, {
-					agent: personal.agent,
-					threadId: result.threadId,
-					lastSeenTs: steered.seen,
-					linked: [
-						...new Set([
-							...(session?.linked ?? []),
-							...turn.linked,
-						]),
-					],
-				})
 				console.log(
 					`[${key}] auto-continuing (${continuations + 1}/${MAX_CONTINUATIONS}): ${nudge.reason}`,
 				)
@@ -400,42 +398,59 @@ async function handle(
 					status: "in_progress",
 				})
 				const previous = result
-				subturnSteps = 0
-				result = await runTurn({
-					signal: agent.signal,
-					config: personal,
-					user,
-					threadId: previous.threadId,
-					input: nudge.prompt,
-					slack: {
-						channel: trigger.channel,
-						threadTs,
-						timezone,
-					},
-					onStep,
-					onTodos: todos => reply!.todos(todos),
-					onSteerable: steer => {
-						if (steer) steering.set(key, { steer, steered })
-						else if (steering.get(key)?.steered === steered)
-							steering.delete(key)
-					},
-				})
+				let next: TurnResult
+				let resumeId: string | undefined = previous.threadId
+				for (let attempt = 1; ; attempt++) {
+					try {
+						agent.signal.throwIfAborted()
+						subturnSteps = 0
+						next = await runTurn({
+							signal: agent.signal,
+							config: personal,
+							user,
+							threadId: resumeId,
+							input: nudge.prompt,
+							slack: {
+								channel: trigger.channel,
+								threadTs,
+								timezone,
+							},
+							onStep,
+							onTodos: todos => reply!.todos(todos),
+							onSteerable: steer => {
+								if (steer) steering.set(key, { steer, steered })
+								else if (steering.get(key)?.steered === steered)
+									steering.delete(key)
+							},
+						})
+						break
+					} catch (error) {
+						if (agent.signal.aborted) throw error
+						const failure = classify(error)
+						console.error(
+							`[${key}] continuation ${continuations + 1} attempt ${attempt} failed (${failure.kind}):`,
+							error,
+						)
+						if (failure.resetThread) {
+							await deleteSession(key)
+							session = undefined
+							resumeId = undefined
+						}
+						if (!failure.retry || attempt >= MAX_ATTEMPTS)
+							throw new TurnFailed(failure)
+						await Bun.sleep(failure.retryAfterMs)
+					}
+				}
 				notifyStep({
 					id: noteId,
 					title: "Continuing unfinished work",
 					status: "complete",
 				})
-				if (
-					!result.files.length &&
-					subturnSteps === 0 &&
-					previous.files.length
-				) {
-					result = {
-						...result,
-						files: previous.files,
-						skipped: previous.skipped,
-					}
-				}
+				const resolved = resolveContinuationFiles(previous, next, {
+					reason: nudge.reason,
+					steps: subturnSteps,
+				})
+				result = { ...next, ...resolved }
 			}
 			agent.signal.throwIfAborted()
 			await saveSession(key, {
@@ -1090,7 +1105,8 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 					...classify(new Error("usage limit")),
 					message: usage,
 				})
-			const result = await runTurn({
+			let subturnSteps = 0
+			let result = await runTurn({
 				config: personal,
 				user,
 				input: [await nameNote(user), input]
@@ -1102,7 +1118,46 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 					timezone: job.timezone,
 					scheduled: true,
 				},
+				onStep: () => {
+					subturnSteps++
+				},
 			})
+			for (let continuations = 0; ; continuations++) {
+				const nudge = earlyStopContinuation({
+					text: result.text,
+					steps: subturnSteps,
+					requests: [job.task],
+					waitingOnUser: false,
+					continuations,
+					withheldFiles: result.files.map(file => file.name),
+				})
+				if (!nudge) break
+				console.log(
+					`[scheduler] ${job.id} auto-continuing (${continuations + 1}/${MAX_CONTINUATIONS}): ${nudge.reason}`,
+				)
+				const previous = result
+				subturnSteps = 0
+				const next = await runTurn({
+					config: personal,
+					user,
+					threadId: previous.threadId,
+					input: nudge.prompt,
+					slack: {
+						channel: job.channel,
+						threadTs: job.threadTs,
+						timezone: job.timezone,
+						scheduled: true,
+					},
+					onStep: () => {
+						subturnSteps++
+					},
+				})
+				const resolved = resolveContinuationFiles(previous, next, {
+					reason: nudge.reason,
+					steps: subturnSteps,
+				})
+				result = { ...next, ...resolved }
+			}
 			const silent =
 				result.text.trim() === "[SILENT]" && !result.files.length
 			console.log(
