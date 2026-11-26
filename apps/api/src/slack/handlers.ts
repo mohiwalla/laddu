@@ -6,6 +6,7 @@ import { ruleEvents, type SlackAutomations } from "./automations"
 import type { SlackForms } from "./forms"
 import type { BotConfig } from "../config"
 import { runTurn } from "../agent/agents"
+import { earlyStopContinuation, MAX_CONTINUATIONS } from "../agent/continuation"
 import type { Steer, TurnResult } from "../agent/turn"
 import { signIn } from "../agent/account"
 import { signInAgy } from "../agent/agy"
@@ -42,6 +43,7 @@ import { configFor } from "../preferences"
 import { nameNote, postAs } from "../appearance"
 import {
 	closeWithMessage,
+	hasOpenQuestion,
 	registerQuestions,
 	withdrawQuestions,
 } from "./questions"
@@ -58,6 +60,7 @@ import {
 } from "../inflight"
 import {
 	forgetWords,
+	hasOpenApproval,
 	hearWords,
 	registerApprovals,
 	withdrawApprovals,
@@ -259,7 +262,8 @@ async function handle(
 			// The first time this turn uses laddu's computer: a fresh link in their Home tab (and, the very
 			// first time ever, a note saying where it is).
 			let linkSent = false
-			const onStep = (step: Step) => {
+			let subturnSteps = 0
+			const notifyStep = (step: Step) => {
 				if (!started) {
 					started = true
 					agent.start(as).catch(() => {})
@@ -278,6 +282,10 @@ async function handle(
 					),
 				)
 			}
+			const onStep = (step: Step) => {
+				subturnSteps++
+				notifyStep(step)
+			}
 			const personal = await configFor(config, user)
 			agentName = personal.agent
 			// Their ChatGPT plan's usage limit only holds up Codex.
@@ -295,10 +303,12 @@ async function handle(
 			// Messages added to this turn while it runs (steerInto).
 			const steered: Steered = { seen: trigger.ts, lines: [] }
 			const turnStarted = Date.now()
+			const timezone = await userTimezone(client, trigger.userId)
 			let result: TurnResult
 			for (let attempt = 1; ; attempt++) {
 				try {
 					agent.signal.throwIfAborted()
+					subturnSteps = 0
 					// Rebuilt each attempt: after a thread reset the fresh thread needs the whole conversation.
 					turn = await buildTurnInput({
 						client,
@@ -323,10 +333,7 @@ async function handle(
 						slack: {
 							channel: trigger.channel,
 							threadTs,
-							timezone: await userTimezone(
-								client,
-								trigger.userId,
-							),
+							timezone,
 						},
 						onStep,
 						onTodos: todos => reply!.todos(todos),
@@ -351,6 +358,83 @@ async function handle(
 					if (!failure.retry || attempt >= MAX_ATTEMPTS)
 						throw new TurnFailed(failure)
 					await Bun.sleep(failure.retryAfterMs)
+				}
+			}
+			// If the agent stopped mid-task with unfinished to-dos or self-reported incomplete work
+			// and no run-wide blocker, resume the same thread before posting a partial reply.
+			for (let continuations = 0; ; continuations++) {
+				const nudge = earlyStopContinuation({
+					text: result.text,
+					steps: subturnSteps,
+					todos: reply.latestTodos?.(),
+					request: typedRequest(trigger),
+					waitingOnUser:
+						hasOpenQuestion(key) ||
+						hasOpenApproval(key) ||
+						askedForKey(
+							{ ...user, channel: trigger.channel, threadTs },
+							turnStarted,
+						),
+					continuations,
+				})
+				if (!nudge) break
+				agent.signal.throwIfAborted()
+				await saveSession(key, {
+					agent: personal.agent,
+					threadId: result.threadId,
+					lastSeenTs: steered.seen,
+					linked: [
+						...new Set([
+							...(session?.linked ?? []),
+							...turn.linked,
+						]),
+					],
+				})
+				console.log(
+					`[${key}] auto-continuing (${continuations + 1}/${MAX_CONTINUATIONS}): ${nudge.reason}`,
+				)
+				const noteId = `continue-${continuations + 1}`
+				notifyStep({
+					id: noteId,
+					title: "Continuing unfinished work",
+					status: "in_progress",
+				})
+				const previous = result
+				subturnSteps = 0
+				result = await runTurn({
+					signal: agent.signal,
+					config: personal,
+					user,
+					threadId: previous.threadId,
+					input: nudge.prompt,
+					slack: {
+						channel: trigger.channel,
+						threadTs,
+						timezone,
+					},
+					onStep,
+					onTodos: todos => reply!.todos(todos),
+					onSteerable: steer => {
+						if (steer) steering.set(key, { steer, steered })
+						else if (steering.get(key)?.steered === steered)
+							steering.delete(key)
+					},
+				})
+				notifyStep({
+					id: noteId,
+					title: "Continuing unfinished work",
+					status: "complete",
+				})
+				if (
+					!result.files.length &&
+					subturnSteps === 0 &&
+					previous.files.length
+				) {
+					result = {
+						...result,
+						files: previous.files,
+						skipped: previous.skipped,
+					}
 				}
 			}
 			agent.signal.throwIfAborted()

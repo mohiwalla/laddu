@@ -297,6 +297,14 @@ export function closeWithMessage(client: WebClient, key: string): boolean {
 	return open.length > 0
 }
 
+/** Whether any question is currently open for this session (channel:thread:user). */
+export function hasOpenQuestion(key: string): boolean {
+	prune()
+	for (const question of questions.values())
+		if (question.key === key && question.answer === undefined) return true
+	return false
+}
+
 /** They stopped laddu's work in this thread: its questions there are withdrawn. Whether any were open. */
 export function withdrawQuestions(client: WebClient, key: string): boolean {
 	let any = false
