@@ -364,7 +364,8 @@ offline).
 | `ALLOWED_SLACK_USERS`    | the owner               | `"*"` for everyone, or comma-separated member IDs                                                                |
 | `CODEX_REASONING_EFFORT` | `medium`                | `minimal` … `xhigh`                                                                                              |
 | `CODEX_FAST`             | `false`                 | `true`: fast mode, quicker answers that use more of each plan's limits                                           |
-| `ISOLATE_NETWORK`        | `true`                  | Docker: every container (yours too) gets internet only, not this machine's services, the LAN or other containers |
+| `ISOLATE_NETWORK`           | `true`                  | Docker: every container (yours too) gets internet only, not this machine's services, the LAN or other containers |
+| `UNLIMITED_CONTAINER_USERS` | nobody                  | Docker: `"*"` for everyone, or comma-separated member IDs whose containers run without CPU, memory or PID caps   |
 | `CODEX_WORKDIR`          | `agent-home`            | Codex's working directory; its `AGENTS.md` is the persona                                                        |
 | `CONTEXT_MESSAGES`       | `20`                    | Channel messages read before a top-level tag                                                                     |
 | `MEMORY_REVIEW_EVERY`    | `3`                     | Turns per person between background memory reviews; `"0"` turns them off                                         |

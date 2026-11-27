@@ -175,6 +175,81 @@ export const containerName = (
 		.join("-")
 }
 
+const isUnlimitedContainerUser = (config: BotConfig, userId: string) =>
+	config.unlimitedContainerUsers === "*" ||
+	(config.unlimitedContainerUsers?.has(userId) ?? false)
+
+/** Docker `run` flags for one user's container; hashed into `laddu.spec` to trigger recreation on changes. */
+export function containerOptions({
+	config,
+	teamId,
+	userId,
+	image,
+}: {
+	config: BotConfig
+	teamId: string
+	userId: string
+	image: string
+}): string[] {
+	const isolated = config.isolateNetwork
+	const unlimited = isUnlimitedContainerUser(config, userId)
+	return [
+		"--init", // PID 1 reaps finished child processes
+		"--hostname",
+		"laddu",
+		"--label",
+		"laddu.bot=1",
+		"--label",
+		`laddu.team=${teamId}`,
+		"--label",
+		`laddu.user=${userId}`,
+		...(instance ? ["--label", `laddu.instance=${instance}`] : []),
+		// Groups them as one "laddu" app in Docker Desktop and editor container views.
+		"--label",
+		"com.docker.compose.project=laddu",
+		// Part of the spec, so turning isolation off recreates the container without the rules.
+		"--label",
+		`laddu.isolated=${isolated ? 1 : 0}`,
+		"--restart",
+		"unless-stopped",
+		// Docker defaults soft nofile to 1024, which high-fanout Codex runs exhaust (EMFILE).
+		"--ulimit",
+		unlimited ? "nofile=524288:524288" : "nofile=65536:524288",
+		...(unlimited
+			? []
+			: [
+					"--memory",
+					config.desktop ? "3g" : "2g",
+					"--cpus",
+					"2",
+					// Counts threads, not processes: Chromium alone runs ~450, which starved a 512 limit.
+					"--pids-limit",
+					config.desktop ? "4096" : "512",
+				]),
+		// Chromium on the desktop needs more shared memory than Docker's 64 MB default.
+		...(config.desktop ? ["--shm-size", "1g"] : []),
+		"--cap-drop",
+		"ALL",
+		"--security-opt",
+		"no-new-privileges",
+		// Always networked: Codex reaches the model over the internet. With ISOLATE_NETWORK on,
+		// it's limited to the internet (see isolate()).
+		"--volume",
+		`${["laddu-home", slug(instance), slug(teamId), slug(userId)].filter(Boolean).join("-")}:${CONTAINER_HOME}`,
+		// Directories, not files: a file bind mount keeps the old inode when an editor replaces the
+		// file. scripts/codex-docker.sh links these into CODEX_HOME before every run.
+		"--volume",
+		`${config.workdir}:/opt/laddu/persona:ro`,
+		// The deployment's AGENTS.local.md and skills.local/, when kept outside the persona folder.
+		...(config.localDir !== config.workdir
+			? ["--volume", `${config.localDir}:/opt/laddu/persona-local:ro`]
+			: []),
+		"--volume",
+		`${runtimeDir}:/opt/laddu/runtime:ro`,
+		image,
+	]
+}
+
 const pending = new Map<string, Promise<string>>()
 
 /** Returns the running container for this Slack user, creating or restarting it as needed. */
@@ -207,54 +282,12 @@ export function ensureContainer(
 			await Bun.$`docker rename ${existing} ${name}`.quiet()
 			console.log(`[containers] renamed ${existing} to ${name}`)
 		}
-		const options = [
-			"--init", // PID 1 reaps finished child processes
-			"--hostname",
-			"laddu",
-			"--label",
-			"laddu.bot=1",
-			"--label",
-			`laddu.team=${teamId}`,
-			"--label",
-			`laddu.user=${userId}`,
-			...(instance ? ["--label", `laddu.instance=${instance}`] : []),
-			// Groups them as one "laddu" app in Docker Desktop and editor container views.
-			"--label",
-			"com.docker.compose.project=laddu",
-			// Part of the spec, so turning isolation off recreates the container without the rules.
-			"--label",
-			`laddu.isolated=${isolated ? 1 : 0}`,
-			"--restart",
-			"unless-stopped",
-			"--memory",
-			config.desktop ? "3g" : "2g",
-			// Chromium on the desktop needs more shared memory than Docker's 64 MB default.
-			...(config.desktop ? ["--shm-size", "1g"] : []),
-			"--cpus",
-			"2",
-			// Counts threads, not processes: Chromium alone runs ~450, which starved a 512 limit.
-			"--pids-limit",
-			config.desktop ? "4096" : "512",
-			"--cap-drop",
-			"ALL",
-			"--security-opt",
-			"no-new-privileges",
-			// Always networked: Codex reaches the model over the internet. With ISOLATE_NETWORK on,
-			// it's limited to the internet (see isolate()).
-			"--volume",
-			`${["laddu-home", slug(instance), slug(teamId), slug(userId)].filter(Boolean).join("-")}:${CONTAINER_HOME}`,
-			// Directories, not files: a file bind mount keeps the old inode when an editor replaces the
-			// file. scripts/codex-docker.sh links these into CODEX_HOME before every run.
-			"--volume",
-			`${config.workdir}:/opt/laddu/persona:ro`,
-			// The deployment's AGENTS.local.md and skills.local/, when kept outside the persona folder.
-			...(config.localDir !== config.workdir
-				? ["--volume", `${config.localDir}:/opt/laddu/persona-local:ro`]
-				: []),
-			"--volume",
-			`${runtimeDir}:/opt/laddu/runtime:ro`,
-			imageTag,
-		]
+		const options = containerOptions({
+			config,
+			teamId,
+			userId,
+			image: imageTag,
+		})
 		// Fingerprint of image + options; a container created from different ones gets recreated.
 		const spec = Bun.hash(options.join("\n")).toString(16)
 
