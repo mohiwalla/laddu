@@ -37,6 +37,7 @@ import json
 import os
 import secrets
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -62,6 +63,8 @@ HANDBACK_WAIT_S = 75  # under Codex's 90 s tool timeout
 # position itself is read from X by `desktop events`.
 EVENTS = STATE / "events"
 EVENTS_MAX_BYTES = 64_000
+CHROMIUM_DIR = Path.home() / ".config" / "chromium"
+CHROMIUM_LOCKS = ("SingletonLock", "SingletonSocket", "SingletonCookie")
 
 # Controls worth listing; everything else is read from the screenshot.
 INTERACTIVE = {
@@ -105,7 +108,56 @@ def spawn(cmd, env, log):
     )
 
 
+def chromium_lock_alive(profile_dir=None, hostname=None, proc_root=Path("/proc")):
+    """True only when SingletonLock points to a live Chromium process in this container."""
+    profile_dir = CHROMIUM_DIR if profile_dir is None else profile_dir
+    lock = profile_dir / "SingletonLock"
+    if not os.path.lexists(lock):
+        return False
+    try:
+        target = os.readlink(lock)
+    except OSError:
+        return False
+    host, sep, pid_text = target.rpartition("-")
+    if not sep or host != (hostname or socket.gethostname()) or not pid_text.isdigit():
+        return False
+    try:
+        cmdline = (proc_root / pid_text / "cmdline").read_bytes()
+    except OSError:
+        return False
+    argv0 = cmdline.split(b"\0", 1)[0]
+    if b"chrom" not in os.path.basename(argv0).lower():
+        return False
+    return True
+
+
+def clear_stale_chromium_locks(profile_dir=None, hostname=None, proc_root=Path("/proc")):
+    """Remove leftover Chromium Singleton* symlinks when no live Chromium owns the profile.
+
+    Persistent home volumes keep ~/.config/chromium across container restarts, hostname changes
+    (such as dot -> laddu), and desktop stops, while /tmp (SingletonSocket) is ephemeral. A stale
+    lock from another hostname or a recycled PID makes Chromium block on an xmessage dialog.
+    """
+    profile_dir = CHROMIUM_DIR if profile_dir is None else profile_dir
+    lock = profile_dir / "SingletonLock"
+    if not os.path.lexists(lock):
+        return False
+    if chromium_lock_alive(profile_dir, hostname=hostname, proc_root=proc_root):
+        return False
+    removed = False
+    for name in CHROMIUM_LOCKS:
+        path = profile_dir / name
+        if os.path.lexists(path):
+            try:
+                path.unlink()
+                removed = True
+            except OSError:
+                pass
+    return removed
+
+
 def start():
+    clear_stale_chromium_locks()
     if x_running() and ENV_FILE.exists():
         return False
     STATE.mkdir(mode=0o700, exist_ok=True)
@@ -226,6 +278,11 @@ def stop():
     run("pkill", "-u", str(os.getuid()), "-f", "xfce4-session|xfwm4|xfce4-panel|xfdesktop|chromium|Thunar|dbus-daemon|at-spi", check=False)
     run("pkill", "-u", str(os.getuid()), "-x", "Xvnc", check=False)
     ENV_FILE.unlink(missing_ok=True)
+    for _ in range(10):
+        if not chromium_lock_alive():
+            break
+        time.sleep(0.1)
+    clear_stale_chromium_locks()
 
 
 def touch():
