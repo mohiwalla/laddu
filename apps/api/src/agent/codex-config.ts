@@ -16,6 +16,10 @@ cli_auth_credentials_store = "file"
 web_search = "live"
 # Readable reasoning in the session logs, so a turn that stops early can be traced.
 model_reasoning_summary = "concise"
+
+# Remove Codex's default 4-agent cap (root + 3 subagents); Codex requires a positive integer.
+[agents]
+max_concurrent_threads_per_session = 1000
 ${
 	desktop
 		? `
