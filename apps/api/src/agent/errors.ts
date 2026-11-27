@@ -149,8 +149,9 @@ export function classify(error: unknown): Failure {
 }
 
 /**
- * After a usage-limit failure, skip Codex for that person for a while instead of failing every
- * request slowly. Per person: each runs on their own plan.
+ * After a usage-limit failure, skip background and scheduled Codex work for that person for a
+ * while instead of spamming a limited account. Interactive turns always try Codex directly (it
+ * fails fast on a real limit) and clear this pause as soon as a turn succeeds.
  */
 const PAUSE_MS = 10 * 60 * 1000
 const paused = new Map<string, { until: number; message: string }>()
@@ -165,6 +166,11 @@ export function pauseForUsageLimit(
 		until: Date.now() + (failure.retryAfterMs || PAUSE_MS),
 		message: failure.message,
 	})
+}
+
+/** Clears an active usage-limit pause once a Codex turn succeeds again. */
+export function clearUsagePause(person: { teamId: string; userId: string }) {
+	paused.delete(personKey(person))
 }
 
 /** Their usage-limit message while paused, else null. */
