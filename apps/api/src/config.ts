@@ -135,6 +135,13 @@ export function loadBotConfig() {
 		 */
 		isolateNetwork: optional("ISOLATE_NETWORK", "true") === "true",
 		/**
+		 * Slack users whose containers run without Docker CPU, memory or PID caps ("*" for everyone,
+		 * or comma-separated member IDs). Default: none (every container is capped).
+		 */
+		unlimitedContainerUsers: users(
+			optional("UNLIMITED_CONTAINER_USERS", ""),
+		),
+		/**
 		 * Each person's laddu gets a desktop in their container (started when first
 		 * used, stopped when idle) that Codex can drive, and that they can watch or take over.
 		 */
