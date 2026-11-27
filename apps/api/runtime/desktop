@@ -128,9 +128,6 @@ def chromium_lock_alive(profile_dir=None, hostname=None, proc_root=Path("/proc")
     argv0 = cmdline.split(b"\0", 1)[0]
     if b"chrom" not in os.path.basename(argv0).lower():
         return False
-    sock = profile_dir / "SingletonSocket"
-    if os.path.lexists(sock) and not os.path.exists(sock):
-        return False
     return True
 
 

@@ -173,11 +173,11 @@ with tempfile.TemporaryDirectory() as tmp:
     assert clear(p3, hostname="laddu", proc_root=proc) is True
     assert not os.path.lexists(p3 / "SingletonLock")
 
-    # 4. Same hostname, live Chromium PID, but broken /tmp socket
+    # 4. Same hostname, live Chromium PID with unbound socket (mid-startup) stays intact
     make_proc(500, "/usr/lib/chromium/chromium")
-    p4 = make_profile("broken-sock", "laddu-500", sock_exists=False)
-    assert clear(p4, hostname="laddu", proc_root=proc) is True
-    assert not os.path.lexists(p4 / "SingletonLock")
+    p4 = make_profile("starting", "laddu-500", sock_exists=False)
+    assert clear(p4, hostname="laddu", proc_root=proc) is False
+    assert all(os.path.lexists(p4 / f) for f in ("SingletonLock", "SingletonSocket", "SingletonCookie"))
 
     # 5. Live Chromium lock (matching hostname, Chromium PID, existing socket) stays intact
     p5 = make_profile("live", "laddu-500", sock_exists=True)
