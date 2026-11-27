@@ -18,6 +18,7 @@ import { signInClaude } from "../agent/claude"
 import { systemName } from "./system"
 import {
 	classify,
+	clearUsagePause,
 	pauseForUsageLimit,
 	usagePause,
 	type Failure,
@@ -294,13 +295,6 @@ async function handle(
 			}
 			const personal = await configFor(config, user)
 			agentName = personal.agent
-			// Their ChatGPT plan's usage limit only holds up Codex.
-			const paused = personal.agent === "codex" && usagePause(user)
-			if (paused)
-				throw new TurnFailed({
-					...classify(new Error("usage limit")),
-					message: paused,
-				})
 			// Their agent's own conversation; one from another agent (they switched) starts over.
 			let session = await getSession(key).then(found =>
 				found?.agent === personal.agent ? found : undefined,
@@ -349,6 +343,7 @@ async function handle(
 								steering.delete(key)
 						},
 					})
+					if (personal.agent === "codex") clearUsagePause(user)
 					break
 				} catch (error) {
 					if (agent.signal.aborted) throw error
@@ -1122,6 +1117,7 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 					subturnSteps++
 				},
 			})
+			if (personal.agent === "codex") clearUsagePause(user)
 			for (let continuations = 0; ; continuations++) {
 				const nudge = earlyStopContinuation({
 					text: result.text,

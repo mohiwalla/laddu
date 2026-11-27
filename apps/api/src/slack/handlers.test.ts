@@ -8,6 +8,7 @@ import * as context from "./context"
 import * as attachments from "./attachments"
 import * as replies from "./reply"
 import * as learning from "../agent/learning"
+import { classify, pauseForUsageLimit, usagePause } from "../agent/errors"
 import { registerHandlers } from "./handlers"
 
 const botUserId = "U_LADDU"
@@ -863,6 +864,96 @@ test("yields continuation immediately when a newer human message is queued", asy
 		})
 		await done
 		expect(run).toHaveBeenCalledTimes(1)
+	} finally {
+		for (const spy of extraSpies) spy.mockRestore()
+	}
+})
+
+test("interactive Codex turns still run after a usage-limit pause and clear it on success", async () => {
+	serialized.mockImplementation(async (_key, task) => task())
+	const extraSpies: { mockRestore(): void }[] = []
+	let finished!: () => void
+	const done = new Promise<void>(resolve => {
+		finished = resolve
+	})
+	const reply = {
+		ts: "7.001",
+		streaming: true,
+		step: mock(() => {}),
+		todos: mock(() => {}),
+		latestTodos: () => undefined,
+		finish: mock(async () => {}),
+		fail: mock(async () => {}),
+		cancel: mock(async () => {}),
+		discard: mock(async () => {}),
+	}
+	const run = mock(async () => ({
+		threadId: "thread-after-reset",
+		text: "Continuing now.",
+		files: [],
+		skipped: [],
+	}))
+	const person = { teamId: "T_TEAM", userId: "U_RESET" }
+	pauseForUsageLimit(person, classify(new Error("You've hit your usage limit.")))
+	expect(usagePause(person)).not.toBeNull()
+	extraSpies.push(
+		spyOn(agents, "runTurn").mockImplementation(run),
+		spyOn(sessions, "getSession").mockResolvedValue(undefined),
+		spyOn(sessions, "saveSession").mockResolvedValue(undefined),
+		spyOn(inflight, "markDone").mockImplementation(async () => {
+			finished()
+		}),
+		spyOn(replies, "openReply").mockResolvedValue(reply),
+		spyOn(context, "buildTurnInput").mockResolvedValue({
+			text: "continue",
+			transcript: "continue",
+			attachments: [],
+			linked: [],
+			place: "DM",
+		}),
+		spyOn(context, "userTimezone").mockResolvedValue("Asia/Kolkata"),
+		spyOn(attachments, "downloadAttachments").mockResolvedValue([]),
+		spyOn(attachments, "uploadFiles").mockResolvedValue(undefined),
+		spyOn(learning, "afterTurn").mockResolvedValue(undefined),
+	)
+	try {
+		let onMessage!: (args: unknown) => Promise<void>
+		const client = {
+			apiCall: mock(async () => ({ ok: true })),
+			reactions: { add: mock(async () => ({})) },
+		}
+		const app = {
+			event: () => {},
+			message: (handler: typeof onMessage) => {
+				onMessage = handler
+			},
+			action: () => {},
+			command: () => {},
+			shortcut: () => {},
+			view: () => {},
+		} as unknown as App
+		registerHandlers(
+			app,
+			{ allowedUsers: "*", agent: "codex" } as BotConfig,
+			botUserId,
+		)
+		const ts = `1792800000.${String(++sequence).padStart(6, "0")}`
+		await onMessage({
+			message: {
+				channel: "D_RESET",
+				channel_type: "im",
+				user: person.userId,
+				text: "continue",
+				ts,
+			},
+			client,
+			context: { teamId: person.teamId },
+		})
+		await done
+		expect(run).toHaveBeenCalledTimes(1)
+		expect(reply.finish).toHaveBeenCalledWith("Continuing now.")
+		expect(reply.fail).not.toHaveBeenCalled()
+		expect(usagePause(person)).toBeNull()
 	} finally {
 		for (const spy of extraSpies) spy.mockRestore()
 	}
