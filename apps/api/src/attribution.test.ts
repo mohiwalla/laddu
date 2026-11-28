@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { codexFastTier } from "./agent/codex"
 import {
 	clearTurnAttribution,
 	contextFooterBlock,
@@ -150,4 +151,15 @@ test("tracks and clears active turn attribution by turn target", () => {
 	expect(getTurnAttribution({ ...target, scheduled: true })).toBeUndefined()
 	clearTurnAttribution(target)
 	expect(getTurnAttribution(target)).toBeUndefined()
+})
+
+test("codexFastTier recognizes priority and fast service tiers and falls back on null/undefined", () => {
+	expect(codexFastTier("priority", false)).toBe(true)
+	expect(codexFastTier("fast", false)).toBe(true)
+	expect(codexFastTier("standard", true)).toBe(false)
+	expect(codexFastTier("flex", true)).toBe(false)
+	expect(codexFastTier(null, true)).toBe(true)
+	expect(codexFastTier(null, false)).toBe(false)
+	expect(codexFastTier(undefined, true)).toBe(true)
+	expect(codexFastTier(undefined, false)).toBe(false)
 })
