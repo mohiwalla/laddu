@@ -6,6 +6,7 @@
  * Free models may log what they're sent; laddu is experimental, so that's accepted for now.
  */
 import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk"
+import type { Attribution } from "../attribution"
 import { runAcpTurn } from "./acp"
 import {
 	CONTAINER_TOOLS_DIR,
@@ -213,6 +214,22 @@ export async function runOpenCodeTurn(
 	const signal = options.signal
 		? AbortSignal.any([options.signal, limited.signal])
 		: limited.signal
+	const buildAttribution = (resolved: {
+		model?: string
+		modelName?: string
+		effort?: string
+	}): Attribution => {
+		const modelId = resolved.model || config.model || undefined
+		const known = modelId
+			? models.find(entry => entry.id === modelId)
+			: undefined
+		return {
+			agent: "opencode",
+			model: modelId,
+			modelName: known?.name || resolved.modelName,
+			effort: resolved.effort || config.reasoningEffort || undefined,
+		}
+	}
 	const result = await runAcpTurn(
 		{
 			command: [OPENCODE_DOCKER_WRAPPER],
@@ -244,6 +261,8 @@ export async function runOpenCodeTurn(
 			],
 			signal,
 			onItem: track,
+			onModel: resolved =>
+				options.onAttribution?.(buildAttribution(resolved)),
 			onSteerable: steer =>
 				options.onSteerable?.(
 					steer &&
@@ -269,5 +288,6 @@ export async function runOpenCodeTurn(
 			(files.length ? "" : "_(OpenCode finished without a reply.)_"),
 		files,
 		skipped,
+		attribution: buildAttribution(result),
 	}
 }

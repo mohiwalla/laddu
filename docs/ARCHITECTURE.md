@@ -45,7 +45,8 @@ apps/
       config.ts        env + paths
       files.ts         JSON / private-file helpers (atomic writes: temp file, then rename)
       sessions.ts      (Slack thread, user) ↔ agent conversation map, per-key queue
-      preferences.ts   each person's picks from the Home tab (agent, model, effort, speed)
+      preferences.ts   each person's picks from the Home tab (agent, model, effort, speed, model attribution)
+      attribution.ts   harness/model/effort/speed footer labels, active-turn tracking and context blocks
       appearance.ts    the name and picture each person gives laddu (Home tab or `appearance`),
                        on every message it posts for them; pictures served by the gateway
       inflight.ts      turns in progress, so a restart can resume them, and what each already did outside
@@ -136,7 +137,9 @@ Expected later: `packages/integrations-*` (MCP servers) and a dashboard app for 
           edited as it changes and posted again at the bottom once the thread has moved on, with the
           accordion (and then the answer) moved back below it
         • `slack post` sends finished parts to the thread while the turn goes on
-   5. finish the activity record and post the answer (Markdown; split past 12k chars)
+   5. finish the activity record and post the answer (Markdown; split past 12k chars), with a small
+      model attribution footer (e.g. `Codex GPT-6.2 Astra high fast`) unless the person turned it off
+      in Settings
       • no actions: post only the answer, or react without posting
       • clear native working status after the turn
 ```
@@ -393,11 +396,12 @@ Protocol and authentication: [Git smart HTTP](https://git-scm.com/docs/http-prot
   where the code becomes a user token, kept in `.data/slack-users.json` on the host, never in a
   container. It's refused (and revoked) unless the account that allowed it is the one that asked,
   in this workspace. Then `slack dm` opens their own DM with the recipient and posts the text as
-  them. A token Slack stops accepting (revoked, deactivated) is dropped and laddu says to reconnect.
+  them (with a small `Sent by @<bot> — <model>` footer unless model attribution is turned off). A
+  token Slack stops accepting (revoked, deactivated) is dropped and laddu says to reconnect.
   `slack disconnect` revokes it.
 - **From laddu.** Not connected, or `--from-laddu`: laddu's DM with the recipient, headed
-  "<@sender> asked me to send you this:" and signed "Sent by laddu for <@sender>. To answer, message
-  them directly."
+  "<@sender> asked me to send you this:" and signed "Sent by @<bot> for <@sender> — <model>"
+  (or without the model when attribution is off). "To answer, message them directly."
 - **Guardrails.** No bots, deactivated accounts, people outside the workspace or the sender; 20 DMs
   an hour per sender (in memory); every send logged (sender, recipient, how, length). Replies
   aren't relayed. The persona has laddu show a draft first when it worded the message itself, and

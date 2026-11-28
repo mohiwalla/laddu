@@ -13,6 +13,7 @@
  */
 import type { App } from "@slack/bolt"
 import type { ThreadItem } from "@openai/codex-sdk"
+import type { Attribution } from "../attribution"
 import type { BotConfig } from "../config"
 import { sendNotice, systemName, type Where } from "../slack/system"
 import { LostSessionError } from "./acp"
@@ -157,6 +158,7 @@ export function claudeAccount(
 export function forgetClaude(user: TurnUser) {
 	accounts.delete(key(user))
 	models.delete(key(user))
+	resolvedModels.delete(key(user))
 }
 
 /** A sign-in waiting in their container: its link, and where the code they paste goes. */
@@ -337,6 +339,7 @@ export async function signOutClaude(
 
 const MODELS_MS = 6 * 3600_000
 const models = new Map<string, { list: Promise<ModelOption[]>; at: number }>()
+const resolvedModels = new Map<string, ModelOption[]>()
 
 /**
  * The models Claude Code offers them, with each one's effort levels, cached for a few hours.
@@ -366,7 +369,7 @@ export function listClaudeModels(
 				if (event.type !== "control_response") continue
 				const listed = (event.response?.response?.models ??
 					[]) as ClaudeModel[]
-				return listed.map(model => {
+				const parsed = listed.map(model => {
 					const efforts = model.supportsEffort
 						? (model.supportedEffortLevels ?? [])
 						: []
@@ -389,6 +392,8 @@ export function listClaudeModels(
 							: {}),
 					}
 				})
+				resolvedModels.set(key(user), parsed)
+				return parsed
 			}
 			throw new Error("Claude Code didn't list its models")
 		} finally {
@@ -423,7 +428,9 @@ type ClaudeEvent = {
 	parent_tool_use_id?: string | null
 	/** Why an assistant message is an error instead (authentication_failed, rate_limit…). */
 	error?: string
-	message?: { content?: ContentBlock[] | string }
+	/** Model reported on system init events. */
+	model?: string
+	message?: { content?: ContentBlock[] | string; model?: string }
 	// result
 	is_error?: boolean
 	result?: string
@@ -581,10 +588,36 @@ export async function runClaudeTurn(options: TurnOptions): Promise<TurnResult> {
 		let sessionId = options.threadId ?? ""
 		let failure: string | undefined
 		let result: ClaudeEvent | undefined
+		const known = resolvedModels
+			.get(key(user))
+			?.find(
+				entry =>
+					entry.id === (config.model || "default") ||
+					(!config.model && entry.isDefault),
+			)
+		let attribution: Attribution = {
+			agent: "claude",
+			model: config.model || undefined,
+			modelName: known?.name,
+			modelDescription: known?.description,
+			effort: config.reasoningEffort || undefined,
+		}
+		options.onAttribution?.(attribution)
+		const updateModel = (model: string | undefined) => {
+			if (!model || model === attribution.model) return
+			attribution = {
+				agent: "claude",
+				model,
+				effort: config.reasoningEffort || undefined,
+			}
+			options.onAttribution?.(attribution)
+		}
 		for await (const event of events(proc.stdout)) {
 			if (event.session_id) sessionId = event.session_id
 			if (event.parent_tool_use_id) continue
+			if (event.type === "system" && event.model) updateModel(event.model)
 			if (event.type === "assistant") {
+				if (event.message?.model) updateModel(event.message.model)
 				if (event.error) failure = event.error
 				for (const block of blocks(event))
 					if (block.type === "text" && block.text?.trim())
@@ -637,6 +670,7 @@ export async function runClaudeTurn(options: TurnOptions): Promise<TurnResult> {
 					: "_(Claude Code finished without a reply.)_"),
 			files,
 			skipped,
+			attribution,
 		}
 	} finally {
 		finished = true

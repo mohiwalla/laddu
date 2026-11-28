@@ -11,6 +11,10 @@ const { oauthCallback } = await import("../slack/user-tokens")
 const microsoft = await import("../integrations/microsoft")
 const { forgetWords, hearWords } = await import("../slack/approvals")
 const { sessionKey } = await import("../sessions")
+const { setPreferences } = await import("../preferences")
+const { clearTurnAttribution, setTurnAttribution } =
+	await import("../attribution")
+const { setSystemName } = await import("../slack/system")
 if (previousDataDir === undefined) delete Bun.env.DATA_DIR
 else Bun.env.DATA_DIR = previousDataDir
 
@@ -919,3 +923,166 @@ else if (action === "create-pull-request") {
 		account.mockRestore()
 	}
 }, 30_000)
+
+test("messages sent through dot carry Sent-by model attribution unless opted out", async () => {
+	const person = { teamId: caller.teamId, userId: caller.userId }
+	const key = sessionKey(caller.channel, caller.threadTs, caller.userId)
+	setSystemName("dot")
+	setTurnAttribution(caller, {
+		agent: "codex",
+		model: "gpt-6.2-astra",
+		modelName: "6.2 Astra",
+		effort: "high",
+		fast: true,
+	})
+	hearWords(key, "DM <@U00000002> hello")
+	try {
+		// 1. DM as user (user token already connected by earlier test)
+		const dmAsUser = await dm(false, "Hello from turn", true)
+		expect(dmAsUser.status).toBe(200)
+		expect(posts.at(-1)).toMatchObject({
+			token: "test-user-token",
+			text: "Hello from turn",
+			blocks: [
+				{ type: "markdown", text: "Hello from turn" },
+				{
+					type: "context",
+					elements: [
+						{
+							type: "mrkdwn",
+							text: "Sent by @dot — Codex 6.2 Astra high fast",
+						},
+					],
+				},
+			],
+		})
+
+		// 2. DM from laddu (--from-laddu)
+		posts.length = 0
+		const dmFromBot = await fetch(`${api.url}/slack/dm`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"x-laddu-caller": credential,
+			},
+			body: JSON.stringify({
+				to: "U00000002",
+				text: "From dot",
+				fromLaddu: true,
+			}),
+		})
+		expect(dmFromBot.status).toBe(200)
+		expect(posts.at(-1)).toMatchObject({
+			blocks: [
+				{
+					type: "markdown",
+					text: `<@${caller.userId}> asked dot to send you this:\n\nFrom dot`,
+				},
+				{
+					type: "context",
+					elements: [
+						{
+							type: "mrkdwn",
+							text: `Sent by @dot for <@${caller.userId}> — Codex 6.2 Astra high fast · To answer, message them directly.`,
+						},
+					],
+				},
+			],
+		})
+
+		// 3. Channel message via slack send (`chat.postMessage`)
+		slackCalls.length = 0
+		const sent = await fetch(`${api.url}/slack/api`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"x-laddu-caller": credential,
+			},
+			body: JSON.stringify({
+				method: "chat.postMessage",
+				args: { channel: "C00000001", text: "Channel update" },
+				as: "laddu",
+			}),
+		})
+		expect(sent.status).toBe(200)
+		expect(slackCalls.at(-1)).toEqual({
+			method: "chat.postMessage",
+			args: {
+				channel: "C00000001",
+				text: "Channel update",
+				blocks: [
+					{
+						type: "section",
+						text: { type: "mrkdwn", text: "Channel update" },
+					},
+					{
+						type: "context",
+						elements: [
+							{
+								type: "mrkdwn",
+								text: "Sent by @dot — Codex 6.2 Astra high fast",
+							},
+						],
+					},
+				],
+			},
+		})
+
+		// 4. Interim reply via `slack post` uses plain model attribution (not "Sent by @dot")
+		posts.length = 0
+		const interim = await fetch(`${api.url}/slack/post`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"x-laddu-caller": credential,
+			},
+			body: JSON.stringify({ text: "Part 1 done", files: [] }),
+		})
+		expect(interim.status).toBe(200)
+		expect(posts.at(-1)).toMatchObject({
+			text: "Part 1 done",
+			blocks: [
+				{ type: "markdown", text: "Part 1 done" },
+				{
+					type: "context",
+					elements: [
+						{ type: "mrkdwn", text: "Codex 6.2 Astra high fast" },
+					],
+				},
+			],
+		})
+
+		// 5. Opted out: no attribution added
+		await setPreferences(person, { attribution: false })
+		posts.length = 0
+		slackCalls.length = 0
+		expect((await dm(false, "Quiet DM", true)).status).toBe(200)
+		expect(posts.at(-1)).toEqual({
+			token: "test-user-token",
+			channel: "D00000002",
+			markdown_text: "Quiet DM",
+		})
+		const quietSend = await fetch(`${api.url}/slack/api`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"x-laddu-caller": credential,
+			},
+			body: JSON.stringify({
+				method: "chat.postMessage",
+				args: { channel: "C00000001", text: "Quiet channel" },
+				as: "laddu",
+			}),
+		})
+		expect(quietSend.status).toBe(200)
+		expect(slackCalls.at(-1)).toEqual({
+			method: "chat.postMessage",
+			args: { channel: "C00000001", text: "Quiet channel" },
+		})
+	} finally {
+		clearTurnAttribution(caller)
+		forgetWords(key)
+		await setPreferences(person, { attribution: undefined })
+		setSystemName("laddu")
+	}
+})

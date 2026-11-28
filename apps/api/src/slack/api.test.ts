@@ -274,3 +274,72 @@ test("file transfers carry bytes through Slack's external upload protocol", asyn
 		fetcher.mockRestore()
 	}
 })
+
+test("chat.postMessage appends a Sent-by context block when attribution footer is provided", async () => {
+	await callSlack(client, person, {
+		method: "chat.postMessage",
+		args: { channel: "#general", text: "Release is live" },
+		as: "laddu",
+		footer: "Sent by @dot — Codex 6.2 Astra high fast",
+	})
+	expect(apiCall).toHaveBeenCalledWith("chat.postMessage", {
+		channel: "C00000001",
+		text: "Release is live",
+		blocks: [
+			{
+				type: "section",
+				text: { type: "mrkdwn", text: "Release is live" },
+			},
+			{
+				type: "context",
+				elements: [
+					{
+						type: "mrkdwn",
+						text: "Sent by @dot — Codex 6.2 Astra high fast",
+					},
+				],
+			},
+		],
+	})
+})
+
+test("chat.postMessage appends attribution context block to caller-provided blocks and falls back on invalid_blocks", async () => {
+	await callSlack(client, person, {
+		method: "chat.postMessage",
+		args: {
+			channel: "C00000001",
+			text: "Fallback",
+			blocks: [{ type: "divider" }],
+		},
+		as: "laddu",
+		footer: "Sent by @dot — Claude Sonnet 5.5 max",
+	})
+	expect(apiCall).toHaveBeenCalledWith("chat.postMessage", {
+		channel: "C00000001",
+		text: "Fallback",
+		blocks: [
+			{ type: "divider" },
+			{
+				type: "context",
+				elements: [
+					{
+						type: "mrkdwn",
+						text: "Sent by @dot — Claude Sonnet 5.5 max",
+					},
+				],
+			},
+		],
+	})
+	apiCall.mockClear()
+	apiCall.mockRejectedValueOnce({ data: { error: "invalid_blocks" } })
+	await callSlack(client, person, {
+		method: "chat.postMessage",
+		args: { channel: "C00000001", text: "Fallback text" },
+		as: "laddu",
+		footer: "Sent by @dot — Claude Sonnet 5.5 max",
+	})
+	expect(apiCall).toHaveBeenLastCalledWith("chat.postMessage", {
+		channel: "C00000001",
+		text: "Fallback text\n\n_Sent by @dot — Claude Sonnet 5.5 max_",
+	})
+})

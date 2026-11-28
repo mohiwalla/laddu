@@ -73,8 +73,20 @@ export async function runAcpTurn(
 		onSteerable?: (
 			steer: ((prompt: acp.ContentBlock[]) => boolean) | null,
 		) => void
+		/** Called once the session's active model and reasoning level are resolved. */
+		onModel?: (resolved: {
+			model?: string
+			modelName?: string
+			effort?: string
+		}) => void
 	},
-): Promise<{ sessionId: string; text: string }> {
+): Promise<{
+	sessionId: string
+	text: string
+	model?: string
+	modelName?: string
+	effort?: string
+}> {
 	const proc = Bun.spawn(agent.command, {
 		env: agent.env,
 		stdin: "pipe",
@@ -278,6 +290,31 @@ export async function runAcpTurn(
 				))
 		}
 
+		const modelOption = configOptions?.find(
+			option => option.category === "model" && option.type === "select",
+		)
+		const thoughtOption = configOptions?.find(
+			option =>
+				option.category === "thought_level" && option.type === "select",
+		)
+		const activeModel =
+			(modelOption?.type === "select"
+				? modelOption.currentValue
+				: undefined) || agent.model
+		const activeModelName =
+			modelOption && activeModel
+				? selectOptionName(modelOption, activeModel)
+				: undefined
+		const activeEffort =
+			(thoughtOption?.type === "select"
+				? thoughtOption.currentValue
+				: undefined) || agent.effort
+		options.onModel?.({
+			model: activeModel,
+			modelName: activeModelName,
+			effort: activeEffort,
+		})
+
 		options.signal?.throwIfAborted()
 		// Steering: what to send once the running prompt has been cancelled.
 		let queued: acp.ContentBlock[] = []
@@ -317,7 +354,13 @@ export async function runAcpTurn(
 		finished = true
 		options.onSteerable?.(null)
 		messages.finish()
-		return { sessionId: id, text: messages.answer }
+		return {
+			sessionId: id,
+			text: messages.answer,
+			model: activeModel,
+			modelName: activeModelName,
+			effort: activeEffort,
+		}
 	} finally {
 		finished = true
 		options.onSteerable?.(null)
@@ -486,6 +529,19 @@ function selectValues(option: acp.SessionConfigOption): string[] {
 			? (entry.options as { value: string }[]).map(choice => choice.value)
 			: [(entry as { value: string }).value],
 	)
+}
+
+function selectOptionName(
+	option: acp.SessionConfigOption,
+	value: string,
+): string | undefined {
+	if (option.type !== "select") return undefined
+	const choices = (option.options as unknown[]).flatMap(entry =>
+		entry && typeof entry === "object" && "options" in entry
+			? (entry.options as { value: string; name?: string }[])
+			: [entry as { value: string; name?: string }],
+	)
+	return choices.find(choice => choice.value === value)?.name || undefined
 }
 
 const withoutNulls = (update: object) =>

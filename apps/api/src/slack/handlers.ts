@@ -43,9 +43,21 @@ import {
 	type TurnInput,
 } from "./context"
 import { downloadAttachments, uploadFiles } from "./attachments"
-import { closeInterrupted, keepList, openReply, type Reply } from "./reply"
+import {
+	closeInterrupted,
+	keepList,
+	openReply,
+	postMarkdownMessage,
+	type Reply,
+} from "./reply"
 import { AgentSessions } from "./agent-sessions"
-import { configFor } from "../preferences"
+import { attributionEnabled, configFor } from "../preferences"
+import {
+	clearTurnAttribution,
+	formatAttribution,
+	setTurnAttribution,
+	type Attribution,
+} from "../attribution"
 import { nameNote, postAs } from "../appearance"
 import {
 	closeWithMessage,
@@ -250,6 +262,12 @@ async function handle(
 		let started = false
 		let agentName: BotConfig["agent"] | undefined
 		const user = { teamId: trigger.teamId, userId: trigger.userId }
+		const turnTarget = {
+			...user,
+			channel: trigger.channel,
+			threadTs,
+			scheduled: false,
+		}
 		try {
 			const as = await postAs(user)
 			if (!quiet) {
@@ -294,7 +312,19 @@ async function handle(
 				notifyStep(step)
 			}
 			const personal = await configFor(config, user)
+			const showAttribution = await attributionEnabled(user)
 			agentName = personal.agent
+			let currentAttribution: Attribution = {
+				agent: personal.agent,
+				model: personal.model || undefined,
+				effort: personal.reasoningEffort || undefined,
+				fast: personal.fast,
+			}
+			setTurnAttribution(turnTarget, currentAttribution)
+			const onAttribution = (next: Attribution) => {
+				currentAttribution = next
+				setTurnAttribution(turnTarget, next)
+			}
 			// Their agent's own conversation; one from another agent (they switched) starts over.
 			let session = await getSession(key).then(found =>
 				found?.agent === personal.agent ? found : undefined,
@@ -337,6 +367,7 @@ async function handle(
 						},
 						onStep,
 						onTodos: todos => reply!.todos(todos),
+						onAttribution,
 						onSteerable: steer => {
 							if (steer) steering.set(key, { steer, steered })
 							else if (steering.get(key)?.steered === steered)
@@ -412,6 +443,7 @@ async function handle(
 							},
 							onStep,
 							onTodos: todos => reply!.todos(todos),
+							onAttribution,
 							onSteerable: steer => {
 								if (steer) steering.set(key, { steer, steered })
 								else if (steering.get(key)?.steered === steered)
@@ -485,7 +517,14 @@ async function handle(
 					))
 				)
 					await react(client, trigger.channel, trigger.ts, "+1")
-			} else await reply.finish(result.text)
+			} else {
+				const footer = showAttribution
+					? formatAttribution(
+							result.attribution ?? currentAttribution,
+						)
+					: undefined
+				await reply.finish(result.text, footer)
+			}
 			void afterTurn(
 				config,
 				{ teamId: trigger.teamId, userId: trigger.userId },
@@ -591,6 +630,7 @@ async function handle(
 			else await notifyDirectly(client, trigger, message)
 			await react(client, trigger.channel, trigger.ts, "x")
 		} finally {
+			clearTurnAttribution(turnTarget)
 			forgetWords(key)
 			if (agent.signal.aborted) {
 				withdrawQuestions(client, key)
@@ -1055,13 +1095,16 @@ async function postTo(
 	target: { channel: string; threadTs?: string },
 	text: string,
 	person: { teamId: string; userId: string },
+	footer?: string,
 ) {
 	const as = await postAs(person)
-	for (const part of chunkMarkdown(text)) {
-		await client.chat.postMessage({
+	const parts = chunkMarkdown(text)
+	for (let i = 0; i < parts.length; i++) {
+		await postMarkdownMessage(client, {
 			channel: target.channel,
 			...(target.threadTs ? { thread_ts: target.threadTs } : {}),
-			markdown_text: part,
+			text: parts[i]!,
+			footer: i === parts.length - 1 ? footer : undefined,
 			...as,
 		})
 	}
@@ -1091,9 +1134,27 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 			`Do it now. Your reply is posted ${where} as-is${job.post === "dm" ? "" : `; mention <@${job.userId}> if it's a reminder or needs their attention`}. If there's nothing worth posting this time (e.g. nothing changed), reply exactly [SILENT].`,
 		].join("\n")
 		let agentName: BotConfig["agent"] | undefined
+		const turnTarget = {
+			...user,
+			channel: job.channel,
+			threadTs: job.threadTs,
+			scheduled: true,
+		}
 		try {
 			const personal = await configFor(config, user)
+			const showAttribution = await attributionEnabled(user)
 			agentName = personal.agent
+			let currentAttribution: Attribution = {
+				agent: personal.agent,
+				model: personal.model || undefined,
+				effort: personal.reasoningEffort || undefined,
+				fast: personal.fast,
+			}
+			setTurnAttribution(turnTarget, currentAttribution)
+			const onAttribution = (next: Attribution) => {
+				currentAttribution = next
+				setTurnAttribution(turnTarget, next)
+			}
 			const usage = personal.agent === "codex" && usagePause(user)
 			if (usage)
 				throw new TurnFailed({
@@ -1113,6 +1174,7 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 					timezone: job.timezone,
 					scheduled: true,
 				},
+				onAttribution,
 				onStep: () => {
 					subturnSteps++
 				},
@@ -1144,6 +1206,7 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 						timezone: job.timezone,
 						scheduled: true,
 					},
+					onAttribution,
 					onStep: () => {
 						subturnSteps++
 					},
@@ -1160,7 +1223,16 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 				`[scheduler] ${job.id} "${job.name}" ran${silent ? " (silent)" : ""}`,
 			)
 			if (silent) return "done"
-			await postTo(client, target, `${label}\n\n${result.text}`, user)
+			const footer = showAttribution
+				? formatAttribution(result.attribution ?? currentAttribution)
+				: undefined
+			await postTo(
+				client,
+				target,
+				`${label}\n\n${result.text}`,
+				user,
+				footer,
+			)
 			await uploadFiles(
 				client,
 				target.channel,
@@ -1194,6 +1266,8 @@ export function scheduledRunner(client: WebClient, config: BotConfig) {
 					user,
 				).catch(() => {})
 			return "failed"
+		} finally {
+			clearTurnAttribution(turnTarget)
 		}
 	}
 

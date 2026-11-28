@@ -10,6 +10,7 @@
  * nothing. Or they bring a Gemini API key (`GEMINI_API_KEY` in `connections`).
  */
 import type { App } from "@slack/bolt"
+import type { Attribution } from "../attribution"
 import type { BotConfig } from "../config"
 import { sendNotice, systemName, type Where } from "../slack/system"
 import {
@@ -77,6 +78,7 @@ const accounts = new Map<
 
 const MODELS_MS = 6 * 3600_000
 const models = new Map<string, { list: Promise<ModelOption[]>; at: number }>()
+const resolvedModels = new Map<string, ModelOption[]>()
 
 /** Checks quickly inside the container whether an OAuth token or GEMINI_API_KEY is stored. */
 async function storedCredentials(container: string): Promise<{
@@ -122,11 +124,13 @@ export function agyAccount(
 					stop: () => stopRun(container, turnId),
 				})
 				const parsed = parseAgyModels(session)
-				if (parsed.length)
+				if (parsed.length) {
+					resolvedModels.set(key(user), parsed)
 					models.set(key(user), {
 						list: Promise.resolve(parsed),
 						at: Date.now(),
 					})
+				}
 				return { method: "plan", email: stored.email }
 			} catch (error) {
 				if (!(error instanceof AuthRequiredError)) throw error
@@ -144,6 +148,7 @@ export function agyAccount(
 export function forgetAgy(user: TurnUser) {
 	accounts.delete(key(user))
 	models.delete(key(user))
+	resolvedModels.delete(key(user))
 }
 
 /** A sign-in waiting in their container: its link, and where the code they paste goes. */
@@ -532,7 +537,9 @@ export function listAgyModels(
 			authMethod: account.method === "key" ? "gemini-api-key" : undefined,
 			stop: () => stopRun(container, turnId),
 		})
-		return parseAgyModels(session)
+		const parsed = parseAgyModels(session)
+		resolvedModels.set(key(user), parsed)
+		return parsed
 	})().catch(error => {
 		console.warn("[agy] couldn't list models:", error)
 		if (models.get(key(user)) === entry) models.delete(key(user))
@@ -613,6 +620,23 @@ export async function runAgyTurn(options: TurnOptions): Promise<TurnResult> {
 			]
 		: []
 
+	const buildAttribution = (resolved: {
+		model?: string
+		modelName?: string
+		effort?: string
+	}): Attribution => {
+		const modelId = resolved.model || config.model || undefined
+		const known = modelId
+			? resolvedModels.get(key(user))?.find(entry => entry.id === modelId)
+			: undefined
+		return {
+			agent: "agy",
+			model: modelId,
+			modelName: resolved.modelName || known?.name,
+			effort: resolved.effort || config.reasoningEffort || undefined,
+		}
+	}
+
 	const result = await runAcpTurn(
 		{
 			command: [AGY_DOCKER_WRAPPER, ...ACP_ARGS],
@@ -644,6 +668,8 @@ export async function runAgyTurn(options: TurnOptions): Promise<TurnResult> {
 			],
 			signal: options.signal,
 			onItem: track,
+			onModel: resolved =>
+				options.onAttribution?.(buildAttribution(resolved)),
 			onSteerable: steer =>
 				options.onSteerable?.(
 					steer &&
@@ -682,5 +708,6 @@ export async function runAgyTurn(options: TurnOptions): Promise<TurnResult> {
 			(files.length ? "" : "_(Antigravity finished without a reply.)_"),
 		files,
 		skipped,
+		attribution: buildAttribution(result),
 	}
 }

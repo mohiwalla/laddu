@@ -1,6 +1,7 @@
 /** Slack Free tools. Tokens stay on the host; the caller cannot select another person's identity. */
 import type { App } from "@slack/bolt"
 import { postAs } from "../appearance"
+import { contextFooterBlock, escapeMrkdwn } from "../attribution"
 import { connection, forget } from "./user-tokens"
 
 export type SlackClient = App["client"]
@@ -429,10 +430,13 @@ export function identityFor(
 	return connected || spec.identity === "user" ? "user" : "laddu"
 }
 
+/** Methods that carry attribution when messages are sent through laddu. */
+const ATTRIBUTED_POSTS = new Set(["chat.postMessage", "chat.scheduleMessage"])
+
 export async function callSlack(
 	client: SlackClient,
 	person: Person,
-	input: { method: string; args?: unknown; as?: string },
+	input: { method: string; args?: unknown; as?: string; footer?: string },
 ) {
 	const spec = methods[input.method]
 	if (!Object.hasOwn(methods, input.method) || !spec)
@@ -489,6 +493,41 @@ export async function callSlack(
 		// As laddu, its posts wear the name and picture this person gave it (appearance.ts).
 		if (!token && POSTS.has(input.method))
 			Object.assign(options, await postAs(person))
+		let synthesizedBlocks = false
+		if (input.footer && ATTRIBUTED_POSTS.has(input.method)) {
+			const footerBlock = contextFooterBlock(input.footer)
+			if (Array.isArray(options.blocks)) {
+				if (options.blocks.length < 50)
+					options.blocks = [...options.blocks, footerBlock]
+			} else if (typeof options.blocks === "string") {
+				try {
+					const parsed: unknown = JSON.parse(options.blocks)
+					if (Array.isArray(parsed) && parsed.length < 50)
+						options.blocks = [...parsed, footerBlock]
+				} catch {
+					/* Leave malformed caller blocks untouched for Slack to validate. */
+				}
+			} else if (typeof options.text === "string" && options.text) {
+				if (options.text.length <= 3_000) {
+					options.blocks = [
+						{
+							type: "section",
+							text: { type: "mrkdwn", text: options.text },
+						},
+						footerBlock,
+					]
+					synthesizedBlocks = true
+				} else if (options.text.length <= 12_000) {
+					options.blocks = [
+						{ type: "markdown", text: options.text },
+						footerBlock,
+					]
+					synthesizedBlocks = true
+				} else {
+					options.text = `${options.text}\n\n_${escapeMrkdwn(input.footer)}_`
+				}
+			}
+		}
 		if (input.method === "users.profile.get" && !options.user)
 			options.user = person.userId
 		// Bot tokens cannot read channel threads with conversations.replies; use the person's token.
@@ -497,12 +536,34 @@ export async function callSlack(
 				"Reading arbitrary threads requires slack connect and --as user.",
 				409,
 			)
-		const result = (await client.apiCall(input.method, {
-			...options,
-			...(token ? { token } : {}),
-		})) as Awaited<ReturnType<SlackClient["apiCall"]>> &
+		let result: Awaited<ReturnType<SlackClient["apiCall"]>> &
 			Record<string, unknown>
-		if (!result.ok) throw { data: result }
+		try {
+			result = (await client.apiCall(input.method, {
+				...options,
+				...(token ? { token } : {}),
+			})) as Awaited<ReturnType<SlackClient["apiCall"]>> &
+				Record<string, unknown>
+			if (!result.ok) throw { data: result }
+		} catch (error) {
+			const code = (error as { data?: { error?: string } }).data?.error
+			if (
+				synthesizedBlocks &&
+				input.footer &&
+				typeof args.text === "string" &&
+				(code === "invalid_blocks" || code === "msg_too_long")
+			) {
+				const fallback = { ...options }
+				delete fallback.blocks
+				fallback.text = `${args.text}\n\n_${escapeMrkdwn(input.footer)}_`
+				result = (await client.apiCall(input.method, {
+					...fallback,
+					...(token ? { token } : {}),
+				})) as Awaited<ReturnType<SlackClient["apiCall"]>> &
+					Record<string, unknown>
+				if (!result.ok) throw { data: result }
+			} else throw error
+		}
 		if (
 			!token &&
 			input.method === "conversations.list" &&

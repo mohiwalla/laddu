@@ -1,5 +1,8 @@
-import { expect, test } from "bun:test"
-import { agyConnectView, claudeConnectView } from "./home"
+import { expect, spyOn, test } from "bun:test"
+import { AGENTS } from "../agent/agents"
+import type { BotConfig } from "../config"
+import { setPreferences } from "../preferences"
+import { agentSection, agyConnectView, claudeConnectView } from "./home"
 
 test("Connect Claude and Antigravity modals separate steps with clear hierarchy and no intro blurb", () => {
 	const cases = [
@@ -82,4 +85,63 @@ test("Connect modals show only loading context while waiting for a link, and pre
 		type: "section",
 		text: { text: ":warning:  That code didn't work." },
 	})
+})
+
+test("Agent settings include Model attribution toggle enabled by default and honoring opt-out", async () => {
+	const person = { teamId: "T_HOME_ATTR", userId: "U_HOME_ATTR" }
+	const listSpy = spyOn(AGENTS.codex, "listModels").mockResolvedValue([
+		{
+			id: "gpt-6.2-sol",
+			name: "GPT-6.2 Sol",
+			description: "Default model",
+			efforts: [{ id: "high", description: "" }],
+			defaultEffort: "high",
+			fast: true,
+			images: true,
+			isDefault: true,
+		},
+	])
+	const config = {
+		agent: "codex",
+		model: "",
+		claudeModel: "",
+		agyModel: "",
+		opencodeModel: "",
+		reasoningEffort: "high",
+		claudeEffort: "",
+		agyEffort: "",
+		opencodeEffort: "",
+		fast: false,
+	} as unknown as BotConfig
+	try {
+		const initial = await agentSection(config, person)
+		const findToggle = (blocks: typeof initial) =>
+			blocks.find(
+				block =>
+					block.type === "section" &&
+					"accessory" in block &&
+					block.accessory &&
+					"action_id" in block.accessory &&
+					block.accessory.action_id === "home_attribution",
+			) as
+				| {
+						accessory?: {
+							initial_option?: {
+								value?: string
+								text?: { text?: string }
+							}
+						}
+				  }
+				| undefined
+		expect(findToggle(initial)?.accessory?.initial_option?.value).toBe("on")
+
+		await setPreferences(person, { attribution: false })
+		const disabled = await agentSection(config, person)
+		expect(findToggle(disabled)?.accessory?.initial_option?.value).toBe(
+			"off",
+		)
+	} finally {
+		await setPreferences(person, { attribution: undefined })
+		listSpy.mockRestore()
+	}
 })

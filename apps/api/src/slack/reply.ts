@@ -6,6 +6,11 @@
  * goes, with the steps (and the answer) moved below it whenever it's posted anew.
  */
 import type { App } from "@slack/bolt"
+import {
+	contextFooterBlock,
+	escapeMrkdwn,
+	rawContextFooterBlock,
+} from "../attribution"
 import type { Step, Todos } from "../agent/steps"
 
 type WebClient = App["client"]
@@ -50,7 +55,7 @@ export type Reply = {
 	/** Latest to-do list shown for this reply (from `slack todo` or agent plan), if any. */
 	latestTodos?: () => Todos | undefined
 	/** Posts the answer; an empty answer (files only) just closes the progress. */
-	finish(text: string): Promise<void>
+	finish(text: string, footer?: string): Promise<void>
 	fail(message: string): Promise<void>
 	/** Confirms native Stop, including when Slack already stopped the stream. */
 	cancel(): Promise<void>
@@ -149,6 +154,48 @@ export function showTodos(
 	return !!show
 }
 
+/**
+ * Posts a Markdown message, appending a small muted Slack context block when a footer is given.
+ * Falls back to `markdown_text` if Slack rejects the markdown/context block payload.
+ */
+export async function postMarkdownMessage(
+	client: WebClient,
+	args: {
+		channel: string
+		thread_ts?: string
+		text: string
+		footer?: string
+		/** Footer already formatted as Slack mrkdwn (e.g. containing `<@U123>` mentions). */
+		rawFooter?: string
+		token?: string
+		username?: string
+		icon_url?: string
+	},
+) {
+	const { text, footer, rawFooter, ...base } = args
+	const block = rawFooter
+		? rawContextFooterBlock(rawFooter)
+		: footer
+			? contextFooterBlock(footer)
+			: null
+	if (!block) return client.chat.postMessage({ ...base, markdown_text: text })
+	try {
+		return await client.chat.postMessage({
+			...base,
+			text,
+			blocks: [{ type: "markdown", text }, block],
+		})
+	} catch (error) {
+		const code = (error as { data?: { error?: string } })?.data?.error
+		if (code !== "invalid_blocks" && code !== "msg_too_long") throw error
+		const note = rawFooter ?? escapeMrkdwn(footer!)
+		return client.chat.postMessage({
+			...base,
+			markdown_text: `${text}\n\n_${note}_`,
+		})
+	}
+}
+
 export async function openReply(
 	client: WebClient,
 	target: ReplyTarget,
@@ -180,18 +227,18 @@ export async function openReply(
 		await remember({ ts: reply.ts, streaming: reply.streaming })
 		return reply
 	}
-	const postText = async (text: string) => {
-		let first = true
-		for (const part of text ? chunkMarkdown(text) : []) {
-			const message = await post(client, {
+	const postText = async (text: string, footer?: string) => {
+		const parts = text ? chunkMarkdown(text) : []
+		for (let i = 0; i < parts.length; i++) {
+			const message = await postMarkdown(client, {
 				channel: target.channel,
 				thread_ts: target.threadTs,
-				markdown_text: part,
+				text: parts[i]!,
+				footer: i === parts.length - 1 ? footer : undefined,
 				...target.as,
 			})
-			if (first && message.ts)
+			if (i === 0 && message.ts)
 				await remember({ ts: message.ts, streaming: false })
-			first = false
 		}
 	}
 	const settle = async () => {
@@ -250,10 +297,10 @@ export async function openReply(
 				console.warn("[reply] progress unavailable:", error),
 			)
 		},
-		async finish(text) {
+		async finish(text, footer) {
 			const reply = await settle()
-			if (reply) await reply.finish(text)
-			else await postText(text)
+			if (reply) await reply.finish(text, footer)
+			else await postText(text, footer)
 		},
 		async fail(message) {
 			const reply = await settle()
@@ -331,6 +378,10 @@ const post = async (
 	client: WebClient,
 	args: Parameters<WebClient["chat"]["postMessage"]>[0],
 ) => tracked(args.channel, await client.chat.postMessage(args))
+const postMarkdown = async (
+	client: WebClient,
+	args: Parameters<typeof postMarkdownMessage>[1],
+) => tracked(args.channel, await postMarkdownMessage(client, args))
 const stream = async (
 	client: WebClient,
 	args: Parameters<WebClient["chat"]["startStream"]>[0],
@@ -629,7 +680,7 @@ async function openStream(
 		step(step) {
 			update(step)
 		},
-		async finish(text) {
+		async finish(text, footer) {
 			const tasks = await settle("complete")
 			const rest = text ? chunkMarkdown(text) : []
 			// Parts it posted on its own (`slack post`) came after this message: the answer goes
@@ -643,6 +694,10 @@ async function openStream(
 					title: `Done · ${total()} step${total() === 1 ? "" : "s"} · ${elapsed()}`,
 				},
 			]
+			const inlineFooter =
+				footer && rest.length === 0 && (inline || !text)
+					? [contextFooterBlock(footer)]
+					: undefined
 			try {
 				await client.chat.stopStream({
 					channel,
@@ -650,6 +705,7 @@ async function openStream(
 					chunks: inline
 						? [...done, { type: "markdown_text", text: inline }]
 						: done,
+					...(inlineFooter ? { blocks: inlineFooter } : {}),
 				})
 			} catch (error) {
 				// Some Markdown (e.g. tables) may not stream: close the progress, post the answer on its own.
@@ -662,11 +718,12 @@ async function openStream(
 					.catch(() => {})
 				if (inline) rest.unshift(inline)
 			}
-			for (const part of rest)
-				await post(client, {
+			for (let i = 0; i < rest.length; i++)
+				await postMarkdown(client, {
 					channel,
 					thread_ts: target.threadTs,
-					markdown_text: part,
+					text: rest[i]!,
+					footer: i === rest.length - 1 ? footer : undefined,
 					...target.as,
 				})
 		},
@@ -780,31 +837,51 @@ async function openPlaceholder(
 				Math.max(0, lastSent + PLACEHOLDER_INTERVAL_MS - Date.now()),
 			)
 		},
-		async finish(text) {
+		async finish(text, footer) {
 			await close()
 			if (!text) {
 				await client.chat.delete({ channel, ts }).catch(() => {})
 				return
 			}
 			const [first, ...rest] = chunkMarkdown(text)
-			await client.chat
-				.update({ channel, ts, markdown_text: first! })
-				.catch(async error => {
-					// Slack won't edit a message into different block types (e.g. a Markdown table): post it fresh.
-					if (error?.data?.error !== "block_mismatch") throw error
-					await post(client, {
-						channel,
-						thread_ts: threadTs,
-						markdown_text: first!,
-						...target.as,
-					})
-					await client.chat.delete({ channel, ts }).catch(() => {})
-				})
-			for (const part of rest)
-				await post(client, {
+			const firstFooter = rest.length === 0 ? footer : undefined
+			await (
+				firstFooter
+					? client.chat.update({
+							channel,
+							ts,
+							text: first!,
+							blocks: [
+								{ type: "markdown", text: first! },
+								contextFooterBlock(firstFooter),
+							],
+						})
+					: client.chat.update({
+							channel,
+							ts,
+							markdown_text: first!,
+						})
+			).catch(async error => {
+				// Slack won't edit a message into different block types (e.g. a Markdown table or context block): post it fresh.
+				const code = (error as { data?: { error?: string } })?.data
+					?.error
+				if (code !== "block_mismatch" && code !== "invalid_blocks")
+					throw error
+				await postMarkdown(client, {
 					channel,
 					thread_ts: threadTs,
-					markdown_text: part,
+					text: first!,
+					footer: firstFooter,
+					...target.as,
+				})
+				await client.chat.delete({ channel, ts }).catch(() => {})
+			})
+			for (let i = 0; i < rest.length; i++)
+				await postMarkdown(client, {
+					channel,
+					thread_ts: threadTs,
+					text: rest[i]!,
+					footer: i === rest.length - 1 ? footer : undefined,
 					...target.as,
 				})
 		},
