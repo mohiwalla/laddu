@@ -14,6 +14,8 @@ export type Preferences = {
 	model?: string
 	effort?: string
 	fast?: boolean
+	/** Show which harness/model answered at the end of replies and sent messages (default: true). */
+	attribution?: boolean
 }
 type Person = { teamId: string; userId: string }
 
@@ -47,11 +49,17 @@ export async function setPreferences(
 export const agentFor = (config: BotConfig, picked: Preferences): AgentId =>
 	picked.agent ?? config.agent
 
+/** Whether model attribution is shown for this person (enabled by default). */
+export async function attributionEnabled(person: Person): Promise<boolean> {
+	return (await preferences(person)).attribution !== false
+}
+
 export type Effective = {
 	agent: AgentId
 	model: string
 	effort: string
 	fast: boolean
+	attribution: boolean
 	/** The model's catalog entry (absent if the agent didn't list it). */
 	option?: ModelOption
 }
@@ -97,7 +105,15 @@ export function effective(
 	const fast =
 		(picked.fast ?? config.fast) &&
 		(option ? option.fast : agent === "codex")
-	return { agent, model, effort, fast, ...(option ? { option } : {}) }
+	const attribution = picked.attribution ?? true
+	return {
+		agent,
+		model,
+		effort,
+		fast,
+		attribution,
+		...(option ? { option } : {}),
+	}
 }
 
 /** The bot's config with this person's settings applied, for their turns. */
@@ -107,7 +123,12 @@ export async function configFor(
 ): Promise<BotConfig> {
 	const picked = await preferences(person)
 	const agent = agentFor(config, picked)
-	if (!Object.keys(picked).length && agent === "codex") return config
+	const hasModelPicks =
+		picked.agent !== undefined ||
+		picked.model !== undefined ||
+		picked.effort !== undefined ||
+		picked.fast !== undefined
+	if (!hasModelPicks && agent === "codex") return config
 	const chosen = effective(
 		config,
 		agent,

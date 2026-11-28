@@ -3,6 +3,7 @@ import type { App } from "@slack/bolt"
 import { openReply, showTodos } from "./reply"
 
 type StreamArgs = Parameters<App["client"]["chat"]["appendStream"]>[0]
+type StopArgs = Parameters<App["client"]["chat"]["stopStream"]>[0]
 type StartArgs = Parameters<App["client"]["chat"]["startStream"]>[0]
 const target = {
 	channel: "C_ONE",
@@ -17,7 +18,7 @@ function streamingClient() {
 		ts: "2.001",
 	}))
 	const appendStream = mock(async (_args: StreamArgs) => ({ ok: true }))
-	const stopStream = mock(async (_args: StreamArgs) => ({ ok: true }))
+	const stopStream = mock(async (_args: StopArgs) => ({ ok: true }))
 	const postMessage = mock(
 		async (_args: Parameters<App["client"]["chat"]["postMessage"]>[0]) => ({
 			ok: true,
@@ -580,4 +581,128 @@ test("a later turn in the thread picks up its to-do list instead of adding anoth
 	await third.finish("")
 	expect(postMessage).toHaveBeenCalledTimes(2)
 	expect(remove).toHaveBeenCalledWith({ channel: "C_ONE", ts: "3.001" })
+})
+
+test("direct answer with attribution footer uses markdown + context blocks", async () => {
+	const { client, postMessage } = streamingClient()
+	const reply = await openReply(client, target)
+	await reply.finish("Here is your answer.", "Codex 6.2 Astra high fast")
+	expect(postMessage).toHaveBeenCalledTimes(1)
+	expect(postMessage).toHaveBeenCalledWith({
+		channel: target.channel,
+		thread_ts: target.threadTs,
+		text: "Here is your answer.",
+		blocks: [
+			{ type: "markdown", text: "Here is your answer." },
+			{
+				type: "context",
+				elements: [
+					{ type: "mrkdwn", text: "Codex 6.2 Astra high fast" },
+				],
+			},
+		],
+	})
+})
+
+test("streamed answer attaches attribution context block to stopStream", async () => {
+	const { client, stopStream, postMessage } = streamingClient()
+	const reply = await openReply(client, target)
+	reply.step({ id: "s1", title: "Reading", status: "complete" })
+	await reply.finish("Done.", "Claude Sonnet 5.5 max")
+	expect(postMessage).not.toHaveBeenCalled()
+	expect(stopStream).toHaveBeenCalledWith(
+		expect.objectContaining({
+			blocks: [
+				{
+					type: "context",
+					elements: [
+						{ type: "mrkdwn", text: "Claude Sonnet 5.5 max" },
+					],
+				},
+			],
+		}),
+	)
+})
+
+test("buried streamed answer puts attribution only on the final posted message", async () => {
+	const { client, stopStream, postMessage } = streamingClient()
+	;(client as unknown as { conversations: unknown }).conversations = {
+		replies: mock(async () => ({
+			messages: [{ ts: target.threadTs }, { ts: "9.001", bot_id: "B1" }],
+		})),
+	}
+	const reply = await openReply(client, target)
+	reply.step({ id: "s1", title: "Posting part 1", status: "complete" })
+	await reply.finish("Final wrap-up.", "Codex GPT-6.2 Sol high fast")
+	expect(stopStream.mock.calls[0]![0].blocks).toBeUndefined()
+	expect(postMessage).toHaveBeenCalledWith({
+		channel: target.channel,
+		thread_ts: target.threadTs,
+		text: "Final wrap-up.",
+		blocks: [
+			{ type: "markdown", text: "Final wrap-up." },
+			{
+				type: "context",
+				elements: [
+					{ type: "mrkdwn", text: "Codex GPT-6.2 Sol high fast" },
+				],
+			},
+		],
+	})
+})
+
+test("invalid_blocks falls back cleanly to markdown_text with italic attribution", async () => {
+	const { client, postMessage } = streamingClient()
+	postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } })
+	const reply = await openReply(client, target)
+	await reply.finish("Table answer", "Codex 6.2 Astra high fast")
+	expect(postMessage).toHaveBeenCalledTimes(2)
+	expect(postMessage).toHaveBeenLastCalledWith({
+		channel: target.channel,
+		thread_ts: target.threadTs,
+		markdown_text: "Table answer\n\n_Codex 6.2 Astra high fast_",
+	})
+})
+
+test("placeholder fallback clips fallback text and falls back to fresh post on msg_too_long", async () => {
+	const { client, startStream, postMessage, update, remove } =
+		streamingClient()
+	startStream.mockRejectedValue({ data: { error: "feature_disabled" } })
+	update.mockRejectedValueOnce({ data: { error: "msg_too_long" } })
+	const longAnswer = "a".repeat(5_000)
+	const reply = await openReply(client, target)
+	reply.step({ id: "s1", title: "Working", status: "in_progress" })
+	await reply.finish(longAnswer, "Codex 6.2 Astra high fast")
+	expect(update).toHaveBeenCalledWith(
+		expect.objectContaining({
+			text: expect.stringMatching(/^a{3499}…$/),
+			blocks: [
+				{ type: "markdown", text: longAnswer },
+				{
+					type: "context",
+					elements: [
+						{ type: "mrkdwn", text: "Codex 6.2 Astra high fast" },
+					],
+				},
+			],
+		}),
+	)
+	expect(postMessage).toHaveBeenLastCalledWith({
+		channel: target.channel,
+		thread_ts: target.threadTs,
+		text: expect.stringMatching(/^a{3499}…$/),
+		blocks: [
+			{ type: "markdown", text: longAnswer },
+			{
+				type: "context",
+				elements: [
+					{ type: "mrkdwn", text: "Codex 6.2 Astra high fast" },
+				],
+			},
+		],
+	})
+	expect(remove).toHaveBeenCalledWith({
+		channel: target.channel,
+		ts: "3.001",
+	})
 })

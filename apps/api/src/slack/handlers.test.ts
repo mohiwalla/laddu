@@ -9,7 +9,8 @@ import * as attachments from "./attachments"
 import * as replies from "./reply"
 import * as learning from "../agent/learning"
 import { classify, pauseForUsageLimit, usagePause } from "../agent/errors"
-import { registerHandlers } from "./handlers"
+import { setPreferences } from "../preferences"
+import { registerHandlers, scheduledRunner } from "./handlers"
 
 const botUserId = "U_LADDU"
 const userId = "U_PERSON"
@@ -133,7 +134,7 @@ test.each(["success", "failure", "stop"] as const)(
 			streaming: true,
 			step: mock(() => {}),
 			todos: mock(() => {}),
-			finish: mock(async () => {}),
+			finish: mock(async (_text: string, _footer?: string) => {}),
 			fail: mock(async () => {}),
 			cancel: mock(async () => {}),
 			discard: mock(async () => {}),
@@ -546,6 +547,7 @@ test("auto-continues when an agent ends early with incomplete work or unfinished
 		expect(run).toHaveBeenCalledTimes(2)
 		expect(reply.finish).toHaveBeenCalledWith(
 			"Attached Final.xlsx with all leads researched.",
+			"Codex",
 		)
 		expect(uploaded).toHaveBeenCalledWith(
 			client,
@@ -894,7 +896,10 @@ test("interactive Codex turns still run after a usage-limit pause and clear it o
 		skipped: [],
 	}))
 	const person = { teamId: "T_TEAM", userId: "U_RESET" }
-	pauseForUsageLimit(person, classify(new Error("You've hit your usage limit.")))
+	pauseForUsageLimit(
+		person,
+		classify(new Error("You've hit your usage limit.")),
+	)
 	expect(usagePause(person)).not.toBeNull()
 	extraSpies.push(
 		spyOn(agents, "runTurn").mockImplementation(run),
@@ -951,10 +956,185 @@ test("interactive Codex turns still run after a usage-limit pause and clear it o
 		})
 		await done
 		expect(run).toHaveBeenCalledTimes(1)
-		expect(reply.finish).toHaveBeenCalledWith("Continuing now.")
+		expect(reply.finish).toHaveBeenCalledWith("Continuing now.", "Codex")
 		expect(reply.fail).not.toHaveBeenCalled()
 		expect(usagePause(person)).toBeNull()
 	} finally {
 		for (const spy of extraSpies) spy.mockRestore()
+	}
+})
+
+test("model attribution is enabled by default and omitted when opted out", async () => {
+	serialized.mockImplementation(async (_key, task) => task())
+	const person = { teamId: "T_ATTR", userId: "U_ATTR" }
+	const runWith = async (optOut: boolean) => {
+		await setPreferences(person, {
+			attribution: optOut ? false : undefined,
+		})
+		const extraSpies: { mockRestore(): void }[] = []
+		let finished!: () => void
+		const done = new Promise<void>(resolve => {
+			finished = resolve
+		})
+		const reply = {
+			ts: "8.001",
+			streaming: false,
+			step: mock(() => {}),
+			todos: mock(() => {}),
+			latestTodos: () => undefined,
+			finish: mock(async (_text: string, _footer?: string) => {}),
+			fail: mock(async () => {}),
+			cancel: mock(async () => {}),
+			discard: mock(async () => {}),
+		}
+		extraSpies.push(
+			spyOn(agents, "runTurn").mockResolvedValue({
+				threadId: "t-attr",
+				text: "Answer",
+				files: [],
+				skipped: [],
+				attribution: {
+					agent: "claude",
+					model: "claude-sonnet-5-5-20260929",
+					effort: "max",
+				},
+			}),
+			spyOn(sessions, "getSession").mockResolvedValue(undefined),
+			spyOn(sessions, "saveSession").mockResolvedValue(undefined),
+			spyOn(inflight, "markDone").mockImplementation(async () => {
+				finished()
+			}),
+			spyOn(replies, "openReply").mockResolvedValue(reply),
+			spyOn(context, "buildTurnInput").mockResolvedValue({
+				text: "hi",
+				transcript: "hi",
+				attachments: [],
+				linked: [],
+				place: "DM",
+			}),
+			spyOn(context, "userTimezone").mockResolvedValue("UTC"),
+			spyOn(attachments, "downloadAttachments").mockResolvedValue([]),
+			spyOn(attachments, "uploadFiles").mockResolvedValue(undefined),
+			spyOn(learning, "afterTurn").mockResolvedValue(undefined),
+		)
+		try {
+			let onMessage!: (args: unknown) => Promise<void>
+			const client = {
+				apiCall: mock(async () => ({ ok: true })),
+				reactions: { add: mock(async () => ({})) },
+			}
+			const app = {
+				event: () => {},
+				message: (handler: typeof onMessage) => {
+					onMessage = handler
+				},
+				action: () => {},
+				command: () => {},
+				shortcut: () => {},
+				view: () => {},
+			} as unknown as App
+			registerHandlers(
+				app,
+				{ allowedUsers: "*", agent: "codex" } as BotConfig,
+				botUserId,
+			)
+			const ts = `1792900000.${String(++sequence).padStart(6, "0")}`
+			await onMessage({
+				message: {
+					channel: "D_ATTR",
+					channel_type: "im",
+					user: person.userId,
+					text: "hi",
+					ts,
+				},
+				client,
+				context: { teamId: person.teamId },
+			})
+			await done
+			return reply.finish.mock.calls[0]
+		} finally {
+			for (const spy of extraSpies) spy.mockRestore()
+		}
+	}
+	try {
+		expect(await runWith(false)).toEqual([
+			"Answer",
+			"Claude Sonnet 5.5 max",
+		])
+		expect(await runWith(true)).toEqual(["Answer", undefined])
+	} finally {
+		await setPreferences(person, { attribution: undefined })
+	}
+})
+
+test("scheduled tasks include attribution by default and omit it when opted out", async () => {
+	const person = { teamId: "T_SCHED_ATTR", userId: "U_SCHED_ATTR" }
+	const postMessage = mock(async (_args: unknown) => ({ ok: true }))
+	const client = {
+		chat: { postMessage },
+		users: { info: async () => ({ user: { real_name: "Tester" } }) },
+	} as unknown as App["client"]
+	const runSpy = spyOn(agents, "runTurn").mockResolvedValue({
+		threadId: "sched-1",
+		text: "Weekly summary.",
+		files: [],
+		skipped: [],
+		attribution: {
+			agent: "codex",
+			model: "gpt-6.2-astra",
+			effort: "high",
+			fast: true,
+		},
+	})
+	const uploadSpy = spyOn(attachments, "uploadFiles").mockResolvedValue(
+		undefined,
+	)
+	const learnSpy = spyOn(learning, "afterTurn").mockResolvedValue(undefined)
+	const job = {
+		id: "job-1",
+		...person,
+		name: "Weekly",
+		task: "Summarize",
+		at: new Date().toISOString(),
+		timezone: "UTC",
+		post: "channel" as const,
+		channel: "C_SCHED",
+		threadTs: "1.001",
+		createdAt: "2026-11-28T00:00:00Z",
+	}
+	try {
+		const runner = scheduledRunner(client, { agent: "codex" } as BotConfig)
+		await runner.run(job)
+		expect(postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				channel: "C_SCHED",
+				blocks: [
+					expect.objectContaining({ type: "markdown" }),
+					{
+						type: "context",
+						elements: [
+							{
+								type: "mrkdwn",
+								text: "Codex GPT-6.2 Astra high fast",
+							},
+						],
+					},
+				],
+			}),
+		)
+		postMessage.mockClear()
+		await setPreferences(person, { attribution: false })
+		await runner.run(job)
+		expect(postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				channel: "C_SCHED",
+				markdown_text: expect.stringContaining("Weekly summary."),
+			}),
+		)
+	} finally {
+		await setPreferences(person, { attribution: undefined })
+		runSpy.mockRestore()
+		uploadSpy.mockRestore()
+		learnSpy.mockRestore()
 	}
 })

@@ -2,6 +2,7 @@
  * What every agent (agents.ts) shares: a turn's inputs and result, the env its commands get, the
  * person's workspace in their container, the outbox of files to upload, and their saved memory.
  */
+import type { Attribution } from "../attribution"
 import type { BotConfig } from "../config"
 import { botApiUrl, callerCredential } from "./bot-api"
 import {
@@ -53,6 +54,8 @@ export type TurnResult = {
 	text: string
 	files: OutFile[]
 	skipped: string[]
+	/** The harness, model, effort and speed that actually ran this turn. */
+	attribution?: Attribution
 }
 
 /**
@@ -81,6 +84,8 @@ export type TurnOptions = {
 	onTodos?: (todos: Todos) => void
 	/** Called with a way to steer the turn once it runs, and with null once it can't be any more. */
 	onSteerable?: (steer: Steer | null) => void
+	/** Called once the agent resolves the model, effort and speed this turn runs on. */
+	onAttribution?: (attribution: Attribution) => void
 }
 
 const MAX_OUT_FILES = 10

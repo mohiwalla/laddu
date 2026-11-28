@@ -363,7 +363,7 @@ const ON = ":large_green_circle:"
 const OFF = ":white_circle:"
 const hint = (text: string) => context(text)
 
-async function agentSection(
+export async function agentSection(
 	config: BotConfig,
 	person: Person,
 ): Promise<Block[]> {
@@ -372,6 +372,24 @@ async function agentSection(
 	const models = await AGENTS[agent].listModels(config, person)
 	const chosen = effective(config, agent, picked, models)
 	const option: ModelOption | undefined = chosen.option
+	const attributionRow: Block[] = [
+		row(
+			"*Model attribution*",
+			select(
+				"home_attribution",
+				[
+					{ text: "On", value: "on" },
+					{ text: "Off", value: "off" },
+				],
+				chosen.attribution ? "on" : "off",
+			),
+		),
+		hint(
+			chosen.attribution
+				? `Shows the model at the end of ${systemName()}'s replies and messages sent through it.`
+				: "Replies and sent messages won't show which model wrote them.",
+		),
+	]
 	const blocks: Block[] = [
 		header(":brain:  Agent"),
 		row(
@@ -400,6 +418,7 @@ async function agentSection(
 			hint(
 				":key:  Connect Claude under Connections below to pick a model.",
 			),
+			...attributionRow,
 		]
 	if (
 		!models.length &&
@@ -411,12 +430,14 @@ async function agentSection(
 			hint(
 				":key:  Connect Antigravity under Connections below to pick a model.",
 			),
+			...attributionRow,
 		]
 	if (!models.length)
 		return [
 			...blocks,
 			row(`*Model*\n\`${escape(chosen.model || "default")}\``),
 			hint(":warning:  Couldn't load the model list right now."),
+			...attributionRow,
 		]
 	blocks.push(
 		row(
@@ -466,6 +487,7 @@ async function agentSection(
 					: "Normal speed and plan usage.",
 			),
 		)
+	blocks.push(...attributionRow)
 	blocks.push(
 		Object.keys(picked).length
 			? row(
@@ -1608,12 +1630,16 @@ export function registerHome(app: App, given: Deps) {
 	control("home_speed", async ({ person, value }) =>
 		setPreferences(person, { fast: value === "fast" }),
 	)
+	control("home_attribution", async ({ person, value }) =>
+		setPreferences(person, { attribution: value === "on" }),
+	)
 	control("home_defaults", async ({ person }) =>
 		setPreferences(person, {
 			agent: undefined,
 			model: undefined,
 			effort: undefined,
 			fast: undefined,
+			attribution: undefined,
 		}),
 	)
 

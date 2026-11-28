@@ -4,6 +4,8 @@
  * laddu (bot token), saying who it's from.
  */
 import { postAs } from "../appearance"
+import { escapeMrkdwn, sentThroughLabel } from "../attribution"
+import { postMarkdownMessage } from "./reply"
 import { systemName } from "./system"
 import type { App } from "@slack/bolt"
 import { forget, userToken } from "./user-tokens"
@@ -166,6 +168,7 @@ async function dmThemselves(
 	client: WebClient,
 	person: { teamId: string; userId: string },
 	message: string,
+	attribution?: string,
 ): Promise<{ ok: boolean; text: string }> {
 	if (!allowance(person.userId))
 		return {
@@ -175,10 +178,13 @@ async function dmThemselves(
 	const { channel } = await client.conversations.open({
 		users: person.userId,
 	})
-	await client.chat.postMessage({
+	await postMarkdownMessage(client, {
 		channel: channel!.id!,
 		...(await postAs(person)),
-		markdown_text: message,
+		text: message,
+		footer: attribution
+			? sentThroughLabel(attribution, systemName())
+			: undefined,
 	})
 	console.info(
 		`[slack dm] ${person.userId} → themselves from laddu (${message.length} chars)`,
@@ -208,6 +214,7 @@ export async function sendOnBehalf(
 	to: string,
 	text: string,
 	fromLaddu: boolean,
+	attribution?: string,
 ): Promise<
 	| { ok: true; text: string }
 	| { ok: false; text: string; notConnected?: true }
@@ -221,7 +228,8 @@ export async function sendOnBehalf(
 		}
 	const found = await recipient(client, from.teamId, to)
 	if ("problem" in found) return { ok: false, text: found.problem }
-	if (found.id === from.userId) return dmThemselves(client, from, message)
+	if (found.id === from.userId)
+		return dmThemselves(client, from, message, attribution)
 	const token = fromLaddu ? null : await userToken(from)
 	if (!fromLaddu && !token)
 		return {
@@ -241,10 +249,13 @@ export async function sendOnBehalf(
 				token,
 				users: found.id,
 			})
-			await client.chat.postMessage({
+			await postMarkdownMessage(client, {
 				token,
 				channel: channel!.id!,
-				markdown_text: message,
+				text: message,
+				footer: attribution
+					? sentThroughLabel(attribution, systemName())
+					: undefined,
 			})
 		} catch (error) {
 			const code = (error as { data?: { error?: string } }).data?.error
@@ -262,11 +273,20 @@ export async function sendOnBehalf(
 	}
 
 	const { channel } = await client.conversations.open({ users: found.id })
-	await client.chat.postMessage({
-		channel: channel!.id!,
-		...(await postAs(from)),
-		markdown_text: `<@${from.userId}> asked ${systemName()} to send you this:\n\n${message}\n\n_Sent by ${systemName()} for <@${from.userId}>. To answer, message them directly._`,
-	})
+	if (attribution) {
+		await postMarkdownMessage(client, {
+			channel: channel!.id!,
+			...(await postAs(from)),
+			text: `<@${from.userId}> asked ${systemName()} to send you this:\n\n${message}`,
+			rawFooter: `Sent by @${systemName()} for <@${from.userId}> — ${escapeMrkdwn(attribution)} · To answer, message them directly.`,
+		})
+	} else {
+		await client.chat.postMessage({
+			channel: channel!.id!,
+			...(await postAs(from)),
+			markdown_text: `<@${from.userId}> asked ${systemName()} to send you this:\n\n${message}\n\n_Sent by ${systemName()} for <@${from.userId}>. To answer, message them directly._`,
+		})
+	}
 	console.info(
 		`[slack dm] ${from.userId} → ${found.id} from laddu (${message.length} chars)`,
 	)

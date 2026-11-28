@@ -22,7 +22,13 @@ import {
 	setAppearance,
 	type Appearance,
 } from "../appearance"
+import {
+	formatAttribution,
+	getTurnAttribution,
+	sentThroughLabel,
+} from "../attribution"
 import type { BotConfig } from "../config"
+import { attributionEnabled, configFor } from "../preferences"
 import * as azureDevOps from "../integrations/azure-devops"
 import * as graph from "../integrations/graph"
 import * as codecommit from "../integrations/codecommit"
@@ -58,7 +64,7 @@ import { transfer } from "../slack/transfers"
 import * as questions from "../slack/questions"
 import * as keys from "../slack/keys"
 import { uploadFiles } from "../slack/attachments"
-import { chunkMarkdown, showTodos } from "../slack/reply"
+import { chunkMarkdown, postMarkdownMessage, showTodos } from "../slack/reply"
 import type { SlackAutomations } from "../slack/automations"
 import type { SlackForms } from "../slack/forms"
 import { systemName } from "../slack/system"
@@ -442,10 +448,11 @@ async function handleSlack(
 	caller: Caller,
 	action: string | undefined,
 	deps: Deps,
+	attribution?: string,
 ): Promise<Response> {
 	const person = { teamId: caller.teamId, userId: caller.userId }
 	if (action === "ask") return handleAsk(request, caller, deps)
-	if (action === "post") return handlePost(request, caller, deps)
+	if (action === "post") return handlePost(request, caller, deps, attribution)
 	if (action === "todo") return handleTodo(request, caller)
 	try {
 		if (
@@ -488,6 +495,9 @@ async function handleSlack(
 						method: input.method,
 						args: input.args,
 						as: input.as as string | undefined,
+						footer: attribution
+							? sentThroughLabel(attribution, systemName())
+							: undefined,
 					}),
 				)
 				if (result.length > 400_000)
@@ -574,6 +584,7 @@ async function handleSlack(
 				body.text ?? "",
 				// Without sign-in set up on this bot, DMs can only come from laddu.
 				body.fromLaddu === true || !signIn,
+				attribution,
 			)
 			// Not connected yet is a step, not a failure: send them the link and say so.
 			if (
@@ -670,6 +681,7 @@ async function handlePost(
 	request: Request,
 	caller: Caller,
 	deps: Deps,
+	attribution?: string,
 ): Promise<Response> {
 	if (request.method !== "POST") return reply(405, "Use POST.")
 	const input = await request.json().catch(() => null)
@@ -691,11 +703,13 @@ async function handlePost(
 	const person = { teamId: caller.teamId, userId: caller.userId }
 	try {
 		const as = await postAs(person)
-		for (const part of text ? chunkMarkdown(text) : [])
-			await deps.client.chat.postMessage({
+		const parts = text ? chunkMarkdown(text) : []
+		for (let i = 0; i < parts.length; i++)
+			await postMarkdownMessage(deps.client, {
 				channel: caller.channel,
 				thread_ts: caller.threadTs,
-				markdown_text: part,
+				text: parts[i]!,
+				footer: i === parts.length - 1 ? attribution : undefined,
 				...as,
 			})
 		await uploadFiles(
@@ -859,10 +873,30 @@ async function handleCodeCommit(
 	}
 }
 
+/** Resolves the model attribution label for this caller's turn, or undefined when opted out. */
+async function resolveAttribution(
+	caller: Caller,
+	deps: Deps,
+): Promise<string | undefined> {
+	const person = { teamId: caller.teamId, userId: caller.userId }
+	if (!(await attributionEnabled(person))) return undefined
+	const active = getTurnAttribution(caller)
+	if (active) return formatAttribution(active)
+	if (!deps.config.agent) return undefined
+	const personal = await configFor(deps.config, person)
+	return formatAttribution({
+		agent: personal.agent,
+		model: personal.model || undefined,
+		effort: personal.reasoningEffort || undefined,
+		fast: personal.fast,
+	})
+}
+
 function dispatch(
 	request: Request,
 	caller: Caller,
 	deps: Deps,
+	attribution?: string,
 ): Promise<Response> | Response {
 	const [, resource, id] = new URL(request.url).pathname.split("/")
 	if (resource === "schedule") return handleSchedule(request, caller, id)
@@ -870,7 +904,8 @@ function dispatch(
 	if (resource === "ms") return handleGraph(request, caller, id, deps)
 	if (resource === "codecommit")
 		return handleCodeCommit(request, caller, id, deps)
-	if (resource === "slack") return handleSlack(request, caller, id, deps)
+	if (resource === "slack")
+		return handleSlack(request, caller, id, deps, attribution)
 	if (resource === "appearance")
 		return handleAppearance(request, caller, id, deps)
 	if (resource === "keys" && id === "request")
@@ -948,6 +983,11 @@ async function guarded(
 		console.log(
 			`[approval] ${caller.teamId}-${caller.userId}: --asked, and their own words ${asked ? "name it, so no OK needed" : "this turn don't name everyone and everything it acts on, so asking anyway"} to ${risky.label}`,
 		)
+	const attribution =
+		resource === "slack" &&
+		(action === "dm" || action === "api" || action === "post")
+			? await resolveAttribution(caller, deps).catch(() => undefined)
+			: undefined
 	if (risky && !asked)
 		try {
 			const waiting = await requestOk(
@@ -955,7 +995,12 @@ async function guarded(
 				caller,
 				risky,
 				async () => {
-					const response = await dispatch(fresh(), caller, deps)
+					const response = await dispatch(
+						fresh(),
+						caller,
+						deps,
+						attribution,
+					)
 					const { text } = (await response
 						.json()
 						.catch(() => ({}))) as {
@@ -971,7 +1016,7 @@ async function guarded(
 		} catch (error) {
 			return failed(error, "Slack (asking for their OK)")
 		}
-	const response = await dispatch(fresh(), caller, deps)
+	const response = await dispatch(fresh(), caller, deps, attribution)
 	const done = response.ok ? outsideAction(described) : null
 	if (done && !caller.scheduled)
 		await markAction(

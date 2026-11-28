@@ -7,6 +7,7 @@
  * in for the codex binary); unlike `codex exec` it takes more input mid-turn (steering) and stops
  * a turn cleanly (app-server.ts).
  */
+import type { Attribution } from "../attribution"
 import type { BotConfig } from "../config"
 import {
 	CODEX_DOCKER_WRAPPER,
@@ -114,6 +115,7 @@ export async function askCodex<T>(
 
 const MODELS_MS = 6 * 3600_000
 const models = new Map<string, { list: Promise<ModelOption[]>; at: number }>()
+const resolvedModels = new Map<string, ModelOption[]>()
 
 /**
  * The models Codex offers this person, as `model/list` reports them for their plan (Codex
@@ -130,7 +132,7 @@ export function listCodexModels(
 		const listed = await server.request<{
 			data: Record<string, unknown>[]
 		}>("model/list", {})
-		return listed.data
+		const parsed = listed.data
 			.filter(model => !model.hidden)
 			.map(model => ({
 				id: String(model.model ?? model.id),
@@ -150,6 +152,8 @@ export function listCodexModels(
 				images: true,
 				...(model.isDefault ? { isDefault: true } : {}),
 			}))
+		resolvedModels.set(key, parsed)
+		return parsed
 	}).catch(error => {
 		console.warn("[codex] couldn't list models:", error)
 		models.delete(key)
@@ -160,8 +164,11 @@ export function listCodexModels(
 }
 
 /** Forgets their model list (after they sign in or out, the plan's list may differ). */
-export const forgetCodexModels = (user: TurnUser) =>
-	models.delete(`${user.teamId}-${user.userId}`)
+export const forgetCodexModels = (user: TurnUser) => {
+	const key = `${user.teamId}-${user.userId}`
+	models.delete(key)
+	resolvedModels.delete(key)
+}
 
 export async function runCodexTurn(options: TurnOptions): Promise<TurnResult> {
 	options.signal?.throwIfAborted()
@@ -244,7 +251,12 @@ export async function runCodexTurn(options: TurnOptions): Promise<TurnResult> {
 			sandbox: "danger-full-access",
 			approvalPolicy: "never",
 		}
-		const opened = await server.request<{ thread: { id: string } }>(
+		const opened = await server.request<{
+			thread: { id: string }
+			model?: string
+			reasoningEffort?: string | null
+			serviceTier?: string | null
+		}>(
 			options.threadId ? "thread/resume" : "thread/start",
 			options.threadId
 				? {
@@ -255,6 +267,24 @@ export async function runCodexTurn(options: TurnOptions): Promise<TurnResult> {
 				: threadParams,
 		)
 		threadId = opened.thread.id
+		const modelId = opened.model || config.model || undefined
+		const known = modelId
+			? resolvedModels
+					.get(`${options.user.teamId}-${options.user.userId}`)
+					?.find(entry => entry.id === modelId)
+			: undefined
+		const attribution: Attribution = {
+			agent: "codex",
+			model: modelId,
+			modelName: known?.name,
+			effort:
+				opened.reasoningEffort ?? (config.reasoningEffort || undefined),
+			fast:
+				opened.serviceTier !== undefined
+					? opened.serviceTier === "fast"
+					: config.fast,
+		}
+		options.onAttribution?.(attribution)
 		options.signal?.throwIfAborted()
 
 		// Loaded once per Codex thread, like a system prompt; resumed threads already have it.
@@ -415,6 +445,7 @@ export async function runCodexTurn(options: TurnOptions): Promise<TurnResult> {
 				(files.length ? "" : "_(Codex finished without a reply.)_"),
 			files,
 			skipped,
+			attribution,
 		}
 	} finally {
 		finished = true
