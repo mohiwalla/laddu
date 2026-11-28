@@ -2,6 +2,7 @@
 import type { App } from "@slack/bolt"
 import { postAs } from "../appearance"
 import { contextFooterBlock, escapeMrkdwn } from "../attribution"
+import { chunkMarkdown } from "./reply"
 import { connection, forget } from "./user-tokens"
 
 export type SlackClient = App["client"]
@@ -508,18 +509,13 @@ export async function callSlack(
 					/* Leave malformed caller blocks untouched for Slack to validate. */
 				}
 			} else if (typeof options.text === "string" && options.text) {
-				if (options.text.length <= 3_000) {
+				const sections = chunkMarkdown(options.text, 3_000)
+				if (sections.length <= 49) {
 					options.blocks = [
-						{
-							type: "section",
-							text: { type: "mrkdwn", text: options.text },
-						},
-						footerBlock,
-					]
-					synthesizedBlocks = true
-				} else if (options.text.length <= 12_000) {
-					options.blocks = [
-						{ type: "markdown", text: options.text },
+						...sections.map(text => ({
+							type: "section" as const,
+							text: { type: "mrkdwn" as const, text },
+						})),
 						footerBlock,
 					]
 					synthesizedBlocks = true

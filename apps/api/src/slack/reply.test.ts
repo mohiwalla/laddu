@@ -663,3 +663,46 @@ test("invalid_blocks falls back cleanly to markdown_text with italic attribution
 		markdown_text: "Table answer\n\n_Codex 6.2 Astra high fast_",
 	})
 })
+
+test("placeholder fallback clips fallback text and falls back to fresh post on msg_too_long", async () => {
+	const { client, startStream, postMessage, update, remove } =
+		streamingClient()
+	startStream.mockRejectedValue({ data: { error: "feature_disabled" } })
+	update.mockRejectedValueOnce({ data: { error: "msg_too_long" } })
+	const longAnswer = "a".repeat(5_000)
+	const reply = await openReply(client, target)
+	reply.step({ id: "s1", title: "Working", status: "in_progress" })
+	await reply.finish(longAnswer, "Codex 6.2 Astra high fast")
+	expect(update).toHaveBeenCalledWith(
+		expect.objectContaining({
+			text: expect.stringMatching(/^a{3499}…$/),
+			blocks: [
+				{ type: "markdown", text: longAnswer },
+				{
+					type: "context",
+					elements: [
+						{ type: "mrkdwn", text: "Codex 6.2 Astra high fast" },
+					],
+				},
+			],
+		}),
+	)
+	expect(postMessage).toHaveBeenLastCalledWith({
+		channel: target.channel,
+		thread_ts: target.threadTs,
+		text: expect.stringMatching(/^a{3499}…$/),
+		blocks: [
+			{ type: "markdown", text: longAnswer },
+			{
+				type: "context",
+				elements: [
+					{ type: "mrkdwn", text: "Codex 6.2 Astra high fast" },
+				],
+			},
+		],
+	})
+	expect(remove).toHaveBeenCalledWith({
+		channel: target.channel,
+		ts: "3.001",
+	})
+})

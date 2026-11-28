@@ -154,6 +154,9 @@ export function showTodos(
 	return !!show
 }
 
+/** Slack's fallback `text` limit when `blocks` carries the full Markdown (up to 12,000 chars). */
+const MAX_FALLBACK_TEXT = 3_500
+
 /**
  * Posts a Markdown message, appending a small muted Slack context block when a footer is given.
  * Falls back to `markdown_text` if Slack rejects the markdown/context block payload.
@@ -182,7 +185,7 @@ export async function postMarkdownMessage(
 	try {
 		return await client.chat.postMessage({
 			...base,
-			text,
+			text: clip(text, MAX_FALLBACK_TEXT),
 			blocks: [{ type: "markdown", text }, block],
 		})
 	} catch (error) {
@@ -850,7 +853,7 @@ async function openPlaceholder(
 					? client.chat.update({
 							channel,
 							ts,
-							text: first!,
+							text: clip(first!, MAX_FALLBACK_TEXT),
 							blocks: [
 								{ type: "markdown", text: first! },
 								contextFooterBlock(firstFooter),
@@ -862,10 +865,14 @@ async function openPlaceholder(
 							markdown_text: first!,
 						})
 			).catch(async error => {
-				// Slack won't edit a message into different block types (e.g. a Markdown table or context block): post it fresh.
+				// Slack won't edit a message into different block types (e.g. a Markdown table or context block) or past its edit limit: post it fresh.
 				const code = (error as { data?: { error?: string } })?.data
 					?.error
-				if (code !== "block_mismatch" && code !== "invalid_blocks")
+				if (
+					code !== "block_mismatch" &&
+					code !== "invalid_blocks" &&
+					code !== "msg_too_long"
+				)
 					throw error
 				await postMarkdown(client, {
 					channel,
