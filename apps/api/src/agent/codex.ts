@@ -170,6 +170,15 @@ export const forgetCodexModels = (user: TurnUser) => {
 	resolvedModels.delete(key)
 }
 
+/** Whether a Codex thread's reported `serviceTier` is fast mode ("priority" or "fast"). */
+export function codexFastTier(
+	serviceTier: string | null | undefined,
+	fallback: boolean,
+): boolean {
+	if (serviceTier == null) return fallback
+	return serviceTier === "fast" || serviceTier === "priority"
+}
+
 export async function runCodexTurn(options: TurnOptions): Promise<TurnResult> {
 	options.signal?.throwIfAborted()
 	const { config, input, slack } = options
@@ -279,10 +288,7 @@ export async function runCodexTurn(options: TurnOptions): Promise<TurnResult> {
 			modelName: known?.name,
 			effort:
 				opened.reasoningEffort ?? (config.reasoningEffort || undefined),
-			fast:
-				opened.serviceTier !== undefined
-					? opened.serviceTier === "fast"
-					: config.fast,
+			fast: codexFastTier(opened.serviceTier, config.fast),
 		}
 		options.onAttribution?.(attribution)
 		options.signal?.throwIfAborted()
